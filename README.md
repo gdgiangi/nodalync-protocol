@@ -53,7 +53,7 @@ Looking for people with experience in:
 
 **Gabriel Giangi**  
 gabegiangi@gmail.com  
-DMs open on X: [@your_handle]
+DMs open on X: GabrielGia29751
 
 ---
 
