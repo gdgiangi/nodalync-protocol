@@ -16,7 +16,7 @@ The protocol creates a knowledge layer between humans and AI systems, where agen
 
 ### Read the Paper
 
-📄 **[Nodalync Protocol v0.3 (PDF)](./nodalync-protocol-v0.3.pdf)** — Draft, January 2026
+📄 **[Nodalync Protocol v0.3 (PDF)](./nodalync_protocol_v0.3.pdf)** — Draft, January 2026
 
 ---
 
