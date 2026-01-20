@@ -6,11 +6,22 @@
 
 ### Abstract
 
-A purely protocol-based system for knowledge economics would allow original contributors to receive perpetual compensation without requiring continuous production. We propose a solution using a five-layer knowledge model where source material (L0) forms an immutable foundation from which all derivative value flows. Cryptographic provenance chains link every insight back to its roots. A revenue distribution mechanism ensures that 95% of all transaction value flows to L0 contributors proportionally, regardless of derivation depth.
-
-The protocol creates a knowledge layer between humans and AI systems, where agents query personal knowledge bases through a standard interface while automatically compensating all upstream contributors.
-
-**L0 owners are the new landowners.** Contribute valuable knowledge once, benefit as the ecosystem builds on your foundation — forever.
+We propose a protocol for knowledge economics that ensures original contributors receive
+perpetual, proportional compensation from all downstream value creation. A researcher can
+publish valuable findings once and receive perpetual royalties as the ecosystem builds upon
+their work. A writer's insights compound in value as others synthesize and extend them. The
+protocol enables humans to benefit from knowledge compounding—earning from what they
+know, not just what they continuously produce. The protocol structures knowledge into four
+layers where source material (L0) forms an immutable foundation from which all derivative
+value flows. Cryptographic provenance chains link every insight back to its roots. A revenue
+distribution mechanism routes 95% of transaction value to foundational contributors
+regardless of derivation depth. Unlike prior approaches that attempted to price and transfer
+data, the protocol monetizes query access—buyers gain the right to query a node, not
+ownership of transferable assets. This eliminates secondary markets that have historically
+enabled royalty bypass. The protocol implements Model Context Protocol (MCP) as the
+standard interface for AI agent consumption, creating immediate demand from agentic
+systems. The result is infrastructure where contributing valuable foundational knowledge once
+creates perpetual economic participation in all derivative work.
 
 ---
 
