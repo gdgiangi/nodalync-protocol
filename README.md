@@ -48,7 +48,7 @@ Looking for people with experience in:
 
 ### Core Ideas
 
-1. **Five-layer knowledge model** — L0 (raw sources) through L4 (emergent insights), with strict rules about what can be sold at each layer
+1. **Four-layer knowledge model** — L0 (raw sources) through L3 (emergent insights), with strict rules about what can be sold at each layer
 
 2. **Cryptographic provenance** — Every derived insight links back to its foundational sources via content-addressed hashes
 
