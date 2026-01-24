@@ -1,0 +1,4 @@
+[package]
+name = "nodalync-net"
+version.workspace = true
+edition.workspace = true

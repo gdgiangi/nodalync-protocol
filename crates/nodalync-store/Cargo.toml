@@ -1,0 +1,4 @@
+[package]
+name = "nodalync-store"
+version.workspace = true
+edition.workspace = true

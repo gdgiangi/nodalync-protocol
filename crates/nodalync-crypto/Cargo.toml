@@ -1,0 +1,18 @@
+[package]
+name = "nodalync-crypto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Cryptographic primitives for the Nodalync protocol"
+
+[dependencies]
+sha2 = { workspace = true }
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+bs58 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# No extra test dependencies needed

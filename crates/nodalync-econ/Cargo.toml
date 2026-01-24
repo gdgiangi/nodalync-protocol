@@ -1,0 +1,4 @@
+[package]
+name = "nodalync-econ"
+version.workspace = true
+edition.workspace = true

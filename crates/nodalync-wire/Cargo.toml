@@ -1,0 +1,4 @@
+[package]
+name = "nodalync-wire"
+version.workspace = true
+edition.workspace = true

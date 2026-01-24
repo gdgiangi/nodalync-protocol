@@ -15,31 +15,31 @@ Track implementation progress by checking off items as they're completed. Each i
 ### `nodalync-crypto` (Spec §3)
 
 #### §3.1 Hash Function
-- [ ] `ContentHash(content)` — SHA-256 with length prefix
-- [ ] Domain separator `0x00` for content hashing
-- [ ] Test: identical content produces identical hash
-- [ ] Test: different content produces different hash
+- [x] `ContentHash(content)` — SHA-256 with length prefix
+- [x] Domain separator `0x00` for content hashing
+- [x] Test: identical content produces identical hash
+- [x] Test: different content produces different hash
 
 #### §3.2 Identity
-- [ ] Ed25519 keypair generation
-- [ ] PeerId derivation: `H(0x00 || public_key)[0:20]`
-- [ ] Human-readable format: `ndl1` + base32(PeerId)
-- [ ] Test: PeerId is deterministic from public key
-- [ ] Test: human-readable encoding roundtrips
+- [x] Ed25519 keypair generation
+- [x] PeerId derivation: `H(0x00 || public_key)[0:20]`
+- [x] Human-readable format: `ndl1` + base58(PeerId)
+- [x] Test: PeerId is deterministic from public key
+- [x] Test: human-readable encoding roundtrips
 
 #### §3.3 Signatures
-- [ ] `Sign(private_key, message)` — Ed25519
-- [ ] `Verify(public_key, message, signature)`
-- [ ] SignedMessage struct
-- [ ] Test: valid signature verifies
-- [ ] Test: tampered message fails verification
-- [ ] Test: wrong key fails verification
+- [x] `Sign(private_key, message)` — Ed25519
+- [x] `Verify(public_key, message, signature)`
+- [x] SignedMessage struct
+- [x] Test: valid signature verifies
+- [x] Test: tampered message fails verification
+- [x] Test: wrong key fails verification
 
 #### §3.4 Content Addressing
-- [ ] Content referenced by hash
-- [ ] Verification: `ContentHash(received) == claimed_hash`
-- [ ] Test: content verification succeeds for valid content
-- [ ] Test: content verification fails for tampered content
+- [x] Content referenced by hash
+- [x] Verification: `ContentHash(received) == claimed_hash`
+- [x] Test: content verification succeeds for valid content
+- [x] Test: content verification fails for tampered content
 
 ---
 

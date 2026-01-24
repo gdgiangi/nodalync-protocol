@@ -1,0 +1,4 @@
+[package]
+name = "nodalync-types"
+version.workspace = true
+edition.workspace = true
