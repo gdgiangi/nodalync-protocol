@@ -4,14 +4,14 @@ on:
   push:
     branches: [main]
     tags:
-      - 'v*'
+      - "v*"
   pull_request:
     branches: [main]
   workflow_dispatch:
 
 env:
   REGISTRY: docker.io
-  IMAGE_NAME: gdgiangi/nodalync
+  IMAGE_NAME: gabrielgiangi/nodalync
 
 jobs:
   build:
