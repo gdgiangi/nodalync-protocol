@@ -147,41 +147,41 @@ Track implementation progress by checking off items as they're completed. Each i
 ### `nodalync-store` (Spec §5)
 
 #### §5.1 State Components
-- [ ] NodeState struct
-- [ ] Identity storage (encrypted private key)
-- [ ] ContentRecord struct
-- [ ] PeerInfo struct
-- [ ] CachedContent struct
+- [x] NodeState struct
+- [x] Identity storage (encrypted private key)
+- [x] ContentRecord struct
+- [x] PeerInfo struct
+- [x] CachedContent struct
 
 #### §5.2 Provenance Graph
-- [ ] Forward edges: derived_from
-- [ ] Backward edges: derivations
-- [ ] Flattened roots cache
-- [ ] `add_content()` operation
-- [ ] `get_roots()` operation
-- [ ] `get_derivations()` operation
+- [x] Forward edges: derived_from
+- [x] Backward edges: derivations
+- [x] Flattened roots cache
+- [x] `add_content()` operation
+- [x] `get_roots()` operation
+- [x] `get_derivations()` operation
 
 #### §5.3 Payment Channels
-- [ ] Channel struct
-- [ ] ChannelState enum
-- [ ] Payment struct
+- [x] Channel struct
+- [x] ChannelState enum
+- [x] Payment struct
 
 #### Storage Implementation
-- [ ] Content storage (filesystem)
-- [ ] Manifest storage (SQLite)
-- [ ] Provenance graph storage
-- [ ] Channel state storage
-- [ ] Cache management
-- [ ] **Settlement queue storage**
-- [ ] **QueuedDistribution struct**
-- [ ] **enqueue() method**
-- [ ] **get_pending() method**
-- [ ] **mark_settled() method**
-- [ ] **get_pending_total() method**
-- [ ] Test: store and retrieve content
-- [ ] Test: store and retrieve manifest
-- [ ] Test: provenance graph traversal
-- [ ] Test: settlement queue operations
+- [x] Content storage (filesystem)
+- [x] Manifest storage (SQLite)
+- [x] Provenance graph storage
+- [x] Channel state storage
+- [x] Cache management
+- [x] **Settlement queue storage**
+- [x] **QueuedDistribution struct**
+- [x] **enqueue() method**
+- [x] **get_pending() method**
+- [x] **mark_settled() method**
+- [x] **get_pending_total() method**
+- [x] Test: store and retrieve content
+- [x] Test: store and retrieve manifest
+- [x] Test: provenance graph traversal
+- [x] Test: settlement queue operations
 
 ---
 
