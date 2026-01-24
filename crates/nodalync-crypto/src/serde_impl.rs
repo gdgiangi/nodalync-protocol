@@ -12,6 +12,7 @@ fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
+#[allow(clippy::manual_is_multiple_of)]
 fn from_hex(s: &str) -> Result<Vec<u8>, String> {
     if s.len() % 2 != 0 {
         return Err("Hex string must have even length".to_string());

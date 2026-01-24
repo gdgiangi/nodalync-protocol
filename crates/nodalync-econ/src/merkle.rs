@@ -169,6 +169,7 @@ impl MerkleProof {
 /// # Errors
 /// * `EconError::EmptyEntries` if entries is empty
 /// * `EconError::IndexOutOfBounds` if index >= entries.len()
+#[allow(clippy::manual_is_multiple_of)]
 pub fn create_merkle_proof(entries: &[SettlementEntry], index: usize) -> EconResult<MerkleProof> {
     if entries.is_empty() {
         return Err(EconError::EmptyEntries);
