@@ -474,6 +474,13 @@ dependencies = [
 [[package]]
 name = "nodalync-econ"
 version = "0.1.0"
+dependencies = [
+ "nodalync-crypto",
+ "nodalync-types",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
 
 [[package]]
 name = "nodalync-net"

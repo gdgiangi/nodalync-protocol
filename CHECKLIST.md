@@ -249,26 +249,26 @@ Track implementation progress by checking off items as they're completed. Each i
 ### `nodalync-econ` (Spec §10)
 
 #### §10.1 Revenue Distribution
-- [ ] SYNTHESIS_FEE = 0.05 (5%)
-- [ ] ROOT_POOL = 0.95 (95%)
-- [ ] Distribution calculation
-- [ ] Weight handling for duplicates
-- [ ] Owner gets synthesis fee + own roots
-- [ ] Test: distribution example from spec (Bob/Alice/Carol)
+- [x] SYNTHESIS_FEE = 0.05 (5%)
+- [x] ROOT_POOL = 0.95 (95%)
+- [x] Distribution calculation
+- [x] Weight handling for duplicates
+- [x] Owner gets synthesis fee + own roots
+- [x] Test: distribution example from spec (Bob/Alice/Carol)
 
 #### §10.3 Price Constraints
-- [ ] MIN_PRICE = 1
-- [ ] MAX_PRICE = 10^16
-- [ ] price is uint64
-- [ ] Test: price validation
+- [x] MIN_PRICE = 1
+- [x] MAX_PRICE = 10^16
+- [x] price is uint64
+- [x] Test: price validation
 
 #### §10.4 Settlement Batching
-- [ ] BATCH_THRESHOLD = 100 NDL
-- [ ] BATCH_INTERVAL = 3600 seconds
-- [ ] Batch trigger logic
-- [ ] Aggregate by recipient
-- [ ] Merkle root computation
-- [ ] Test: batching logic
+- [x] BATCH_THRESHOLD = 100 NDL
+- [x] BATCH_INTERVAL = 3600 seconds
+- [x] Batch trigger logic
+- [x] Aggregate by recipient
+- [x] Merkle root computation
+- [x] Test: batching logic
 
 ---
 
