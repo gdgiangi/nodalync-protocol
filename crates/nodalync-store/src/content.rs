@@ -302,10 +302,7 @@ mod tests {
 
         // Store multiple contents - they may or may not share prefix dirs
         let contents: Vec<&[u8]> = vec![b"content1", b"content2", b"content3"];
-        let hashes: Vec<Hash> = contents
-            .iter()
-            .map(|c| store.store(c).unwrap())
-            .collect();
+        let hashes: Vec<Hash> = contents.iter().map(|c| store.store(c).unwrap()).collect();
 
         // Verify all can be loaded
         for (content, hash) in contents.iter().zip(hashes.iter()) {

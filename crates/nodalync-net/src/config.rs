@@ -3,7 +3,7 @@
 //! This module defines configuration options for the network layer.
 
 use libp2p::Multiaddr;
-use nodalync_types::constants::{MESSAGE_TIMEOUT_MS, MAX_RETRY_ATTEMPTS};
+use nodalync_types::constants::{MAX_RETRY_ATTEMPTS, MESSAGE_TIMEOUT_MS};
 use std::time::Duration;
 
 /// Configuration for the network layer.

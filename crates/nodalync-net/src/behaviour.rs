@@ -90,12 +90,9 @@ impl NodalyncBehaviour {
         let store = MemoryStore::new(local_peer_id);
         let mut kad_config = kad::Config::new(kad::PROTOCOL_NAME.clone());
         kad_config.set_query_timeout(config.dht_query_timeout);
-        kad_config.set_replication_factor(
-            std::num::NonZeroUsize::new(config.dht_replication).unwrap(),
-        );
-        kad_config.set_parallelism(
-            std::num::NonZeroUsize::new(config.dht_alpha).unwrap(),
-        );
+        kad_config
+            .set_replication_factor(std::num::NonZeroUsize::new(config.dht_replication).unwrap());
+        kad_config.set_parallelism(std::num::NonZeroUsize::new(config.dht_alpha).unwrap());
         // Set disjoint query paths for better reliability
         kad_config.disjoint_query_paths(true);
 
@@ -104,8 +101,8 @@ impl NodalyncBehaviour {
         kademlia.set_mode(Some(Mode::Server));
 
         // Configure request-response
-        let req_resp_config = request_response::Config::default()
-            .with_request_timeout(config.request_timeout);
+        let req_resp_config =
+            request_response::Config::default().with_request_timeout(config.request_timeout);
         let request_response = request_response::Behaviour::new(
             [(PROTOCOL_NAME, ProtocolSupport::Full)],
             req_resp_config,
@@ -141,20 +138,17 @@ impl NodalyncBehaviour {
         let store = MemoryStore::new(local_peer_id);
         let mut kad_config = kad::Config::new(kad::PROTOCOL_NAME.clone());
         kad_config.set_query_timeout(config.dht_query_timeout);
-        kad_config.set_replication_factor(
-            std::num::NonZeroUsize::new(config.dht_replication).unwrap(),
-        );
-        kad_config.set_parallelism(
-            std::num::NonZeroUsize::new(config.dht_alpha).unwrap(),
-        );
+        kad_config
+            .set_replication_factor(std::num::NonZeroUsize::new(config.dht_replication).unwrap());
+        kad_config.set_parallelism(std::num::NonZeroUsize::new(config.dht_alpha).unwrap());
         kad_config.disjoint_query_paths(true);
 
         let mut kademlia = kad::Behaviour::with_config(local_peer_id, store, kad_config);
         kademlia.set_mode(Some(Mode::Server));
 
         // Configure request-response
-        let req_resp_config = request_response::Config::default()
-            .with_request_timeout(config.request_timeout);
+        let req_resp_config =
+            request_response::Config::default().with_request_timeout(config.request_timeout);
         let request_response = request_response::Behaviour::new(
             [(PROTOCOL_NAME, ProtocolSupport::Full)],
             req_resp_config,
@@ -164,12 +158,10 @@ impl NodalyncBehaviour {
         let gossipsub = build_gossipsub(local_peer_id);
 
         // Configure Identify with the actual keypair
-        let identify_config = identify::Config::new(
-            "/nodalync/1.0.0".to_string(),
-            keypair.public(),
-        )
-        .with_interval(Duration::from_secs(60))
-        .with_push_listen_addr_updates(true);
+        let identify_config =
+            identify::Config::new("/nodalync/1.0.0".to_string(), keypair.public())
+                .with_interval(Duration::from_secs(60))
+                .with_push_listen_addr_updates(true);
         let identify = identify::Behaviour::new(identify_config);
 
         Self {
@@ -199,18 +191,14 @@ fn build_gossipsub(_local_peer_id: PeerId) -> gossipsub::Behaviour {
         .expect("valid gossipsub config");
 
     gossipsub::Behaviour::new(
-        gossipsub::MessageAuthenticity::Signed(
-            libp2p::identity::Keypair::generate_ed25519(),
-        ),
+        gossipsub::MessageAuthenticity::Signed(libp2p::identity::Keypair::generate_ed25519()),
         config,
     )
     .expect("valid gossipsub behaviour")
 }
 
 /// Build GossipSub behaviour with a specific keypair.
-pub fn build_gossipsub_with_keypair(
-    keypair: &libp2p::identity::Keypair,
-) -> gossipsub::Behaviour {
+pub fn build_gossipsub_with_keypair(keypair: &libp2p::identity::Keypair) -> gossipsub::Behaviour {
     let message_id_fn = |message: &gossipsub::Message| {
         let mut hasher = Sha256::new();
         hasher.update(&message.data);

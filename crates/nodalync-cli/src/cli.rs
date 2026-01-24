@@ -11,7 +11,9 @@ use crate::output::OutputFormat;
 #[command(author = "Nodalync Contributors")]
 #[command(version)]
 #[command(about = "Command-line interface for the Nodalync protocol")]
-#[command(long_about = "Nodalync is a protocol for knowledge ownership, synthesis, and monetization.\n\nRun 'nodalync init' to get started.")]
+#[command(
+    long_about = "Nodalync is a protocol for knowledge ownership, synthesis, and monetization.\n\nRun 'nodalync init' to get started."
+)]
 pub struct Cli {
     /// Subcommand to execute.
     #[command(subcommand)]

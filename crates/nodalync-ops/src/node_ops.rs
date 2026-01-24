@@ -204,8 +204,8 @@ pub fn current_timestamp() -> Timestamp {
 mod tests {
     use super::*;
     use nodalync_crypto::{generate_identity, peer_id_from_public_key};
-    use tempfile::TempDir;
     use nodalync_store::NodeStateConfig;
+    use tempfile::TempDir;
 
     fn create_test_node_ops() -> (DefaultNodeOperations, TempDir) {
         let temp_dir = TempDir::new().unwrap();

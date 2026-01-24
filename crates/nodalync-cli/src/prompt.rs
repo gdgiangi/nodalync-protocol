@@ -16,7 +16,7 @@ pub fn confirm(prompt: &str) -> io::Result<bool> {
         .with_prompt(prompt)
         .default(false)
         .interact()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
+        .map_err(|e| io::Error::other(e.to_string()))
 }
 
 /// Prompt for a password (hidden input).
@@ -24,7 +24,7 @@ pub fn password(prompt: &str) -> io::Result<String> {
     Password::with_theme(&ColorfulTheme::default())
         .with_prompt(prompt)
         .interact()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
+        .map_err(|e| io::Error::other(e.to_string()))
 }
 
 /// Prompt for a password with confirmation.
@@ -35,7 +35,7 @@ pub fn password_with_confirm(prompt: &str) -> io::Result<String> {
         .with_prompt(prompt)
         .with_confirmation("Confirm password", "Passwords do not match")
         .interact()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
+        .map_err(|e| io::Error::other(e.to_string()))
 }
 
 #[cfg(test)]

@@ -196,7 +196,8 @@ impl L1Summary {
 
     /// Get the number of mentions not shown in preview.
     pub fn hidden_mention_count(&self) -> u32 {
-        self.mention_count.saturating_sub(self.preview_mentions.len() as u32)
+        self.mention_count
+            .saturating_sub(self.preview_mentions.len() as u32)
     }
 }
 
@@ -220,11 +221,7 @@ mod tests {
 
     #[test]
     fn test_source_location_with_quote() {
-        let loc = SourceLocation::with_quote(
-            LocationType::Page,
-            "42",
-            "The quick brown fox",
-        );
+        let loc = SourceLocation::with_quote(LocationType::Page, "42", "The quick brown fox");
 
         assert_eq!(loc.location_type, LocationType::Page);
         assert_eq!(loc.reference, "42");
@@ -307,11 +304,8 @@ mod tests {
         );
         assert!(!mention_no_quote.has_quote());
 
-        let loc_with_quote = SourceLocation::with_quote(
-            LocationType::Paragraph,
-            "1",
-            "original text",
-        );
+        let loc_with_quote =
+            SourceLocation::with_quote(LocationType::Paragraph, "1", "original text");
         let mention_with_quote = Mention::new(
             id,
             "fact",
@@ -376,7 +370,7 @@ mod tests {
 
         let summary = L1Summary::new(
             l0_hash,
-            100, // Total
+            100,           // Total
             vec![mention], // Only 1 preview
             vec![],
             "",
@@ -387,11 +381,7 @@ mod tests {
 
     #[test]
     fn test_source_location_serialization() {
-        let loc = SourceLocation::with_quote(
-            LocationType::Page,
-            "42",
-            "The quote",
-        );
+        let loc = SourceLocation::with_quote(LocationType::Page, "42", "The quote");
 
         let json = serde_json::to_string(&loc).unwrap();
         let deserialized: SourceLocation = serde_json::from_str(&json).unwrap();

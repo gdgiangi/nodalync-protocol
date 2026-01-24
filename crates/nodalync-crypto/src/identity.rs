@@ -108,11 +108,7 @@ pub fn peer_id_to_string(peer_id: &PeerId) -> String {
 pub fn peer_id_from_string(s: &str) -> Result<PeerId, CryptoError> {
     // Check prefix
     if !s.starts_with(PEER_ID_PREFIX) {
-        let prefix = if s.len() >= 4 {
-            &s[..4]
-        } else {
-            s
-        };
+        let prefix = if s.len() >= 4 { &s[..4] } else { s };
         return Err(CryptoError::InvalidPeerIdPrefix(prefix.to_string()));
     }
 

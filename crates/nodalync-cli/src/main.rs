@@ -116,7 +116,9 @@ async fn run(cli: Cli) -> CliResult<()> {
         // Economics commands
         Commands::Balance => commands::balance(config, format).await?,
 
-        Commands::Earnings { content, limit } => commands::earnings(config, format, content, limit)?,
+        Commands::Earnings { content, limit } => {
+            commands::earnings(config, format, content, limit)?
+        }
 
         Commands::Deposit { amount } => commands::deposit(config, format, amount).await?,
 

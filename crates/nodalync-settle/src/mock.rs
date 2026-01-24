@@ -13,8 +13,8 @@ use crate::account_mapping::AccountMapper;
 use crate::error::{SettleError, SettleResult};
 use crate::traits::Settlement;
 use crate::types::{
-    AccountId, Attestation, ChannelId, OnChainChannelState, OnChainChannelStatus,
-    SettlementStatus, TransactionId,
+    AccountId, Attestation, ChannelId, OnChainChannelState, OnChainChannelStatus, SettlementStatus,
+    TransactionId,
 };
 
 /// Mock settlement implementation for testing.
@@ -177,18 +177,17 @@ impl Settlement for MockSettlement {
         }
 
         // Get peer's account
-        let peer_account = self
-            .account_mapper
-            .read()
-            .unwrap()
-            .require_account(peer)?;
+        let peer_account = self.account_mapper.read().unwrap().require_account(peer)?;
 
         // Generate channel ID
-        let channel_id = ChannelId::new(nodalync_crypto::content_hash(&[
-            &self.operator_account.num.to_be_bytes()[..],
-            &peer_account.num.to_be_bytes()[..],
-            &self.tx_counter.load(Ordering::SeqCst).to_be_bytes()[..],
-        ].concat()));
+        let channel_id = ChannelId::new(nodalync_crypto::content_hash(
+            &[
+                &self.operator_account.num.to_be_bytes()[..],
+                &peer_account.num.to_be_bytes()[..],
+                &self.tx_counter.load(Ordering::SeqCst).to_be_bytes()[..],
+            ]
+            .concat(),
+        ));
 
         // Check channel doesn't exist
         if self.channels.read().unwrap().contains_key(&channel_id) {
@@ -464,11 +463,7 @@ mod tests {
             .map(|(peer, amount)| SettlementEntry::new(*peer, *amount, vec![], vec![]))
             .collect();
 
-        SettlementBatch::new(
-            content_hash(b"batch"),
-            entries,
-            content_hash(b"merkle"),
-        )
+        SettlementBatch::new(content_hash(b"batch"), entries, content_hash(b"merkle"))
     }
 
     #[tokio::test]
@@ -492,7 +487,10 @@ mod tests {
         let result = mock.withdraw(200).await;
         assert!(matches!(
             result,
-            Err(SettleError::InsufficientBalance { have: 100, need: 200 })
+            Err(SettleError::InsufficientBalance {
+                have: 100,
+                need: 200
+            })
         ));
     }
 
@@ -654,7 +652,9 @@ mod tests {
             payments: vec![],
             signature: Signature::from_bytes([0u8; 64]),
         };
-        mock.counter_dispute(&channel_id, &better_state).await.unwrap();
+        mock.counter_dispute(&channel_id, &better_state)
+            .await
+            .unwrap();
 
         // Counter with lower nonce should fail
         let worse_state = ChannelUpdatePayload {

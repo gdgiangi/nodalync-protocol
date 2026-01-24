@@ -12,11 +12,12 @@ use serde::{Deserialize, Serialize};
 /// - L1: Mentions (extracted atomic facts)
 /// - L2: Entity Graph (personal knowledge graph, always private)
 /// - L3: Insights (emergent synthesis)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[repr(u8)]
 #[non_exhaustive]
 pub enum ContentType {
     /// Raw input (documents, notes, transcripts)
+    #[default]
     L0 = 0x00,
     /// Mentions (extracted atomic facts)
     L1 = 0x01,
@@ -26,20 +27,15 @@ pub enum ContentType {
     L3 = 0x03,
 }
 
-impl Default for ContentType {
-    fn default() -> Self {
-        Self::L0
-    }
-}
-
 /// Visibility level for content.
 ///
 /// Spec §4.2: Controls how content is discovered and served.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[repr(u8)]
 #[non_exhaustive]
 pub enum Visibility {
     /// Local only, not served to others
+    #[default]
     Private = 0x00,
     /// Served if hash known, not announced to DHT
     Unlisted = 0x01,
@@ -47,22 +43,17 @@ pub enum Visibility {
     Shared = 0x02,
 }
 
-impl Default for Visibility {
-    fn default() -> Self {
-        Self::Private
-    }
-}
-
 /// Type of location reference within source content.
 ///
 /// Spec §4.4: Used in SourceLocation to identify where in L0 content
 /// a mention was extracted from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[repr(u8)]
 #[non_exhaustive]
 #[serde(rename_all = "snake_case")]
 pub enum LocationType {
     /// Reference by paragraph number
+    #[default]
     Paragraph = 0x00,
     /// Reference by page number
     Page = 0x01,
@@ -74,21 +65,16 @@ pub enum LocationType {
     Section = 0x04,
 }
 
-impl Default for LocationType {
-    fn default() -> Self {
-        Self::Paragraph
-    }
-}
-
 /// Classification of a mention (atomic fact type).
 ///
 /// Spec §4.4: Categorizes the type of information in a mention.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[repr(u8)]
 #[non_exhaustive]
 #[serde(rename_all = "snake_case")]
 pub enum Classification {
     /// An assertion or statement
+    #[default]
     Claim = 0x00,
     /// Numerical data or metric
     Statistic = 0x01,
@@ -102,59 +88,44 @@ pub enum Classification {
     Result = 0x05,
 }
 
-impl Default for Classification {
-    fn default() -> Self {
-        Self::Claim
-    }
-}
-
 /// Confidence level for mention extraction.
 ///
 /// Spec §4.4: Indicates how certain we are that the information
 /// is present in the source content.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[repr(u8)]
 #[non_exhaustive]
 #[serde(rename_all = "snake_case")]
 pub enum Confidence {
     /// Directly stated in source
+    #[default]
     Explicit = 0x00,
     /// Reasonably inferred from context
     Inferred = 0x01,
 }
 
-impl Default for Confidence {
-    fn default() -> Self {
-        Self::Explicit
-    }
-}
-
 /// Currency type for payments.
 ///
 /// Spec §4.7: Currently only NDL (Nodalync native token) is supported.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[repr(u8)]
 #[non_exhaustive]
 pub enum Currency {
     /// Native Nodalync token
+    #[default]
     NDL = 0x00,
-}
-
-impl Default for Currency {
-    fn default() -> Self {
-        Self::NDL
-    }
 }
 
 /// State of a payment channel.
 ///
 /// Spec §5.3: Tracks the lifecycle of a payment channel between peers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[repr(u8)]
 #[non_exhaustive]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelState {
     /// Channel open request sent, awaiting acceptance
+    #[default]
     Opening = 0x00,
     /// Channel is active and can process payments
     Open = 0x01,
@@ -166,21 +137,16 @@ pub enum ChannelState {
     Disputed = 0x04,
 }
 
-impl Default for ChannelState {
-    fn default() -> Self {
-        Self::Opening
-    }
-}
-
 /// Method used to resolve an entity mention to a canonical entity.
 ///
 /// Spec §4.5: Tracks how entity resolution was performed in L2 Entity Graphs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[repr(u8)]
 #[non_exhaustive]
 #[serde(rename_all = "snake_case")]
 pub enum ResolutionMethod {
     /// Exact string match
+    #[default]
     ExactMatch = 0x00,
     /// Normalized form match (case, whitespace, punctuation)
     Normalized = 0x01,
@@ -194,12 +160,6 @@ pub enum ResolutionMethod {
     Manual = 0x05,
     /// AI-assisted resolution
     AIAssisted = 0x06,
-}
-
-impl Default for ResolutionMethod {
-    fn default() -> Self {
-        Self::ExactMatch
-    }
 }
 
 #[cfg(test)]

@@ -73,8 +73,8 @@ pub fn update(
 mod tests {
     use super::*;
     use crate::commands::init::init;
-    use tempfile::TempDir;
     use std::io::Write;
+    use tempfile::TempDir;
 
     fn setup_config(temp_dir: &TempDir) -> CliConfig {
         let mut config = CliConfig::default();

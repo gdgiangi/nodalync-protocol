@@ -20,7 +20,7 @@ use nodalync_crypto::{
 use nodalync_econ::distribute_revenue;
 use nodalync_ops::{DefaultNodeOperations, OpsError};
 use nodalync_store::{
-    CachedContent, CacheStore, ContentStore, ManifestStore, NodeState, NodeStateConfig,
+    CacheStore, CachedContent, ContentStore, ManifestStore, NodeState, NodeStateConfig,
     ProvenanceGraph,
 };
 use nodalync_types::{
@@ -44,7 +44,6 @@ fn create_test_ops() -> (DefaultNodeOperations, TempDir, PeerId) {
     let ops = DefaultNodeOperations::with_defaults(state, peer_id);
     (ops, temp_dir, peer_id)
 }
-
 
 /// Create L0 content and return its hash.
 fn create_l0_content(ops: &mut DefaultNodeOperations, content: &[u8], title: &str) -> Hash {
@@ -167,9 +166,7 @@ fn test_l0_l1_l2_l3_full_flow() {
     // 4. Derive L3 from L2 (owned by Bob)
     let insight = b"More data helps ML.";
     let l3_meta = Metadata::new("Insight", insight.len() as u64);
-    let l3_hash = ops
-        .derive_content(&[l2_hash], insight, l3_meta)
-        .unwrap();
+    let l3_hash = ops.derive_content(&[l2_hash], insight, l3_meta).unwrap();
 
     let l3_manifest = ops.state.manifests.load(&l3_hash).unwrap().unwrap();
     assert_eq!(l3_manifest.content_type, ContentType::L3);
@@ -408,7 +405,10 @@ fn test_l2_creator_economics_own_content() {
 
     // Verify total distribution equals payment
     let total: u64 = distributions.iter().map(|d| d.amount).sum();
-    assert_eq!(total, payment_amount, "Total distribution should equal payment");
+    assert_eq!(
+        total, payment_amount,
+        "Total distribution should equal payment"
+    );
 }
 
 /// Test economics with mixed sources (queried + owned).
@@ -498,7 +498,9 @@ fn test_l2_creator_economics_mixed_sources() {
     // Bob builds L2 from both L1s (his personal knowledge graph mixing sources)
     // First, we need to ensure Alice's L1 is accessible
     // In test, we store it directly; in prod, it would be queried
-    let l2_hash = bob_ops.build_l2(vec![l1_bob_hash, l1_alice_hash], None).unwrap();
+    let l2_hash = bob_ops
+        .build_l2(vec![l1_bob_hash, l1_alice_hash], None)
+        .unwrap();
 
     // Bob derives L3 from L2
     let insight = b"Combined insight.";
@@ -571,7 +573,10 @@ fn test_l2_creator_economics_mixed_sources() {
 
     // Verify total distribution equals payment
     let total: u64 = distributions.iter().map(|d| d.amount).sum();
-    assert_eq!(total, payment_amount, "Total distribution should equal payment");
+    assert_eq!(
+        total, payment_amount,
+        "Total distribution should equal payment"
+    );
 
     // Key invariant: L2 is invisible to economics
     // Bob doesn't get extra for creating L2 - his value is in the L3 synthesis fee
@@ -631,9 +636,7 @@ async fn test_l2_cannot_publish() {
     let l2_hash = ops.build_l2(vec![l1_hash], None).unwrap();
 
     // Attempt to publish L2 (should fail)
-    let result = ops
-        .publish_content(&l2_hash, Visibility::Shared, 100)
-        .await;
+    let result = ops.publish_content(&l2_hash, Visibility::Shared, 100).await;
 
     assert!(result.is_err(), "L2 content cannot be published");
 }

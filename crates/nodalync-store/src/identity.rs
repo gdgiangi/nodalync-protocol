@@ -110,9 +110,9 @@ impl IdentityStore {
             .map_err(|e| StoreError::encryption(format!("Key derivation failed: {}", e)))?;
 
         // Extract 32 bytes from the hash for AES-256
-        let hash_bytes = password_hash.hash.ok_or_else(|| {
-            StoreError::encryption("Failed to extract hash bytes")
-        })?;
+        let hash_bytes = password_hash
+            .hash
+            .ok_or_else(|| StoreError::encryption("Failed to extract hash bytes"))?;
         let key_bytes = hash_bytes.as_bytes();
 
         // Ensure we have at least 32 bytes
@@ -179,9 +179,9 @@ impl IdentityStore {
             .hash_password(password.as_bytes(), &salt)
             .map_err(|e| StoreError::encryption(format!("Key derivation failed: {}", e)))?;
 
-        let hash_bytes = password_hash.hash.ok_or_else(|| {
-            StoreError::encryption("Failed to extract hash bytes")
-        })?;
+        let hash_bytes = password_hash
+            .hash
+            .ok_or_else(|| StoreError::encryption("Failed to extract hash bytes"))?;
         let key_bytes = hash_bytes.as_bytes();
 
         if key_bytes.len() < 32 {
@@ -309,14 +309,12 @@ fn base64_encoder(output: &mut Vec<u8>) -> impl std::io::Write + '_ {
 /// Base64 decode string to bytes.
 fn base64_decode(s: &str) -> Result<Vec<u8>> {
     const DECODE_TABLE: [i8; 128] = [
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, -1, -1, 63,
-        52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -1, -1, -1,
-        -1,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14,
-        15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1, -1, -1,
-        -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
-        41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, -1,
+        -1, 63, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -1, -1, -1, -1, 0, 1, 2, 3, 4,
+        5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1,
+        -1, -1, -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
+        46, 47, 48, 49, 50, 51, -1, -1, -1, -1, -1,
     ];
 
     let bytes: Vec<u8> = s.bytes().filter(|&b| b != b'=').collect();

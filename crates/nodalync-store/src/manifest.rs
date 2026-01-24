@@ -28,29 +28,30 @@ impl SqliteManifestStore {
     }
 
     /// Serialize a manifest to SQL row values.
+    #[allow(clippy::type_complexity)]
     fn serialize_manifest(
         manifest: &Manifest,
     ) -> Result<(
-        Vec<u8>,                  // hash
-        u8,                       // content_type
-        Vec<u8>,                  // owner
-        u32,                      // version_number
-        Option<Vec<u8>>,          // version_previous
-        Vec<u8>,                  // version_root
-        Timestamp,                // version_timestamp
-        u8,                       // visibility
-        String,                   // title
-        Option<String>,           // description
-        Option<String>,           // tags (JSON)
-        u64,                      // content_size
-        Option<String>,           // mime_type
-        u64,                      // price
-        u64,                      // total_queries
-        u64,                      // total_revenue
-        String,                   // access_control (JSON)
-        String,                   // provenance (JSON)
-        Timestamp,                // created_at
-        Timestamp,                // updated_at
+        Vec<u8>,         // hash
+        u8,              // content_type
+        Vec<u8>,         // owner
+        u32,             // version_number
+        Option<Vec<u8>>, // version_previous
+        Vec<u8>,         // version_root
+        Timestamp,       // version_timestamp
+        u8,              // visibility
+        String,          // title
+        Option<String>,  // description
+        Option<String>,  // tags (JSON)
+        u64,             // content_size
+        Option<String>,  // mime_type
+        u64,             // price
+        u64,             // total_queries
+        u64,             // total_revenue
+        String,          // access_control (JSON)
+        String,          // provenance (JSON)
+        Timestamp,       // created_at
+        Timestamp,       // updated_at
     )> {
         let hash = manifest.hash.0.to_vec();
         let content_type = manifest.content_type as u8;
@@ -149,10 +150,8 @@ impl SqliteManifestStore {
             .map(|j| serde_json::from_str(&j).unwrap_or_default())
             .unwrap_or_default();
 
-        let access: AccessControl =
-            serde_json::from_str(&access_control_json).unwrap_or_default();
-        let provenance: Provenance =
-            serde_json::from_str(&provenance_json).unwrap_or_default();
+        let access: AccessControl = serde_json::from_str(&access_control_json).unwrap_or_default();
+        let provenance: Provenance = serde_json::from_str(&provenance_json).unwrap_or_default();
 
         Ok(Manifest {
             hash,

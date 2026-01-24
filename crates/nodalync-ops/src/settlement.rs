@@ -35,7 +35,11 @@ where
 
         // Get pending total and last settlement time
         let pending_total = self.state.settlement.get_pending_total()?;
-        let last_settlement = self.state.settlement.get_last_settlement_time()?.unwrap_or(0);
+        let last_settlement = self
+            .state
+            .settlement
+            .get_last_settlement_time()?
+            .unwrap_or(0);
         let elapsed = timestamp.saturating_sub(last_settlement);
 
         // 1. Check should_settle (threshold OR interval)
@@ -86,7 +90,9 @@ where
 
         // 5. Mark as settled
         let payment_ids: Vec<Hash> = pending.iter().map(|d| d.payment_id).collect();
-        self.state.settlement.mark_settled(&payment_ids, &batch_id)?;
+        self.state
+            .settlement
+            .mark_settled(&payment_ids, &batch_id)?;
 
         // 6. Update last_settlement_time
         self.state.settlement.set_last_settlement_time(timestamp)?;
@@ -98,7 +104,11 @@ where
     pub fn should_trigger_settlement(&self) -> OpsResult<bool> {
         let timestamp = current_timestamp();
         let pending_total = self.state.settlement.get_pending_total()?;
-        let last_settlement = self.state.settlement.get_last_settlement_time()?.unwrap_or(0);
+        let last_settlement = self
+            .state
+            .settlement
+            .get_last_settlement_time()?
+            .unwrap_or(0);
         let elapsed = timestamp.saturating_sub(last_settlement);
 
         Ok(should_settle(pending_total, last_settlement, elapsed))
@@ -153,7 +163,9 @@ where
 
         // Mark as settled
         let payment_ids: Vec<Hash> = pending.iter().map(|d| d.payment_id).collect();
-        self.state.settlement.mark_settled(&payment_ids, &batch_id)?;
+        self.state
+            .settlement
+            .mark_settled(&payment_ids, &batch_id)?;
 
         // Update last settlement time
         self.state.settlement.set_last_settlement_time(timestamp)?;
@@ -255,7 +267,10 @@ mod tests {
 
         // Set a recent last_settlement_time so interval trigger doesn't fire
         let recent_time = current_timestamp();
-        ops.state.settlement.set_last_settlement_time(recent_time).unwrap();
+        ops.state
+            .settlement
+            .set_last_settlement_time(recent_time)
+            .unwrap();
 
         // With no pending and recent settlement, should not trigger
         assert!(!ops.should_trigger_settlement().unwrap());

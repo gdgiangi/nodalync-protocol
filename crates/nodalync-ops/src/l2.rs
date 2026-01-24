@@ -13,9 +13,9 @@
 use nodalync_crypto::{content_hash, Hash};
 use nodalync_store::{CacheStore, ContentStore, ManifestStore, ProvenanceGraph};
 use nodalync_types::{
-    ContentType, Entity, L1Reference, L2BuildConfig, L2EntityGraph, L2MergeConfig,
-    Manifest, Metadata, Provenance, ProvenanceEntry, Version, Visibility,
-    MAX_SOURCE_L1S_PER_L2, MAX_SOURCE_L2S_PER_MERGE,
+    ContentType, Entity, L1Reference, L2BuildConfig, L2EntityGraph, L2MergeConfig, Manifest,
+    Metadata, Provenance, ProvenanceEntry, Version, Visibility, MAX_SOURCE_L1S_PER_L2,
+    MAX_SOURCE_L2S_PER_MERGE,
 };
 use nodalync_valid::{validate_l2_content, Validator};
 
@@ -136,8 +136,8 @@ where
                     } else {
                         mention.content.clone()
                     };
-                    let entity = Entity::new(format!("e{}", entity_id_counter), label)
-                        .with_confidence(0.8);
+                    let entity =
+                        Entity::new(format!("e{}", entity_id_counter), label).with_confidence(0.8);
 
                     entities.push(entity);
                     entity_id_counter += 1;
@@ -216,7 +216,10 @@ where
             ..manifest
         };
         let version = Version::new_v1(stored_hash, timestamp);
-        let manifest = Manifest { version, ..manifest };
+        let manifest = Manifest {
+            version,
+            ..manifest
+        };
 
         // 10. Validate L2 content
         validate_l2_content(&graph, &manifest)?;
@@ -329,17 +332,15 @@ where
 
         // 5-6. Merge entities and relationships
         let mut merged_entities: Vec<Entity> = Vec::new();
-        let mut entity_id_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut entity_id_map: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         let mut entity_counter = 0u32;
 
         for (graph_idx, graph) in source_graphs.iter().enumerate() {
             for entity in &graph.entities {
                 // Create new ID to avoid conflicts
                 let new_id = format!("e{}", entity_counter);
-                entity_id_map.insert(
-                    format!("{}:{}", graph_idx, entity.id),
-                    new_id.clone(),
-                );
+                entity_id_map.insert(format!("{}:{}", graph_idx, entity.id), new_id.clone());
 
                 let mut merged_entity = entity.clone();
                 merged_entity.id = new_id;

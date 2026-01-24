@@ -60,15 +60,13 @@ impl FsCacheStore {
         let size_bytes: i64 = row.get(3)?;
         let payment_receipt_json: String = row.get(4)?;
 
-        let payment_receipt: PaymentReceipt =
-            serde_json::from_str(&payment_receipt_json).unwrap_or_else(|_| {
-                PaymentReceipt {
-                    payment_id: Hash([0u8; 32]),
-                    amount: 0,
-                    timestamp: 0,
-                    channel_nonce: 0,
-                    distributor_signature: nodalync_crypto::Signature::from_bytes([0u8; 64]),
-                }
+        let payment_receipt: PaymentReceipt = serde_json::from_str(&payment_receipt_json)
+            .unwrap_or_else(|_| PaymentReceipt {
+                payment_id: Hash([0u8; 32]),
+                amount: 0,
+                timestamp: 0,
+                channel_nonce: 0,
+                distributor_signature: nodalync_crypto::Signature::from_bytes([0u8; 64]),
             });
 
         Ok(CacheMetadata {
@@ -173,11 +171,9 @@ impl CacheStore for FsCacheStore {
         // Also check metadata exists
         let conn = self.conn.lock().unwrap();
         let hash_bytes = hash.0.to_vec();
-        conn.query_row(
-            "SELECT 1 FROM cache WHERE hash = ?1",
-            [hash_bytes],
-            |_| Ok(true),
-        )
+        conn.query_row("SELECT 1 FROM cache WHERE hash = ?1", [hash_bytes], |_| {
+            Ok(true)
+        })
         .optional()
         .unwrap_or(None)
         .unwrap_or(false)
@@ -187,19 +183,19 @@ impl CacheStore for FsCacheStore {
         let conn = self.conn.lock().unwrap();
 
         // Get current total size
-        let current_size: i64 = conn
-            .query_row("SELECT COALESCE(SUM(size_bytes), 0) FROM cache", [], |row| {
-                row.get(0)
-            })?;
+        let current_size: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(size_bytes), 0) FROM cache",
+            [],
+            |row| row.get(0),
+        )?;
 
         if (current_size as u64) <= max_size_bytes {
             return Ok(0);
         }
 
         // Get entries ordered by queried_at (oldest first) for LRU eviction
-        let mut stmt = conn.prepare(
-            "SELECT hash, size_bytes FROM cache ORDER BY queried_at ASC",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT hash, size_bytes FROM cache ORDER BY queried_at ASC")?;
 
         let entries: Vec<(Hash, u64)> = stmt
             .query_map([], |row| {

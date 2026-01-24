@@ -72,7 +72,8 @@ where
         // Extract L1 summary before borrowing network to avoid borrow checker issues
         let l1_summary = self.extract_l1_summary(hash)?;
         if let Some(network) = self.network().cloned() {
-            let payload = Self::create_announce_payload(&manifest, l1_summary, network.listen_addresses());
+            let payload =
+                Self::create_announce_payload(&manifest, l1_summary, network.listen_addresses());
             network.dht_announce(*hash, payload).await?;
         }
 
@@ -91,7 +92,10 @@ where
             title: manifest.metadata.title.clone(),
             l1_summary,
             price: manifest.economics.price,
-            addresses: listen_addrs.iter().map(|addr: &Multiaddr| addr.to_string()).collect(),
+            addresses: listen_addrs
+                .iter()
+                .map(|addr: &Multiaddr| addr.to_string())
+                .collect(),
         }
     }
 
@@ -240,7 +244,9 @@ mod tests {
         assert_eq!(manifest.visibility, Visibility::Private);
 
         // Publish
-        ops.publish_content(&hash, Visibility::Shared, 100).await.unwrap();
+        ops.publish_content(&hash, Visibility::Shared, 100)
+            .await
+            .unwrap();
 
         // Verify
         let manifest = ops.state.manifests.load(&hash).unwrap().unwrap();
@@ -257,7 +263,9 @@ mod tests {
         let hash = ops.create_content(content, meta).unwrap();
 
         // Publish first
-        ops.publish_content(&hash, Visibility::Shared, 100).await.unwrap();
+        ops.publish_content(&hash, Visibility::Shared, 100)
+            .await
+            .unwrap();
 
         // Unpublish
         ops.unpublish_content(&hash).await.unwrap();
@@ -276,13 +284,15 @@ mod tests {
         let hash = ops.create_content(content, meta).unwrap();
 
         // Set to Unlisted
-        ops.set_content_visibility(&hash, Visibility::Unlisted).unwrap();
+        ops.set_content_visibility(&hash, Visibility::Unlisted)
+            .unwrap();
 
         let manifest = ops.state.manifests.load(&hash).unwrap().unwrap();
         assert_eq!(manifest.visibility, Visibility::Unlisted);
 
         // Set to Shared
-        ops.set_content_visibility(&hash, Visibility::Shared).unwrap();
+        ops.set_content_visibility(&hash, Visibility::Shared)
+            .unwrap();
 
         let manifest = ops.state.manifests.load(&hash).unwrap().unwrap();
         assert_eq!(manifest.visibility, Visibility::Shared);

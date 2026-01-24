@@ -29,11 +29,7 @@ pub fn versions(config: CliConfig, format: OutputFormat, hash_str: &str) -> CliR
     }
 
     // Find the latest version number
-    let max_version = versions_list
-        .iter()
-        .map(|m| m.number)
-        .max()
-        .unwrap_or(1);
+    let max_version = versions_list.iter().map(|m| m.number).max().unwrap_or(1);
 
     // Convert to version info
     let version_infos: Vec<VersionInfo> = versions_list

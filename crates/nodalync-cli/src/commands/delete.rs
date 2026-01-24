@@ -34,7 +34,9 @@ pub fn delete(
     // Prompt for confirmation if not forcing
     if !force {
         if !crate::prompt::is_interactive() {
-            return Err(CliError::User("Use --force for non-interactive delete".into()));
+            return Err(CliError::User(
+                "Use --force for non-interactive delete".into(),
+            ));
         }
         let prompt = format!(
             "Delete \"{}\"? This cannot be undone.",

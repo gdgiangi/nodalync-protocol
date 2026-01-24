@@ -9,11 +9,7 @@ use crate::output::{OutputFormat, ReferenceOutput, Render};
 ///
 /// Creates an L0 reference from an existing L3 content, allowing
 /// the L3 synthesis to be used as a primary source for future derivations.
-pub fn reference(
-    config: CliConfig,
-    format: OutputFormat,
-    l3_hash_str: &str,
-) -> CliResult<String> {
+pub fn reference(config: CliConfig, format: OutputFormat, l3_hash_str: &str) -> CliResult<String> {
     // Parse hash
     let l3_hash = parse_hash(l3_hash_str)?;
 

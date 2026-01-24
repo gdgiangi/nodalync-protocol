@@ -128,7 +128,9 @@ pub use payload::{
 pub use payload::{PreviewRequestPayload, PreviewResponsePayload};
 
 // Payload types - Query
-pub use payload::{PaymentReceipt, QueryErrorPayload, QueryRequestPayload, QueryResponsePayload, VersionSpec};
+pub use payload::{
+    PaymentReceipt, QueryErrorPayload, QueryRequestPayload, QueryResponsePayload, VersionSpec,
+};
 
 // Payload types - Version
 pub use payload::{VersionInfo, VersionRequestPayload, VersionResponsePayload};
@@ -148,7 +150,9 @@ pub use payload::{Capability, PeerInfoPayload, PingPayload, PongPayload};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nodalync_crypto::{content_hash as crypto_hash, generate_identity, peer_id_from_public_key};
+    use nodalync_crypto::{
+        content_hash as crypto_hash, generate_identity, peer_id_from_public_key,
+    };
     use nodalync_types::{ContentType, L1Summary};
 
     /// Test full message roundtrip: create -> encode -> decode -> verify
@@ -223,7 +227,13 @@ mod tests {
         bytes.extend_from_slice(&[0u8; 64]); // Signature
 
         let result = decode_message(&bytes);
-        assert!(matches!(result, Err(DecodeError::InvalidMagic { expected: 0x00, got: 0xFF })));
+        assert!(matches!(
+            result,
+            Err(DecodeError::InvalidMagic {
+                expected: 0x00,
+                got: 0xFF
+            })
+        ));
     }
 
     /// Test that invalid version is rejected
@@ -236,7 +246,13 @@ mod tests {
         bytes.extend_from_slice(&[0u8; 64]); // Signature
 
         let result = decode_message(&bytes);
-        assert!(matches!(result, Err(DecodeError::InvalidVersion { expected: 0x01, got: 0xFF })));
+        assert!(matches!(
+            result,
+            Err(DecodeError::InvalidVersion {
+                expected: 0x01,
+                got: 0xFF
+            })
+        ));
     }
 
     /// Test that truncated messages are rejected
@@ -287,7 +303,11 @@ mod tests {
         for msg_type in types {
             let value = msg_type.to_u16();
             let recovered = MessageType::from_u16(value).unwrap();
-            assert_eq!(msg_type, recovered, "MessageType {:?} failed roundtrip", msg_type);
+            assert_eq!(
+                msg_type, recovered,
+                "MessageType {:?} failed roundtrip",
+                msg_type
+            );
         }
     }
 

@@ -4,9 +4,7 @@
 //! as specified in Protocol Specification §6.2-§6.8.
 
 use nodalync_crypto::{Hash, PeerId, PublicKey, Signature, Timestamp};
-use nodalync_types::{
-    Amount, ContentType, ErrorCode, L1Summary, Manifest, Payment, Visibility,
-};
+use nodalync_types::{Amount, ContentType, ErrorCode, L1Summary, Manifest, Payment, Visibility};
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
@@ -166,21 +164,16 @@ pub struct QueryRequestPayload {
 }
 
 /// Specification for which version to retrieve.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VersionSpec {
     /// Get the latest version
+    #[default]
     Latest,
     /// Get a specific version number
     Number(u32),
     /// Get a specific version by hash
     Hash(Hash),
-}
-
-impl Default for VersionSpec {
-    fn default() -> Self {
-        Self::Latest
-    }
 }
 
 /// Payload for QUERY_RESPONSE messages.
@@ -328,7 +321,10 @@ pub struct ChannelBalances {
 impl ChannelBalances {
     /// Create new channel balances.
     pub fn new(initiator: Amount, responder: Amount) -> Self {
-        Self { initiator, responder }
+        Self {
+            initiator,
+            responder,
+        }
     }
 
     /// Get the total balance in the channel.

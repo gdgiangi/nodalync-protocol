@@ -24,7 +24,9 @@ pub fn init(config: CliConfig, format: OutputFormat) -> CliResult<String> {
     } else if crate::prompt::is_interactive() {
         crate::prompt::password_with_confirm("Enter password to encrypt identity")?
     } else {
-        return Err(CliError::User("Set NODALYNC_PASSWORD or run interactively".into()));
+        return Err(CliError::User(
+            "Set NODALYNC_PASSWORD or run interactively".into(),
+        ));
     };
 
     // Generate identity

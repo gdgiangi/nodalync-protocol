@@ -105,7 +105,9 @@ mod tests {
         let event = NetworkEvent::PeerConnected { peer };
         assert_eq!(event.peer(), Some(&peer));
 
-        let event = NetworkEvent::BootstrapComplete { peers_discovered: 5 };
+        let event = NetworkEvent::BootstrapComplete {
+            peers_discovered: 5,
+        };
         assert!(event.peer().is_none());
     }
 }

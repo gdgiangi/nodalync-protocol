@@ -85,7 +85,9 @@ pub async fn publish(
 
     // Publish content
     spinner.set_message("Publishing to network...");
-    ctx.ops.publish_content(&hash, visibility, price_units).await?;
+    ctx.ops
+        .publish_content(&hash, visibility, price_units)
+        .await?;
     spinner.finish_and_clear();
 
     // Create output

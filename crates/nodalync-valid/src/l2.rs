@@ -8,10 +8,9 @@
 //! - Provenance rules (root_L0L1 contains only L0/L1)
 
 use nodalync_types::{
-    ContentType, L2EntityGraph, Manifest, PrefixMap, Visibility,
-    MAX_ALIASES_PER_ENTITY, MAX_CANONICAL_LABEL_LENGTH, MAX_ENTITIES_PER_L2,
-    MAX_ENTITY_DESCRIPTION_LENGTH, MAX_PREDICATE_LENGTH, MAX_RELATIONSHIPS_PER_L2,
-    MAX_SOURCE_L1S_PER_L2,
+    ContentType, L2EntityGraph, Manifest, PrefixMap, Visibility, MAX_ALIASES_PER_ENTITY,
+    MAX_CANONICAL_LABEL_LENGTH, MAX_ENTITIES_PER_L2, MAX_ENTITY_DESCRIPTION_LENGTH,
+    MAX_PREDICATE_LENGTH, MAX_RELATIONSHIPS_PER_L2, MAX_SOURCE_L1S_PER_L2,
 };
 
 use crate::error::{ValidationError, ValidationResult};
@@ -111,7 +110,8 @@ pub fn validate_l2_content(graph: &L2EntityGraph, manifest: &Manifest) -> Valida
     validate_prefix_map(&graph.prefixes)?;
 
     // 12. Validate entities
-    let entity_ids: std::collections::HashSet<&str> = graph.entities.iter().map(|e| e.id.as_str()).collect();
+    let entity_ids: std::collections::HashSet<&str> =
+        graph.entities.iter().map(|e| e.id.as_str()).collect();
     if entity_ids.len() != graph.entities.len() {
         return Err(ValidationError::L2DuplicateEntityId);
     }
@@ -151,10 +151,7 @@ fn validate_prefix_map(prefixes: &PrefixMap) -> ValidationResult<()> {
 }
 
 /// Validate an entity.
-fn validate_entity(
-    entity: &nodalync_types::Entity,
-    prefixes: &PrefixMap,
-) -> ValidationResult<()> {
+fn validate_entity(entity: &nodalync_types::Entity, prefixes: &PrefixMap) -> ValidationResult<()> {
     // Entity ID cannot be empty
     if entity.id.is_empty() {
         return Err(ValidationError::L2InvalidEntityId {
@@ -281,9 +278,7 @@ fn validate_relationship(
 
 /// Check if a string is a valid URI or CURIE.
 fn validate_uri_or_curie(uri_or_curie: &str, prefixes: &PrefixMap) -> ValidationResult<()> {
-    if is_valid_uri(uri_or_curie) {
-        Ok(())
-    } else if prefixes.is_valid_curie(uri_or_curie) {
+    if is_valid_uri(uri_or_curie) || prefixes.is_valid_curie(uri_or_curie) {
         Ok(())
     } else {
         Err(ValidationError::L2InvalidUri {
@@ -419,7 +414,10 @@ mod tests {
         manifest.visibility = Visibility::Shared;
 
         let result = validate_l2_content(&graph, &manifest);
-        assert!(matches!(result, Err(ValidationError::L2VisibilityNotPrivate { .. })));
+        assert!(matches!(
+            result,
+            Err(ValidationError::L2VisibilityNotPrivate { .. })
+        ));
     }
 
     #[test]
@@ -430,7 +428,10 @@ mod tests {
         manifest.economics.price = 100;
 
         let result = validate_l2_content(&graph, &manifest);
-        assert!(matches!(result, Err(ValidationError::L2PriceNotZero { .. })));
+        assert!(matches!(
+            result,
+            Err(ValidationError::L2PriceNotZero { .. })
+        ));
     }
 
     #[test]
@@ -494,7 +495,10 @@ mod tests {
         let manifest = create_l2_manifest(hash);
 
         let result = validate_l2_content(&graph, &manifest);
-        assert!(matches!(result, Err(ValidationError::L2InvalidEntityRef { .. })));
+        assert!(matches!(
+            result,
+            Err(ValidationError::L2InvalidEntityRef { .. })
+        ));
     }
 
     #[test]
@@ -533,7 +537,10 @@ mod tests {
         let manifest = create_l2_manifest(hash);
 
         let result = validate_l2_content(&graph, &manifest);
-        assert!(matches!(result, Err(ValidationError::L2InvalidConfidence { .. })));
+        assert!(matches!(
+            result,
+            Err(ValidationError::L2InvalidConfidence { .. })
+        ));
     }
 
     #[test]
@@ -554,6 +561,9 @@ mod tests {
         let manifest = create_l2_manifest(hash);
 
         let result = validate_l2_content(&graph, &manifest);
-        assert!(matches!(result, Err(ValidationError::L2EntityCountMismatch { .. })));
+        assert!(matches!(
+            result,
+            Err(ValidationError::L2EntityCountMismatch { .. })
+        ));
     }
 }

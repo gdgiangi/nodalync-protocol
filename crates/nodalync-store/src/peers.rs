@@ -61,7 +61,13 @@ impl PeerStore for SqlitePeerStore {
                  addresses = excluded.addresses,
                  last_seen = excluded.last_seen,
                  reputation = excluded.reputation",
-            params![peer_id_bytes, public_key_bytes, addresses_json, last_seen, reputation],
+            params![
+                peer_id_bytes,
+                public_key_bytes,
+                addresses_json,
+                last_seen,
+                reputation
+            ],
         )?;
 
         Ok(())
@@ -295,7 +301,9 @@ mod tests {
         store.upsert(&peer).unwrap();
 
         let new_timestamp = 9999999999u64;
-        store.update_last_seen(&peer.peer_id, new_timestamp).unwrap();
+        store
+            .update_last_seen(&peer.peer_id, new_timestamp)
+            .unwrap();
 
         let loaded = store.get(&peer.peer_id).unwrap().unwrap();
         assert_eq!(loaded.last_seen, new_timestamp);

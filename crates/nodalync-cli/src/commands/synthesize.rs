@@ -31,7 +31,9 @@ pub async fn synthesize(
         .collect::<Result<Vec<_>, _>>()?;
 
     if sources.is_empty() {
-        return Err(CliError::User("At least one source is required".to_string()));
+        return Err(CliError::User(
+            "At least one source is required".to_string(),
+        ));
     }
 
     // Read synthesis content
@@ -157,9 +159,16 @@ mod tests {
         std::fs::write(&output_path, b"synthesis content").unwrap();
 
         let sources: Vec<String> = vec![];
-        let result =
-            synthesize(config, OutputFormat::Human, &sources, &output_path, None, None, false)
-                .await;
+        let result = synthesize(
+            config,
+            OutputFormat::Human,
+            &sources,
+            &output_path,
+            None,
+            None,
+            false,
+        )
+        .await;
 
         assert!(result.is_err());
     }

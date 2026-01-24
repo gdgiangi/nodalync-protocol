@@ -65,11 +65,15 @@ async fn wait_for_listen(node: &NetworkNode) -> libp2p::Multiaddr {
 async fn test_two_node_publish_query() {
     // Create two network nodes
     let config1 = test_network_config();
-    let node1 = NetworkNode::new(config1).await.expect("Failed to create node 1");
+    let node1 = NetworkNode::new(config1)
+        .await
+        .expect("Failed to create node 1");
     let addr1 = wait_for_listen(&node1).await;
 
     let config2 = test_network_config();
-    let node2 = NetworkNode::new(config2).await.expect("Failed to create node 2");
+    let node2 = NetworkNode::new(config2)
+        .await
+        .expect("Failed to create node 2");
     let _addr2 = wait_for_listen(&node2).await;
 
     // Node 2 connects to node 1
@@ -85,7 +89,9 @@ async fn test_two_node_publish_query() {
     // Create content on node 1
     let content = b"This is test content for multi-node scenario.";
     let metadata = Metadata::new("Test Document", content.len() as u64);
-    let hash = ops1.create_content(content, metadata).expect("Failed to create content");
+    let hash = ops1
+        .create_content(content, metadata)
+        .expect("Failed to create content");
 
     // Create announcement payload
     let announce_payload = AnnouncePayload {
@@ -107,7 +113,9 @@ async fn test_two_node_publish_query() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Verify content was created
-    let manifest = ops1.get_content_manifest(&hash).expect("Failed to get manifest");
+    let manifest = ops1
+        .get_content_manifest(&hash)
+        .expect("Failed to get manifest");
     assert!(manifest.is_some());
     let manifest = manifest.unwrap();
     assert_eq!(manifest.metadata.title, "Test Document");
@@ -129,20 +137,32 @@ async fn test_two_node_publish_query() {
 async fn test_provenance_chain_three_nodes() {
     // Create three network nodes
     let config1 = test_network_config();
-    let alice_node = NetworkNode::new(config1).await.expect("Failed to create Alice node");
+    let alice_node = NetworkNode::new(config1)
+        .await
+        .expect("Failed to create Alice node");
     let alice_addr = wait_for_listen(&alice_node).await;
 
     let config2 = test_network_config();
-    let bob_node = NetworkNode::new(config2).await.expect("Failed to create Bob node");
+    let bob_node = NetworkNode::new(config2)
+        .await
+        .expect("Failed to create Bob node");
     let bob_addr = wait_for_listen(&bob_node).await;
 
     let config3 = test_network_config();
-    let carol_node = NetworkNode::new(config3).await.expect("Failed to create Carol node");
+    let carol_node = NetworkNode::new(config3)
+        .await
+        .expect("Failed to create Carol node");
     let _carol_addr = wait_for_listen(&carol_node).await;
 
     // Connect nodes: Bob -> Alice, Carol -> Bob
-    bob_node.dial(alice_addr.clone()).await.expect("Bob failed to dial Alice");
-    carol_node.dial(bob_addr.clone()).await.expect("Carol failed to dial Bob");
+    bob_node
+        .dial(alice_addr.clone())
+        .await
+        .expect("Bob failed to dial Alice");
+    carol_node
+        .dial(bob_addr.clone())
+        .await
+        .expect("Carol failed to dial Bob");
 
     // Wait for connections
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -213,7 +233,11 @@ async fn test_provenance_chain_three_nodes() {
     let carol_synthesis = b"Carol's comprehensive review combining Alice's and Bob's insights.";
     let carol_meta = Metadata::new("Carol's Review", carol_synthesis.len() as u64);
     let carol_hash = carol_ops
-        .derive_content(&[carol_source1_hash, carol_source2_hash], carol_synthesis, carol_meta)
+        .derive_content(
+            &[carol_source1_hash, carol_source2_hash],
+            carol_synthesis,
+            carol_meta,
+        )
         .expect("Carol failed to derive content");
 
     // Verify Carol's content
@@ -243,7 +267,9 @@ async fn test_economics_tracking() {
     // Create content with price
     let content = b"Premium content worth paying for.";
     let metadata = Metadata::new("Premium Content", content.len() as u64);
-    let hash = ops.create_content(content, metadata).expect("Failed to create");
+    let hash = ops
+        .create_content(content, metadata)
+        .expect("Failed to create");
 
     // Publish with price
     ops.publish_content(&hash, Visibility::Shared, 500)
@@ -269,7 +295,9 @@ async fn test_l0_to_l3_derivation() {
     // Create L0 (raw input)
     let l0_content = b"Raw source document with important information.";
     let l0_meta = Metadata::new("Source Document", l0_content.len() as u64);
-    let l0_hash = ops.create_content(l0_content, l0_meta).expect("Failed to create L0");
+    let l0_hash = ops
+        .create_content(l0_content, l0_meta)
+        .expect("Failed to create L0");
 
     // Extract L1 summary (may fail if content doesn't have extractable mentions - that's okay)
     let _l1_summary = ops.extract_l1_summary(&l0_hash);

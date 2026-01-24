@@ -99,7 +99,10 @@ fn signature_is_deterministic() {
     let sig1 = sign(&private_key, message);
     let sig2 = sign(&private_key, message);
 
-    assert_eq!(sig1.0, sig2.0, "Same message and key should produce same signature");
+    assert_eq!(
+        sig1.0, sig2.0,
+        "Same message and key should produce same signature"
+    );
 }
 
 /// Test SignedMessage construction and verification
@@ -119,7 +122,11 @@ fn signed_message_construction() {
 
     // Verify the signed message
     assert!(
-        verify(&public_key, &signed_message.payload, &signed_message.signature),
+        verify(
+            &public_key,
+            &signed_message.payload,
+            &signed_message.signature
+        ),
         "SignedMessage should be verifiable"
     );
 }

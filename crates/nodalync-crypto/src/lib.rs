@@ -40,7 +40,9 @@ mod signature;
 
 pub use error::CryptoError;
 pub use hash::{content_hash, verify_content};
-pub use identity::{generate_identity, peer_id_from_public_key, peer_id_from_string, peer_id_to_string};
+pub use identity::{
+    generate_identity, peer_id_from_public_key, peer_id_from_string, peer_id_to_string,
+};
 pub use signature::{sign, verify, SignedMessage};
 
 use ed25519_dalek::SigningKey;
@@ -201,7 +203,11 @@ pub type Timestamp = u64;
 
 /// Helper function to convert bytes to hex string (for Debug output).
 fn hex_string(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>() + "..."
+    bytes
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>()
+        + "..."
 }
 
 #[cfg(test)]

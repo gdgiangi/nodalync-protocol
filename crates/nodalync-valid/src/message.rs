@@ -80,11 +80,7 @@ pub fn validate_message_basic(message: &Message, current_time: Timestamp) -> Val
 
 /// Validate message timestamp against current time.
 fn validate_timestamp(message_time: Timestamp, current_time: Timestamp) -> ValidationResult<()> {
-    let skew = if message_time > current_time {
-        message_time - current_time
-    } else {
-        current_time - message_time
-    };
+    let skew = message_time.abs_diff(current_time);
 
     if skew > MAX_CLOCK_SKEW_MS {
         return Err(ValidationError::TimestampOutOfRange {
@@ -139,7 +135,9 @@ pub fn is_valid_message_type(type_value: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nodalync_crypto::{content_hash, generate_identity, peer_id_from_public_key, sign, Signature};
+    use nodalync_crypto::{
+        content_hash, generate_identity, peer_id_from_public_key, sign, Signature,
+    };
     use nodalync_wire::MessageType;
 
     fn create_test_message(timestamp: Timestamp) -> Message {
@@ -329,7 +327,11 @@ mod tests {
         ];
 
         for type_val in valid_types {
-            assert!(is_valid_message_type(type_val), "Type {:04x} should be valid", type_val);
+            assert!(
+                is_valid_message_type(type_val),
+                "Type {:04x} should be valid",
+                type_val
+            );
         }
     }
 

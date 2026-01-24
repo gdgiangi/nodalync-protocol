@@ -64,7 +64,10 @@ impl RuleBasedExtractor {
                         current.push_str(&sentence);
 
                         // Check if this is a complete sentence
-                        if sentence.ends_with('.') || sentence.ends_with('!') || sentence.ends_with('?') {
+                        if sentence.ends_with('.')
+                            || sentence.ends_with('!')
+                            || sentence.ends_with('?')
+                        {
                             sentences.push((para_num, current.clone()));
                             current.clear();
                         }
@@ -86,19 +89,34 @@ impl RuleBasedExtractor {
         let lower = sentence.to_lowercase();
 
         // Check for specific patterns
-        if lower.contains("we found") || lower.contains("results show") || lower.contains("data indicates") {
+        if lower.contains("we found")
+            || lower.contains("results show")
+            || lower.contains("data indicates")
+        {
             return Classification::Result;
         }
 
-        if lower.contains("claim") || lower.contains("argue") || lower.contains("assert") || lower.contains("believe") {
+        if lower.contains("claim")
+            || lower.contains("argue")
+            || lower.contains("assert")
+            || lower.contains("believe")
+        {
             return Classification::Claim;
         }
 
-        if lower.contains("observed") || lower.contains("measured") || lower.contains("recorded") || lower.contains("noted") {
+        if lower.contains("observed")
+            || lower.contains("measured")
+            || lower.contains("recorded")
+            || lower.contains("noted")
+        {
             return Classification::Observation;
         }
 
-        if lower.contains("define") || lower.contains("definition") || lower.contains("is a") || lower.contains("refers to") {
+        if lower.contains("define")
+            || lower.contains("definition")
+            || lower.contains("is a")
+            || lower.contains("refers to")
+        {
             return Classification::Definition;
         }
 
@@ -106,7 +124,11 @@ impl RuleBasedExtractor {
             return Classification::Observation; // Treat quotes as observations
         }
 
-        if lower.contains("statistic") || lower.contains("percent") || lower.contains("%") || has_numbers(&lower) {
+        if lower.contains("statistic")
+            || lower.contains("percent")
+            || lower.contains("%")
+            || has_numbers(&lower)
+        {
             return Classification::Statistic;
         }
 
@@ -228,14 +250,58 @@ fn has_numbers(text: &str) -> bool {
 /// Check if a word is a common word (not a proper noun).
 fn is_common_word(word: &str) -> bool {
     let common = [
-        "The", "A", "An", "This", "That", "These", "Those",
-        "I", "We", "You", "He", "She", "It", "They",
-        "Is", "Are", "Was", "Were", "Be", "Been", "Being",
-        "Have", "Has", "Had", "Do", "Does", "Did",
-        "If", "When", "Where", "Why", "How", "What", "Which",
-        "And", "Or", "But", "So", "Yet", "For", "Nor",
-        "In", "On", "At", "To", "From", "With", "By",
-        "However", "Therefore", "Moreover", "Furthermore",
+        "The",
+        "A",
+        "An",
+        "This",
+        "That",
+        "These",
+        "Those",
+        "I",
+        "We",
+        "You",
+        "He",
+        "She",
+        "It",
+        "They",
+        "Is",
+        "Are",
+        "Was",
+        "Were",
+        "Be",
+        "Been",
+        "Being",
+        "Have",
+        "Has",
+        "Had",
+        "Do",
+        "Does",
+        "Did",
+        "If",
+        "When",
+        "Where",
+        "Why",
+        "How",
+        "What",
+        "Which",
+        "And",
+        "Or",
+        "But",
+        "So",
+        "Yet",
+        "For",
+        "Nor",
+        "In",
+        "On",
+        "At",
+        "To",
+        "From",
+        "With",
+        "By",
+        "However",
+        "Therefore",
+        "Moreover",
+        "Furthermore",
     ];
     common.contains(&word)
 }
@@ -269,19 +335,22 @@ mod tests {
 
     #[test]
     fn test_classify_result() {
-        let classification = RuleBasedExtractor::classify_sentence("We found that the system works.");
+        let classification =
+            RuleBasedExtractor::classify_sentence("We found that the system works.");
         assert_eq!(classification, Classification::Result);
     }
 
     #[test]
     fn test_classify_claim() {
-        let classification = RuleBasedExtractor::classify_sentence("They argue that this is correct.");
+        let classification =
+            RuleBasedExtractor::classify_sentence("They argue that this is correct.");
         assert_eq!(classification, Classification::Claim);
     }
 
     #[test]
     fn test_classify_observation() {
-        let classification = RuleBasedExtractor::classify_sentence("We observed significant changes.");
+        let classification =
+            RuleBasedExtractor::classify_sentence("We observed significant changes.");
         assert_eq!(classification, Classification::Observation);
     }
 
@@ -293,14 +362,16 @@ mod tests {
 
     #[test]
     fn test_classify_statistic() {
-        let classification = RuleBasedExtractor::classify_sentence("The statistic shows 75% improvement.");
+        let classification =
+            RuleBasedExtractor::classify_sentence("The statistic shows 75% improvement.");
         assert_eq!(classification, Classification::Statistic);
     }
 
     #[test]
     fn test_extract_entities() {
         let extractor = RuleBasedExtractor::new();
-        let entities = extractor.extract_entities("Apple and Microsoft announced partnerships with OpenAI.");
+        let entities =
+            extractor.extract_entities("Apple and Microsoft announced partnerships with OpenAI.");
 
         assert!(entities.contains(&"Apple".to_string()));
         assert!(entities.contains(&"Microsoft".to_string()));
@@ -318,9 +389,8 @@ mod tests {
 
     #[test]
     fn test_split_sentences() {
-        let sentences = RuleBasedExtractor::split_sentences(
-            "First sentence. Second sentence! Third sentence?"
-        );
+        let sentences =
+            RuleBasedExtractor::split_sentences("First sentence. Second sentence! Third sentence?");
 
         assert_eq!(sentences.len(), 3);
         assert!(sentences[0].1.contains("First"));

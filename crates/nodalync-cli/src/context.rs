@@ -89,8 +89,10 @@ impl NodeContext {
         };
 
         // Create settlement
-        let settlement: Arc<dyn Settlement> =
-            Arc::new(MockSettlement::with_balance(AccountId::simple(1), 1_000_000_000));
+        let settlement: Arc<dyn Settlement> = Arc::new(MockSettlement::with_balance(
+            AccountId::simple(1),
+            1_000_000_000,
+        ));
 
         // Create operations with optional network
         let ops = if let Some(ref net) = network {
@@ -172,8 +174,8 @@ pub fn parse_hash(hash_str: &str) -> CliResult<nodalync_crypto::Hash> {
         if i >= 32 {
             return Err(CliError::InvalidHash(hash_str.to_string()));
         }
-        let hex_str = std::str::from_utf8(chunk)
-            .map_err(|_| CliError::InvalidHash(hash_str.to_string()))?;
+        let hex_str =
+            std::str::from_utf8(chunk).map_err(|_| CliError::InvalidHash(hash_str.to_string()))?;
         bytes[i] = u8::from_str_radix(hex_str, 16)
             .map_err(|_| CliError::InvalidHash(hash_str.to_string()))?;
     }

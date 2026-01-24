@@ -348,7 +348,10 @@ mod tests {
         );
 
         let err = NodalyncError::protocol(ErrorCode::NotFound, "content not found");
-        assert_eq!(format!("{}", err), "protocol error NOT_FOUND: content not found");
+        assert_eq!(
+            format!("{}", err),
+            "protocol error NOT_FOUND: content not found"
+        );
     }
 
     #[test]

@@ -9,7 +9,10 @@ fn same_content_produces_identical_hash() {
     let content = b"Hello, Nodalync!";
     let hash1 = content_hash(content);
     let hash2 = content_hash(content);
-    assert_eq!(hash1.0, hash2.0, "Same content should produce identical hash");
+    assert_eq!(
+        hash1.0, hash2.0,
+        "Same content should produce identical hash"
+    );
 }
 
 /// §3.1 Test: Different content produces different hash
@@ -19,7 +22,10 @@ fn different_content_produces_different_hash() {
     let content2 = b"Hello, Nodalync?";
     let hash1 = content_hash(content1);
     let hash2 = content_hash(content2);
-    assert_ne!(hash1.0, hash2.0, "Different content should produce different hash");
+    assert_ne!(
+        hash1.0, hash2.0,
+        "Different content should produce different hash"
+    );
 }
 
 /// §3.1 Test: Domain separation - ContentHash(x) != H(x)
@@ -94,7 +100,10 @@ fn length_prefix_affects_hash() {
     let hash1 = content_hash(content1);
     let hash2 = content_hash(content2);
 
-    assert_ne!(hash1.0, hash2.0, "Different length content should have different hashes");
+    assert_ne!(
+        hash1.0, hash2.0,
+        "Different length content should have different hashes"
+    );
 }
 
 /// Test Hash debug display

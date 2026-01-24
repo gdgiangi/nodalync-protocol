@@ -190,22 +190,24 @@ pub fn decode_message(bytes: &[u8]) -> Result<Message, DecodeError> {
     }
 
     // Message type (big-endian)
-    let type_bytes: [u8; 2] = bytes[cursor..cursor + 2]
-        .try_into()
-        .map_err(|_| DecodeError::TruncatedMessage {
-            expected: cursor + 2,
-            got: bytes.len(),
-        })?;
+    let type_bytes: [u8; 2] =
+        bytes[cursor..cursor + 2]
+            .try_into()
+            .map_err(|_| DecodeError::TruncatedMessage {
+                expected: cursor + 2,
+                got: bytes.len(),
+            })?;
     cursor += 2;
     let message_type = MessageType::from_u16(u16::from_be_bytes(type_bytes))?;
 
     // Payload length (big-endian)
-    let len_bytes: [u8; 4] = bytes[cursor..cursor + 4]
-        .try_into()
-        .map_err(|_| DecodeError::TruncatedMessage {
-            expected: cursor + 4,
-            got: bytes.len(),
-        })?;
+    let len_bytes: [u8; 4] =
+        bytes[cursor..cursor + 4]
+            .try_into()
+            .map_err(|_| DecodeError::TruncatedMessage {
+                expected: cursor + 4,
+                got: bytes.len(),
+            })?;
     cursor += 4;
     let payload_len = u32::from_be_bytes(len_bytes) as usize;
 
@@ -223,12 +225,13 @@ pub fn decode_message(bytes: &[u8]) -> Result<Message, DecodeError> {
     cursor += payload_len;
 
     // Signature
-    let sig_bytes: [u8; 64] = bytes[cursor..cursor + 64]
-        .try_into()
-        .map_err(|_| DecodeError::TruncatedMessage {
-            expected: cursor + 64,
-            got: bytes.len(),
-        })?;
+    let sig_bytes: [u8; 64] =
+        bytes[cursor..cursor + 64]
+            .try_into()
+            .map_err(|_| DecodeError::TruncatedMessage {
+                expected: cursor + 64,
+                got: bytes.len(),
+            })?;
     let signature = Signature::from_bytes(sig_bytes);
 
     // Decode the message ID and other fields from payload
@@ -341,11 +344,7 @@ pub fn validate_message_format(msg: &Message, current_time: Timestamp) -> Result
 
     // Check timestamp is within ±5 minutes (300,000 ms)
     let max_skew = nodalync_types::constants::MAX_CLOCK_SKEW_MS;
-    let time_diff = if msg.timestamp > current_time {
-        msg.timestamp - current_time
-    } else {
-        current_time - msg.timestamp
-    };
+    let time_diff = msg.timestamp.abs_diff(current_time);
     if time_diff > max_skew {
         return Err(FormatError::TimestampOutOfRange(msg.timestamp));
     }
@@ -367,10 +366,7 @@ pub fn validate_message_format(msg: &Message, current_time: Timestamp) -> Result
 /// Verify message signature.
 ///
 /// Returns true if the signature is valid for the given public key.
-pub fn verify_message_signature(
-    msg: &Message,
-    public_key: &nodalync_crypto::PublicKey,
-) -> bool {
+pub fn verify_message_signature(msg: &Message, public_key: &nodalync_crypto::PublicKey) -> bool {
     let hash = message_hash(msg);
     nodalync_crypto::verify(public_key, hash.as_ref(), &msg.signature)
 }
@@ -378,7 +374,9 @@ pub fn verify_message_signature(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nodalync_crypto::{content_hash as crypto_hash, generate_identity, peer_id_from_public_key};
+    use nodalync_crypto::{
+        content_hash as crypto_hash, generate_identity, peer_id_from_public_key,
+    };
 
     fn test_keypair() -> (PrivateKey, nodalync_crypto::PublicKey, PeerId) {
         let (private_key, public_key) = generate_identity();
@@ -539,13 +537,7 @@ mod tests {
         let current_time = 1234567890000u64;
         let msg_time = current_time + 600_000; // 10 minutes in future
 
-        let msg = create_message(
-            MessageType::Ping,
-            vec![],
-            peer_id,
-            msg_time,
-            &private_key,
-        );
+        let msg = create_message(MessageType::Ping, vec![], peer_id, msg_time, &private_key);
 
         let result = validate_message_format(&msg, current_time);
         assert!(matches!(result, Err(FormatError::TimestampOutOfRange(_))));

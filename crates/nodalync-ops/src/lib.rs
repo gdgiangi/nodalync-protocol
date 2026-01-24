@@ -192,7 +192,9 @@ mod tests {
         assert_eq!(preview.manifest.hash, hash1);
 
         // Publish
-        ops.publish_content(&hash1, Visibility::Shared, 100).await.unwrap();
+        ops.publish_content(&hash1, Visibility::Shared, 100)
+            .await
+            .unwrap();
 
         // Query
         let response = ops.query_content(&hash1, 100, None).await.unwrap();
@@ -201,7 +203,9 @@ mod tests {
         // Update
         let new_content = b"Updated content";
         let new_metadata = Metadata::new("Test Doc v2", new_content.len() as u64);
-        let _hash2 = ops.update_content(&hash1, new_content, new_metadata).unwrap();
+        let _hash2 = ops
+            .update_content(&hash1, new_content, new_metadata)
+            .unwrap();
 
         // Verify versions
         let versions = ops.get_content_versions(&hash1).unwrap();
@@ -243,7 +247,10 @@ mod tests {
         let peer = peer_id_from_public_key(&pk);
 
         // Open channel
-        let channel = ops.open_payment_channel(&peer, 100_0000_0000).await.unwrap();
+        let channel = ops
+            .open_payment_channel(&peer, 100_0000_0000)
+            .await
+            .unwrap();
         assert!(!channel.is_open()); // Opening state
 
         // Accept another channel
@@ -270,13 +277,18 @@ mod tests {
         // Set a recent last_settlement_time so the interval-based trigger doesn't fire
         // (otherwise, settlement is triggered immediately because last_settlement=0)
         let recent_time = current_timestamp();
-        ops.state.settlement.set_last_settlement_time(recent_time).unwrap();
+        ops.state
+            .settlement
+            .set_last_settlement_time(recent_time)
+            .unwrap();
 
         // Create and publish content
         let content = b"Paid content";
         let meta = Metadata::new("Paid", content.len() as u64);
         let hash = ops.create_content(content, meta).unwrap();
-        ops.publish_content(&hash, Visibility::Shared, 100).await.unwrap();
+        ops.publish_content(&hash, Visibility::Shared, 100)
+            .await
+            .unwrap();
 
         // Handle query (this enqueues distributions)
         let (_, pk) = generate_identity();
@@ -298,7 +310,9 @@ mod tests {
             payment,
             version_spec: None,
         };
-        ops.handle_query_request(&requester, &request).await.unwrap();
+        ops.handle_query_request(&requester, &request)
+            .await
+            .unwrap();
 
         // Verify pending amount
         let pending = ops.get_pending_settlement_total().unwrap();

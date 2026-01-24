@@ -10,7 +10,10 @@ fn same_public_key_produces_same_peer_id() {
     let (_, public_key) = generate_identity();
     let peer_id1 = peer_id_from_public_key(&public_key);
     let peer_id2 = peer_id_from_public_key(&public_key);
-    assert_eq!(peer_id1.0, peer_id2.0, "Same public key should produce same PeerId");
+    assert_eq!(
+        peer_id1.0, peer_id2.0,
+        "Same public key should produce same PeerId"
+    );
 }
 
 /// §3.2 Test: Different public keys produce different PeerIds
@@ -111,7 +114,10 @@ fn empty_string_rejected() {
 #[test]
 fn just_prefix_rejected() {
     let result = peer_id_from_string("ndl1");
-    assert!(result.is_err(), "Just prefix without data should be rejected");
+    assert!(
+        result.is_err(),
+        "Just prefix without data should be rejected"
+    );
 }
 
 /// Test PeerId debug display

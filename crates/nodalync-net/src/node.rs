@@ -18,14 +18,14 @@ use libp2p::{
     gossipsub::IdentTopic,
     kad::{self, QueryResult, RecordKey},
     request_response::{self, OutboundRequestId, ResponseChannel},
-    swarm::{SwarmEvent, dial_opts::DialOpts},
+    swarm::{dial_opts::DialOpts, SwarmEvent},
     Multiaddr, PeerId, Swarm,
 };
 use nodalync_crypto::{
     generate_identity, peer_id_from_public_key, Hash, PeerId as NodalyncPeerId, PrivateKey,
 };
 use nodalync_wire::{
-    encode_message, encode_payload, decode_message, decode_payload, create_message,
+    create_message, decode_message, decode_payload, encode_message, encode_payload,
     AnnouncePayload, ChannelClosePayload, ChannelOpenPayload, Message, MessageType,
     PreviewRequestPayload, PreviewResponsePayload, QueryRequestPayload, QueryResponsePayload,
     SettleConfirmPayload,
@@ -100,10 +100,7 @@ enum SwarmCommand {
     },
 
     /// Add an address for a peer to the DHT routing table.
-    AddAddress {
-        peer: PeerId,
-        addr: Multiaddr,
-    },
+    AddAddress { peer: PeerId, addr: Multiaddr },
 
     /// Bootstrap the DHT.
     Bootstrap {
@@ -116,6 +113,9 @@ enum SwarmCommand {
         data: Vec<u8>,
     },
 }
+
+/// Type alias for pending request map to reduce type complexity.
+type PendingRequests = Arc<RwLock<HashMap<OutboundRequestId, oneshot::Sender<NetworkResult<Vec<u8>>>>>>;
 
 /// A P2P network node.
 ///
@@ -142,7 +142,7 @@ pub struct NetworkNode {
 
     /// Pending request-response operations (used by the swarm task, not read from struct).
     #[allow(dead_code)]
-    pending_requests: Arc<RwLock<HashMap<OutboundRequestId, oneshot::Sender<NetworkResult<Vec<u8>>>>>>,
+    pending_requests: PendingRequests,
 
     /// Network configuration.
     config: NetworkConfig,
@@ -190,8 +190,7 @@ impl NetworkNode {
         let (event_tx, event_rx) = mpsc::channel(256);
 
         // Create pending requests map
-        let pending_requests: Arc<RwLock<HashMap<OutboundRequestId, oneshot::Sender<NetworkResult<Vec<u8>>>>>> =
-            Arc::new(RwLock::new(HashMap::new()));
+        let pending_requests: PendingRequests = Arc::new(RwLock::new(HashMap::new()));
 
         // Create peer mapper
         let peer_mapper = PeerIdMapper::new();
@@ -265,8 +264,7 @@ impl NetworkNode {
         let (event_tx, event_rx) = mpsc::channel(256);
 
         // Create pending requests map
-        let pending_requests: Arc<RwLock<HashMap<OutboundRequestId, oneshot::Sender<NetworkResult<Vec<u8>>>>>> =
-            Arc::new(RwLock::new(HashMap::new()));
+        let pending_requests: PendingRequests = Arc::new(RwLock::new(HashMap::new()));
 
         // Create peer mapper
         let peer_mapper = PeerIdMapper::new();
@@ -600,7 +598,7 @@ async fn run_swarm(
     mut swarm: Swarm<NodalyncBehaviour>,
     mut command_rx: mpsc::Receiver<SwarmCommand>,
     event_tx: mpsc::Sender<NetworkEvent>,
-    pending_requests: Arc<RwLock<HashMap<OutboundRequestId, oneshot::Sender<NetworkResult<Vec<u8>>>>>>,
+    pending_requests: PendingRequests,
     peer_mapper: PeerIdMapper,
     gossip_topic: String,
 ) {
@@ -613,8 +611,10 @@ async fn run_swarm(
     // Pending DHT operations
     let mut pending_dht_puts: HashMap<kad::QueryId, oneshot::Sender<NetworkResult<()>>> =
         HashMap::new();
-    let mut pending_dht_gets: HashMap<kad::QueryId, oneshot::Sender<NetworkResult<Option<Vec<u8>>>>> =
-        HashMap::new();
+    let mut pending_dht_gets: HashMap<
+        kad::QueryId,
+        oneshot::Sender<NetworkResult<Option<Vec<u8>>>>,
+    > = HashMap::new();
 
     // Pending inbound request response channels
     let mut pending_responses: HashMap<
@@ -784,67 +784,78 @@ fn handle_kademlia_event(
     pending_puts: &mut HashMap<kad::QueryId, oneshot::Sender<NetworkResult<()>>>,
     pending_gets: &mut HashMap<kad::QueryId, oneshot::Sender<NetworkResult<Option<Vec<u8>>>>>,
 ) {
-    match event {
-        kad::Event::OutboundQueryProgressed { id, result, .. } => {
-            match result {
-                QueryResult::PutRecord(Ok(_)) => {
-                    if let Some(tx) = pending_puts.remove(&id) {
-                        let _ = tx.send(Ok(()));
-                    }
+    if let kad::Event::OutboundQueryProgressed { id, result, .. } = event {
+        match result {
+            QueryResult::PutRecord(Ok(_)) => {
+                if let Some(tx) = pending_puts.remove(&id) {
+                    let _ = tx.send(Ok(()));
                 }
-                QueryResult::PutRecord(Err(e)) => {
-                    if let Some(tx) = pending_puts.remove(&id) {
-                        let _ = tx.send(Err(NetworkError::DhtError(format!("{:?}", e))));
-                    }
+            }
+            QueryResult::PutRecord(Err(e)) => {
+                if let Some(tx) = pending_puts.remove(&id) {
+                    let _ = tx.send(Err(NetworkError::DhtError(format!("{:?}", e))));
                 }
-                QueryResult::GetRecord(Ok(kad::GetRecordOk::FoundRecord(peer_record))) => {
-                    if let Some(tx) = pending_gets.remove(&id) {
-                        let _ = tx.send(Ok(Some(peer_record.record.value)));
-                    }
+            }
+            QueryResult::GetRecord(Ok(kad::GetRecordOk::FoundRecord(peer_record))) => {
+                if let Some(tx) = pending_gets.remove(&id) {
+                    let _ = tx.send(Ok(Some(peer_record.record.value)));
                 }
-                QueryResult::GetRecord(Ok(kad::GetRecordOk::FinishedWithNoAdditionalRecord { .. })) => {
-                    // Query finished but might have already sent a result
-                }
-                QueryResult::GetRecord(Err(e)) => {
-                    if let Some(tx) = pending_gets.remove(&id) {
-                        match e {
-                            kad::GetRecordError::NotFound { .. } => {
-                                let _ = tx.send(Ok(None));
-                            }
-                            _ => {
-                                let _ = tx.send(Err(NetworkError::DhtError(format!("{:?}", e))));
-                            }
+            }
+            QueryResult::GetRecord(Ok(kad::GetRecordOk::FinishedWithNoAdditionalRecord {
+                ..
+            })) => {
+                // Query finished but might have already sent a result
+            }
+            QueryResult::GetRecord(Err(e)) => {
+                if let Some(tx) = pending_gets.remove(&id) {
+                    match e {
+                        kad::GetRecordError::NotFound { .. } => {
+                            let _ = tx.send(Ok(None));
+                        }
+                        _ => {
+                            let _ = tx.send(Err(NetworkError::DhtError(format!("{:?}", e))));
                         }
                     }
                 }
-                _ => {}
             }
+            _ => {}
         }
-        _ => {}
     }
 }
 
 /// Handle request-response events.
 async fn handle_request_response_event(
     event: request_response::Event<NodalyncRequest, NodalyncResponse>,
-    pending_requests: &Arc<RwLock<HashMap<OutboundRequestId, oneshot::Sender<NetworkResult<Vec<u8>>>>>>,
-    pending_responses: &mut HashMap<libp2p::request_response::InboundRequestId, ResponseChannel<NodalyncResponse>>,
+    pending_requests: &PendingRequests,
+    pending_responses: &mut HashMap<
+        libp2p::request_response::InboundRequestId,
+        ResponseChannel<NodalyncResponse>,
+    >,
     event_tx: &mpsc::Sender<NetworkEvent>,
 ) {
     match event {
         request_response::Event::Message { peer, message } => {
             match message {
-                request_response::Message::Request { request_id, request, channel } => {
+                request_response::Message::Request {
+                    request_id,
+                    request,
+                    channel,
+                } => {
                     // Store the response channel
                     pending_responses.insert(request_id, channel);
                     // Forward inbound request as event
-                    let _ = event_tx.send(NetworkEvent::InboundRequest {
-                        peer,
-                        request_id,
-                        data: request.0,
-                    }).await;
+                    let _ = event_tx
+                        .send(NetworkEvent::InboundRequest {
+                            peer,
+                            request_id,
+                            data: request.0,
+                        })
+                        .await;
                 }
-                request_response::Message::Response { request_id, response } => {
+                request_response::Message::Response {
+                    request_id,
+                    response,
+                } => {
                     // Complete pending request
                     if let Some(tx) = pending_requests.write().await.remove(&request_id) {
                         let _ = tx.send(Ok(response.0));
@@ -852,7 +863,9 @@ async fn handle_request_response_event(
                 }
             }
         }
-        request_response::Event::OutboundFailure { request_id, error, .. } => {
+        request_response::Event::OutboundFailure {
+            request_id, error, ..
+        } => {
             if let Some(tx) = pending_requests.write().await.remove(&request_id) {
                 let _ = tx.send(Err(NetworkError::ConnectionFailed(error.to_string())));
             }
@@ -870,10 +883,12 @@ async fn handle_gossipsub_event(
     event_tx: &mpsc::Sender<NetworkEvent>,
 ) {
     if let libp2p::gossipsub::Event::Message { message, .. } = event {
-        let _ = event_tx.send(NetworkEvent::BroadcastReceived {
-            topic: message.topic.to_string(),
-            data: message.data,
-        }).await;
+        let _ = event_tx
+            .send(NetworkEvent::BroadcastReceived {
+                topic: message.topic.to_string(),
+                data: message.data,
+            })
+            .await;
     }
 }
 

@@ -271,10 +271,7 @@ mod tests {
     fn test_transaction_id() {
         let tx_id = TransactionId::new("0.0.12345@1234567890.123456789");
         assert_eq!(tx_id.as_str(), "0.0.12345@1234567890.123456789");
-        assert_eq!(
-            tx_id.to_string(),
-            "0.0.12345@1234567890.123456789"
-        );
+        assert_eq!(tx_id.to_string(), "0.0.12345@1234567890.123456789");
     }
 
     #[test]

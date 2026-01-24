@@ -341,8 +341,14 @@ mod tests {
 
     #[test]
     fn test_message_type_from_u16() {
-        assert_eq!(MessageType::from_u16(0x0100).unwrap(), MessageType::Announce);
-        assert_eq!(MessageType::from_u16(0x0300).unwrap(), MessageType::QueryRequest);
+        assert_eq!(
+            MessageType::from_u16(0x0100).unwrap(),
+            MessageType::Announce
+        );
+        assert_eq!(
+            MessageType::from_u16(0x0300).unwrap(),
+            MessageType::QueryRequest
+        );
         assert_eq!(MessageType::from_u16(0x0700).unwrap(), MessageType::Ping);
 
         assert!(MessageType::from_u16(0x9999).is_err());

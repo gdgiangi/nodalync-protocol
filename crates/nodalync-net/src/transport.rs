@@ -5,11 +5,7 @@
 //! - Noise (XX handshake) for encryption
 //! - Yamux for multiplexing
 
-use libp2p::{
-    core::upgrade,
-    identity::Keypair,
-    noise, tcp, yamux, PeerId, Transport,
-};
+use libp2p::{core::upgrade, identity::Keypair, noise, tcp, yamux, PeerId, Transport};
 use std::time::Duration;
 
 /// Build the libp2p transport stack.

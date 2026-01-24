@@ -7,8 +7,7 @@
 
 use nodalync_crypto::content_hash;
 use nodalync_types::{
-    Manifest, MAX_CONTENT_SIZE, MAX_DESCRIPTION_LENGTH, MAX_TAGS, MAX_TAG_LENGTH,
-    MAX_TITLE_LENGTH,
+    Manifest, MAX_CONTENT_SIZE, MAX_DESCRIPTION_LENGTH, MAX_TAGS, MAX_TAG_LENGTH, MAX_TITLE_LENGTH,
 };
 
 use crate::error::{ValidationError, ValidationResult};

@@ -112,11 +112,17 @@ fn test_spec_example_bob_alice_carol() {
     assert_eq!(carol_amount, 19, "Carol should receive 19 NDL");
 
     // Bob: 2 * 19 + 5 = 43
-    assert_eq!(bob_amount, 43, "Bob should receive 43 NDL (38 roots + 5 synthesis)");
+    assert_eq!(
+        bob_amount, 43,
+        "Bob should receive 43 NDL (38 roots + 5 synthesis)"
+    );
 
     // Verify total equals payment
     let total = alice_amount + carol_amount + bob_amount;
-    assert_eq!(total, payment_amount, "Total distributions must equal payment");
+    assert_eq!(
+        total, payment_amount,
+        "Total distributions must equal payment"
+    );
 }
 
 /// §10.1 Verify synthesis fee calculation
@@ -285,7 +291,10 @@ fn test_rounding_remainder_to_owner() {
         .unwrap_or(0);
 
     // Owner gets: 5 (synthesis) + 2 (remainder) = 7
-    assert_eq!(owner_amount, 7, "Owner should receive synthesis fee + remainder");
+    assert_eq!(
+        owner_amount, 7,
+        "Owner should receive synthesis fee + remainder"
+    );
 
     // Each root gets 31
     for root in [root1, root2, root3] {
@@ -309,8 +318,10 @@ fn test_owner_is_root_contributor() {
     let other = test_peer_id();
 
     // Owner has weight 1, other has weight 1
-    let owner_entry = ProvenanceEntry::with_weight(test_hash(b"owner"), owner, Visibility::Shared, 1);
-    let other_entry = ProvenanceEntry::with_weight(test_hash(b"other"), other, Visibility::Shared, 1);
+    let owner_entry =
+        ProvenanceEntry::with_weight(test_hash(b"owner"), owner, Visibility::Shared, 1);
+    let other_entry =
+        ProvenanceEntry::with_weight(test_hash(b"other"), other, Visibility::Shared, 1);
 
     let distributions = distribute_revenue(100, &owner, &[owner_entry, other_entry]);
 

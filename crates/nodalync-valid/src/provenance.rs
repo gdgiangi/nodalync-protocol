@@ -256,7 +256,10 @@ mod tests {
     fn test_l0_has_derived_from() {
         let mut manifest = create_l0_manifest(b"L0 content");
         // Add derived_from (invalid for L0)
-        manifest.provenance.derived_from.push(content_hash(b"source"));
+        manifest
+            .provenance
+            .derived_from
+            .push(content_hash(b"source"));
 
         let result = validate_provenance(&manifest, &[]);
         assert!(matches!(result, Err(ValidationError::L0HasDerivedFrom)));
@@ -288,8 +291,18 @@ mod tests {
         let mut l3_manifest = Manifest::new_l0(l3_hash, owner, metadata, 2000);
         l3_manifest.content_type = ContentType::L3;
         l3_manifest.provenance = Provenance::from_sources(&[
-            (source1.hash, &source1.provenance, source1.owner, Visibility::Shared),
-            (source2.hash, &source2.provenance, source2.owner, Visibility::Shared),
+            (
+                source1.hash,
+                &source1.provenance,
+                source1.owner,
+                Visibility::Shared,
+            ),
+            (
+                source2.hash,
+                &source2.provenance,
+                source2.owner,
+                Visibility::Shared,
+            ),
         ]);
 
         assert!(validate_provenance(&l3_manifest, &[source1, source2]).is_ok());

@@ -67,7 +67,7 @@ impl ProvenanceEntry {
 /// - For L3: `root_L0L1.len() >= 1`, `derived_from.len() >= 1`
 /// - All hashes in `derived_from` must have been queried by creator
 /// - No self-reference allowed (except for L0's root_L0L1)
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct Provenance {
     /// All foundational L0+L1 sources
@@ -206,16 +206,6 @@ impl Provenance {
     }
 }
 
-impl Default for Provenance {
-    fn default() -> Self {
-        Self {
-            root_l0l1: Vec::new(),
-            derived_from: Vec::new(),
-            depth: 0,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,11 +282,8 @@ mod tests {
         let entry1 = ProvenanceEntry::new(source1_hash, owner1, Visibility::Shared);
         let entry2 = ProvenanceEntry::new(source2_hash, owner2, Visibility::Shared);
 
-        let provenance = Provenance::new_derived(
-            vec![entry1, entry2],
-            vec![source1_hash, source2_hash],
-            1,
-        );
+        let provenance =
+            Provenance::new_derived(vec![entry1, entry2], vec![source1_hash, source2_hash], 1);
 
         assert!(!provenance.is_l0());
         assert!(provenance.is_derived());
@@ -347,11 +334,7 @@ mod tests {
         let entry1 = ProvenanceEntry::with_weight(hash1, owner, Visibility::Shared, 2);
         let entry2 = ProvenanceEntry::with_weight(hash2, owner, Visibility::Shared, 3);
 
-        let provenance = Provenance::new_derived(
-            vec![entry1, entry2],
-            vec![hash1, hash2],
-            1,
-        );
+        let provenance = Provenance::new_derived(vec![entry1, entry2], vec![hash1, hash2], 1);
 
         assert_eq!(provenance.total_weight(), 5);
     }
@@ -368,11 +351,8 @@ mod tests {
         let entry2 = ProvenanceEntry::new(hash2, owner1, Visibility::Shared); // Same owner
         let entry3 = ProvenanceEntry::new(hash3, owner2, Visibility::Shared);
 
-        let provenance = Provenance::new_derived(
-            vec![entry1, entry2, entry3],
-            vec![hash1, hash2, hash3],
-            1,
-        );
+        let provenance =
+            Provenance::new_derived(vec![entry1, entry2, entry3], vec![hash1, hash2, hash3], 1);
 
         let owners = provenance.unique_owners();
         assert_eq!(owners.len(), 2); // Deduplicated

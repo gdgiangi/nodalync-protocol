@@ -192,11 +192,7 @@ mod tests {
         channel
     }
 
-    fn create_test_payment(
-        manifest: &Manifest,
-        channel: &Channel,
-        amount: u64,
-    ) -> (Payment, u64) {
+    fn create_test_payment(manifest: &Manifest, channel: &Channel, amount: u64) -> (Payment, u64) {
         let payment_id = content_hash(b"payment");
         let provenance = manifest.provenance.root_l0l1.clone();
         let nonce = channel.nonce + 1;
@@ -259,7 +255,10 @@ mod tests {
         payment.recipient = test_peer_id(); // Wrong recipient
 
         let result = validate_payment_basic(&payment, &channel, &manifest, nonce);
-        assert!(matches!(result, Err(ValidationError::WrongRecipient { .. })));
+        assert!(matches!(
+            result,
+            Err(ValidationError::WrongRecipient { .. })
+        ));
     }
 
     #[test]
@@ -281,7 +280,10 @@ mod tests {
         let (payment, nonce) = create_test_payment(&manifest, &channel, 100);
 
         let result = validate_payment_basic(&payment, &channel, &manifest, nonce);
-        assert!(matches!(result, Err(ValidationError::ChannelNotOpen { .. })));
+        assert!(matches!(
+            result,
+            Err(ValidationError::ChannelNotOpen { .. })
+        ));
     }
 
     #[test]

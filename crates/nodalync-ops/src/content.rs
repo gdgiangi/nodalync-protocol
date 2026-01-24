@@ -27,11 +27,7 @@ where
     /// 5. Creates Manifest
     /// 6. Validates content
     /// 7. Stores content and manifest
-    pub fn create_content(
-        &mut self,
-        content: &[u8],
-        metadata: Metadata,
-    ) -> OpsResult<Hash> {
+    pub fn create_content(&mut self, content: &[u8], metadata: Metadata) -> OpsResult<Hash> {
         let timestamp = current_timestamp();
         self.create_content_with_timestamp(content, metadata, timestamp)
     }
@@ -152,8 +148,10 @@ where
         };
 
         // Validate
-        self.validator.validate_content(new_content, &new_manifest)?;
-        self.validator.validate_version(&new_manifest, Some(&old_manifest))?;
+        self.validator
+            .validate_content(new_content, &new_manifest)?;
+        self.validator
+            .validate_version(&new_manifest, Some(&old_manifest))?;
 
         // Store
         self.state.content.store_verified(&new_hash, new_content)?;
@@ -194,7 +192,9 @@ where
         timestamp: Timestamp,
     ) -> OpsResult<Hash> {
         if sources.is_empty() {
-            return Err(OpsError::invalid_operation("derive requires at least one source"));
+            return Err(OpsError::invalid_operation(
+                "derive requires at least one source",
+            ));
         }
 
         // 1. Verify all sources were queried (in cache or owned)
@@ -229,9 +229,10 @@ where
             } else if let Some(_cached) = self.state.cache.get(source_hash)? {
                 // For cached content, we'd need to reconstruct the manifest
                 // For MVP, we require sources to have known manifests
-                return Err(OpsError::invalid_operation(
-                    format!("cached content {} does not have local manifest", source_hash)
-                ));
+                return Err(OpsError::invalid_operation(format!(
+                    "cached content {} does not have local manifest",
+                    source_hash
+                )));
             }
         }
 
@@ -266,7 +267,8 @@ where
 
         // 6. Validate provenance
         let source_manifests: Vec<Manifest> = source_data.iter().map(|(_, m)| m.clone()).collect();
-        self.validator.validate_provenance(&manifest, &source_manifests)?;
+        self.validator
+            .validate_provenance(&manifest, &source_manifests)?;
         self.validator.validate_content(insight, &manifest)?;
 
         // 7. Store
@@ -304,7 +306,7 @@ where
                 (cached_content.content, m)
             } else {
                 return Err(OpsError::invalid_operation(
-                    "cached L3 must have local manifest for reference"
+                    "cached L3 must have local manifest for reference",
                 ));
             }
         } else if let Some(m) = owned_manifest {

@@ -68,7 +68,11 @@ impl SettlementEntry {
     }
 
     /// Create an entry from multiple distributions.
-    pub fn from_distributions(recipient: PeerId, distributions: Vec<Distribution>, payment_ids: Vec<Hash>) -> Self {
+    pub fn from_distributions(
+        recipient: PeerId,
+        distributions: Vec<Distribution>,
+        payment_ids: Vec<Hash>,
+    ) -> Self {
         let amount = distributions.iter().map(|d| d.amount).sum();
         let provenance_hashes = distributions.iter().map(|d| d.source_hash).collect();
 
@@ -204,12 +208,7 @@ mod tests {
         let hash2 = test_hash(b"prov2");
         let payment_id = test_hash(b"payment");
 
-        let entry = SettlementEntry::new(
-            recipient,
-            500,
-            vec![hash1, hash2],
-            vec![payment_id],
-        );
+        let entry = SettlementEntry::new(recipient, 500, vec![hash1, hash2], vec![payment_id]);
 
         assert_eq!(entry.recipient, recipient);
         assert_eq!(entry.amount, 500);
@@ -224,11 +223,8 @@ mod tests {
         let dist2 = Distribution::new(recipient, 200, test_hash(b"src2"));
         let payment_id = test_hash(b"payment");
 
-        let entry = SettlementEntry::from_distributions(
-            recipient,
-            vec![dist1, dist2],
-            vec![payment_id],
-        );
+        let entry =
+            SettlementEntry::from_distributions(recipient, vec![dist1, dist2], vec![payment_id]);
 
         assert_eq!(entry.amount, 300);
         assert_eq!(entry.source_count(), 2);
@@ -336,11 +332,8 @@ mod tests {
         assert!(empty_batch.is_empty());
 
         let entry = SettlementEntry::new(test_peer_id(), 100, vec![], vec![]);
-        let non_empty = SettlementBatch::new(
-            test_hash(b"batch"),
-            vec![entry],
-            test_hash(b"merkle"),
-        );
+        let non_empty =
+            SettlementBatch::new(test_hash(b"batch"), vec![entry], test_hash(b"merkle"));
         assert!(!non_empty.is_empty());
     }
 
@@ -352,12 +345,7 @@ mod tests {
             vec![],
             vec![test_hash(b"p1"), test_hash(b"p2")],
         );
-        let entry2 = SettlementEntry::new(
-            test_peer_id(),
-            500,
-            vec![],
-            vec![test_hash(b"p3")],
-        );
+        let entry2 = SettlementEntry::new(test_peer_id(), 500, vec![], vec![test_hash(b"p3")]);
 
         let batch = SettlementBatch::new(
             test_hash(b"batch"),
@@ -381,11 +369,7 @@ mod tests {
     #[test]
     fn test_settlement_batch_serialization() {
         let entry = SettlementEntry::new(test_peer_id(), 1000, vec![], vec![]);
-        let batch = SettlementBatch::new(
-            test_hash(b"batch"),
-            vec![entry],
-            test_hash(b"merkle"),
-        );
+        let batch = SettlementBatch::new(test_hash(b"batch"), vec![entry], test_hash(b"merkle"));
 
         let json = serde_json::to_string(&batch).unwrap();
         let deserialized: SettlementBatch = serde_json::from_str(&json).unwrap();

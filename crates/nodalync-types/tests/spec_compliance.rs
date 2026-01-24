@@ -41,7 +41,11 @@ fn spec_4_2_visibility_values() {
 
 #[test]
 fn spec_4_2_visibility_serialization_roundtrip() {
-    for v in [Visibility::Private, Visibility::Unlisted, Visibility::Shared] {
+    for v in [
+        Visibility::Private,
+        Visibility::Unlisted,
+        Visibility::Shared,
+    ] {
         let json = serde_json::to_string(&v).unwrap();
         let deserialized: Visibility = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, v);
@@ -197,11 +201,8 @@ fn spec_4_5_provenance_l3_constraints() {
     let entry1 = ProvenanceEntry::new(source1_hash, owner1, Visibility::Shared);
     let entry2 = ProvenanceEntry::new(source2_hash, owner2, Visibility::Shared);
 
-    let provenance = Provenance::new_derived(
-        vec![entry1, entry2],
-        vec![source1_hash, source2_hash],
-        1,
-    );
+    let provenance =
+        Provenance::new_derived(vec![entry1, entry2], vec![source1_hash, source2_hash], 1);
 
     assert!(provenance.root_l0l1.len() >= 1);
     assert!(provenance.derived_from.len() >= 1);

@@ -6,13 +6,15 @@
 use nodalync_crypto::{content_hash, PeerId, Signature};
 use nodalync_econ::distribute_revenue;
 use nodalync_net::NetworkEvent;
-use nodalync_store::{ChannelStore, ContentStore, ManifestStore, SettlementQueueStore, QueuedDistribution};
+use nodalync_store::{
+    ChannelStore, ContentStore, ManifestStore, QueuedDistribution, SettlementQueueStore,
+};
 use nodalync_types::{Channel, Payment, Visibility};
 use nodalync_valid::Validator;
 use nodalync_wire::{
-    ChannelAcceptPayload, ChannelClosePayload, ChannelOpenPayload, MessageType,
-    PaymentReceipt, PreviewRequestPayload, PreviewResponsePayload, QueryRequestPayload,
-    QueryResponsePayload, VersionInfo, VersionRequestPayload, VersionResponsePayload,
+    ChannelAcceptPayload, ChannelClosePayload, ChannelOpenPayload, MessageType, PaymentReceipt,
+    PreviewRequestPayload, PreviewResponsePayload, QueryRequestPayload, QueryResponsePayload,
+    VersionInfo, VersionRequestPayload, VersionResponsePayload,
 };
 
 use crate::error::{OpsError, OpsResult};
@@ -140,13 +142,8 @@ where
         );
 
         // 6. Enqueue ALL to settlement queue
-        let payment_id = content_hash(
-            &[
-                request.hash.0.as_slice(),
-                &timestamp.to_be_bytes(),
-            ]
-            .concat(),
-        );
+        let payment_id =
+            content_hash(&[request.hash.0.as_slice(), &timestamp.to_be_bytes()].concat());
 
         for dist in &distributions {
             let queued = QueuedDistribution::new(
@@ -327,7 +324,7 @@ where
 
                 // Get the Nodalync peer ID if we have a mapping
                 let nodalync_peer = if let Some(network) = self.network() {
-                    network.nodalync_peer_id(&peer).unwrap_or_else(|| PeerId([0u8; 20]))
+                    network.nodalync_peer_id(&peer).unwrap_or(PeerId([0u8; 20]))
                 } else {
                     PeerId([0u8; 20])
                 };
@@ -411,7 +408,11 @@ mod tests {
         peer_id_from_public_key(&public_key)
     }
 
-    fn create_test_payment(amount: u64, recipient: PeerId, query_hash: nodalync_crypto::Hash) -> Payment {
+    fn create_test_payment(
+        amount: u64,
+        recipient: PeerId,
+        query_hash: nodalync_crypto::Hash,
+    ) -> Payment {
         Payment::new(
             content_hash(b"payment"),
             content_hash(b"channel"),
@@ -432,7 +433,9 @@ mod tests {
         let content = b"Test content for preview";
         let meta = Metadata::new("Preview Test", content.len() as u64);
         let hash = ops.create_content(content, meta).unwrap();
-        ops.publish_content(&hash, Visibility::Shared, 100).await.unwrap();
+        ops.publish_content(&hash, Visibility::Shared, 100)
+            .await
+            .unwrap();
 
         // Handle preview request
         let requester = test_peer_id();
@@ -470,7 +473,9 @@ mod tests {
         let content = b"Test content for query";
         let meta = Metadata::new("Query Test", content.len() as u64);
         let hash = ops.create_content(content, meta).unwrap();
-        ops.publish_content(&hash, Visibility::Shared, 100).await.unwrap();
+        ops.publish_content(&hash, Visibility::Shared, 100)
+            .await
+            .unwrap();
 
         // Handle query request
         let requester = test_peer_id();
@@ -484,7 +489,10 @@ mod tests {
             version_spec: None,
         };
 
-        let response = ops.handle_query_request(&requester, &request).await.unwrap();
+        let response = ops
+            .handle_query_request(&requester, &request)
+            .await
+            .unwrap();
 
         assert_eq!(response.hash, hash);
         assert_eq!(response.content, content.to_vec());
@@ -499,7 +507,9 @@ mod tests {
         let content = b"Paid content";
         let meta = Metadata::new("Paid", content.len() as u64);
         let hash = ops.create_content(content, meta).unwrap();
-        ops.publish_content(&hash, Visibility::Shared, 1000).await.unwrap();
+        ops.publish_content(&hash, Visibility::Shared, 1000)
+            .await
+            .unwrap();
 
         // Handle query request with insufficient payment
         let requester = test_peer_id();
@@ -532,7 +542,9 @@ mod tests {
 
         // Handle version request
         let requester = test_peer_id();
-        let request = VersionRequestPayload { version_root: hash1 };
+        let request = VersionRequestPayload {
+            version_root: hash1,
+        };
 
         let response = ops.handle_version_request(&requester, &request).unwrap();
 
@@ -587,7 +599,8 @@ mod tests {
             settlement_tx: vec![],
         };
 
-        ops.handle_channel_close(&requester, &close_request).unwrap();
+        ops.handle_channel_close(&requester, &close_request)
+            .unwrap();
 
         // Verify channel is closed
         let channel = ops.get_payment_channel(&requester).unwrap().unwrap();
@@ -601,13 +614,18 @@ mod tests {
         // Set a recent last_settlement_time so the interval-based trigger doesn't fire
         // (current time - last_settlement must be < 1 hour for settlement NOT to trigger)
         let recent_time = current_timestamp();
-        ops.state.settlement.set_last_settlement_time(recent_time).unwrap();
+        ops.state
+            .settlement
+            .set_last_settlement_time(recent_time)
+            .unwrap();
 
         // Create and publish content
         let content = b"Content for distribution test";
         let meta = Metadata::new("Dist Test", content.len() as u64);
         let hash = ops.create_content(content, meta).unwrap();
-        ops.publish_content(&hash, Visibility::Shared, 100).await.unwrap();
+        ops.publish_content(&hash, Visibility::Shared, 100)
+            .await
+            .unwrap();
 
         // Initially no pending distributions
         assert_eq!(ops.get_pending_settlement_total().unwrap(), 0);
@@ -623,7 +641,9 @@ mod tests {
             payment,
             version_spec: None,
         };
-        ops.handle_query_request(&requester, &request).await.unwrap();
+        ops.handle_query_request(&requester, &request)
+            .await
+            .unwrap();
 
         // Now we should have pending distributions
         let pending = ops.get_pending_settlement_total().unwrap();

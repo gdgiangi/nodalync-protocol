@@ -211,11 +211,9 @@ mod tests {
             ProvenanceEntry::with_weight(test_hash(b"alice"), alice, Visibility::Shared, 2);
         let entry_carol =
             ProvenanceEntry::with_weight(test_hash(b"carol"), carol, Visibility::Shared, 1);
-        let entry_bob =
-            ProvenanceEntry::with_weight(test_hash(b"bob"), bob, Visibility::Shared, 2);
+        let entry_bob = ProvenanceEntry::with_weight(test_hash(b"bob"), bob, Visibility::Shared, 2);
 
-        let distributions =
-            distribute_revenue(100, &bob, &[entry_alice, entry_carol, entry_bob]);
+        let distributions = distribute_revenue(100, &bob, &[entry_alice, entry_carol, entry_bob]);
 
         // owner_share = 100 * 5/100 = 5 NDL
         // root_pool = 95 NDL

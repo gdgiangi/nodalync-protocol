@@ -11,8 +11,8 @@ use std::sync::RwLock;
 use async_trait::async_trait;
 use hedera::{
     AccountBalanceQuery, AccountId as HederaAccountId, Client, ContractExecuteTransaction,
-    ContractFunctionParameters, ContractId, Hbar, PrivateKey, TransactionReceiptQuery,
-    TransactionId as HederaTransactionId, TransferTransaction,
+    ContractFunctionParameters, ContractId, Hbar, PrivateKey, TransactionId as HederaTransactionId,
+    TransactionReceiptQuery, TransferTransaction,
 };
 use nodalync_crypto::{Hash, PeerId, Signature, Timestamp};
 use nodalync_types::SettlementBatch;
@@ -289,11 +289,7 @@ impl Settlement for HederaSettlement {
     }
 
     async fn open_channel(&self, peer: &PeerId, deposit: u64) -> SettleResult<ChannelId> {
-        let peer_account = self
-            .account_mapper
-            .read()
-            .unwrap()
-            .require_account(peer)?;
+        let peer_account = self.account_mapper.read().unwrap().require_account(peer)?;
 
         let hedera_peer = self.to_hedera_account(&peer_account);
 
@@ -660,11 +656,8 @@ mod tests {
         let (account_id, contract_id, _key, temp_file) =
             get_test_credentials().expect("Missing testnet config");
 
-        let config = HederaConfig::testnet(
-            &account_id,
-            temp_file.path().to_path_buf(),
-            &contract_id,
-        );
+        let config =
+            HederaConfig::testnet(&account_id, temp_file.path().to_path_buf(), &contract_id);
 
         let settlement = HederaSettlement::new(config).await.unwrap();
 
@@ -679,11 +672,8 @@ mod tests {
         let (account_id, contract_id, _key, temp_file) =
             get_test_credentials().expect("Missing testnet config");
 
-        let config = HederaConfig::testnet(
-            &account_id,
-            temp_file.path().to_path_buf(),
-            &contract_id,
-        );
+        let config =
+            HederaConfig::testnet(&account_id, temp_file.path().to_path_buf(), &contract_id);
 
         let settlement = HederaSettlement::new(config).await.unwrap();
 

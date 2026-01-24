@@ -56,11 +56,7 @@ pub trait Operations: Send + Sync {
     /// - Stores content and manifest
     ///
     /// Returns the content hash.
-    async fn create(
-        &mut self,
-        content: &[u8],
-        metadata: Metadata,
-    ) -> OpsResult<Hash>;
+    async fn create(&mut self, content: &[u8], metadata: Metadata) -> OpsResult<Hash>;
 
     /// Extract L1 mentions from L0 content.
     ///
@@ -198,11 +194,7 @@ pub trait Operations: Send + Sync {
     /// - Creates Channel with state=Opening
     /// - Stores locally
     /// - (Send ChannelOpen - stub for MVP)
-    async fn open_channel(
-        &mut self,
-        peer: &PeerId,
-        deposit: Amount,
-    ) -> OpsResult<Channel>;
+    async fn open_channel(&mut self, peer: &PeerId, deposit: Amount) -> OpsResult<Channel>;
 
     /// Accept an incoming channel open request.
     ///

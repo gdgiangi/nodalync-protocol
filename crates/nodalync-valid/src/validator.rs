@@ -66,16 +66,10 @@ pub trait Validator {
 }
 
 /// Configuration for the default validator.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ValidatorConfig {
     /// Current timestamp provider
     current_time: Option<Timestamp>,
-}
-
-impl Default for ValidatorConfig {
-    fn default() -> Self {
-        Self { current_time: None }
-    }
 }
 
 impl ValidatorConfig {

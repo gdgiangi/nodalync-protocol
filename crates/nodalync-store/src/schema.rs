@@ -29,20 +29,23 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
         })
         .ok();
 
-    if current_version.is_none() {
-        // Fresh database - create all tables
-        create_tables(conn)?;
-        conn.execute(
-            "INSERT INTO schema_version (version) VALUES (?1)",
-            [SCHEMA_VERSION],
-        )?;
-    } else if current_version.unwrap() < SCHEMA_VERSION {
-        // Future: handle migrations
-        // For now, just update version
-        conn.execute(
-            "UPDATE schema_version SET version = ?1",
-            [SCHEMA_VERSION],
-        )?;
+    match current_version {
+        None => {
+            // Fresh database - create all tables
+            create_tables(conn)?;
+            conn.execute(
+                "INSERT INTO schema_version (version) VALUES (?1)",
+                [SCHEMA_VERSION],
+            )?;
+        }
+        Some(version) if version < SCHEMA_VERSION => {
+            // Future: handle migrations
+            // For now, just update version
+            conn.execute("UPDATE schema_version SET version = ?1", [SCHEMA_VERSION])?;
+        }
+        Some(_) => {
+            // Current version is up to date
+        }
     }
 
     Ok(())

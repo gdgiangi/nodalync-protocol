@@ -151,8 +151,7 @@ async fn test_bootstrap_node_config() {
     let bootstrap_peer = libp2p::PeerId::random();
     let bootstrap_addr: libp2p::Multiaddr = "/ip4/192.168.1.1/tcp/9000".parse().unwrap();
 
-    let config = NetworkConfig::new()
-        .with_bootstrap_node(bootstrap_peer, bootstrap_addr.clone());
+    let config = NetworkConfig::new().with_bootstrap_node(bootstrap_peer, bootstrap_addr.clone());
 
     assert_eq!(config.bootstrap_nodes.len(), 1);
     assert_eq!(config.bootstrap_nodes[0].0, bootstrap_peer);

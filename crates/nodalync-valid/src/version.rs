@@ -186,7 +186,8 @@ mod tests {
         let metadata = Metadata::new("Test v2", v2_content.len() as u64);
 
         let mut v2_manifest = Manifest::new_l0(v2_hash, owner, metadata, 2000);
-        v2_manifest.version = Version::new_from_previous(&v1_manifest.version, v1_manifest.hash, 2000);
+        v2_manifest.version =
+            Version::new_from_previous(&v1_manifest.version, v1_manifest.hash, 2000);
 
         assert!(validate_version(&v2_manifest, Some(&v1_manifest)).is_ok());
     }
@@ -222,7 +223,8 @@ mod tests {
         let metadata = Metadata::new("Test v2", v2_content.len() as u64);
 
         let mut v2_manifest = Manifest::new_l0(v2_hash, owner, metadata, 2000);
-        v2_manifest.version = Version::new_from_previous(&v1_manifest.version, v1_manifest.hash, 2000);
+        v2_manifest.version =
+            Version::new_from_previous(&v1_manifest.version, v1_manifest.hash, 2000);
         // Set wrong previous hash
         v2_manifest.version.previous = Some(content_hash(b"wrong"));
 
@@ -241,7 +243,8 @@ mod tests {
         let metadata = Metadata::new("Test v2", v2_content.len() as u64);
 
         let mut v2_manifest = Manifest::new_l0(v2_hash, owner, metadata, 2000);
-        v2_manifest.version = Version::new_from_previous(&v1_manifest.version, v1_manifest.hash, 2000);
+        v2_manifest.version =
+            Version::new_from_previous(&v1_manifest.version, v1_manifest.hash, 2000);
         // Set wrong root
         v2_manifest.version.root = content_hash(b"wrong root");
 
@@ -260,7 +263,8 @@ mod tests {
         let metadata = Metadata::new("Test v2", v2_content.len() as u64);
 
         let mut v2_manifest = Manifest::new_l0(v2_hash, owner, metadata, 2000);
-        v2_manifest.version = Version::new_from_previous(&v1_manifest.version, v1_manifest.hash, 2000);
+        v2_manifest.version =
+            Version::new_from_previous(&v1_manifest.version, v1_manifest.hash, 2000);
         // Set wrong version number
         v2_manifest.version.number = 5;
 
@@ -285,7 +289,8 @@ mod tests {
         let metadata = Metadata::new("Test v2", v2_content.len() as u64);
 
         let mut v2_manifest = Manifest::new_l0(v2_hash, owner, metadata, 1000);
-        v2_manifest.version = Version::new_from_previous(&v1_manifest.version, v1_manifest.hash, 1000);
+        v2_manifest.version =
+            Version::new_from_previous(&v1_manifest.version, v1_manifest.hash, 1000);
 
         let result = validate_version(&v2_manifest, Some(&v1_manifest));
         assert!(matches!(

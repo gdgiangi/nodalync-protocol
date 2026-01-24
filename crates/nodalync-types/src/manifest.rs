@@ -46,7 +46,11 @@ impl Version {
     /// Create a new version from a previous version.
     ///
     /// Inherits the root from the previous version.
-    pub fn new_from_previous(previous_version: &Version, previous_hash: Hash, timestamp: Timestamp) -> Self {
+    pub fn new_from_previous(
+        previous_version: &Version,
+        previous_hash: Hash,
+        timestamp: Timestamp,
+    ) -> Self {
         Self {
             number: previous_version.number + 1,
             previous: Some(previous_hash),
@@ -77,7 +81,7 @@ impl Version {
 /// Content metadata.
 ///
 /// Spec §4.8: Descriptive information about content.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct Metadata {
     /// Content title (max 200 chars)
@@ -90,18 +94,6 @@ pub struct Metadata {
     pub content_size: u64,
     /// MIME type if applicable
     pub mime_type: Option<String>,
-}
-
-impl Default for Metadata {
-    fn default() -> Self {
-        Self {
-            title: String::new(),
-            description: None,
-            tags: Vec::new(),
-            content_size: 0,
-            mime_type: None,
-        }
-    }
 }
 
 impl Metadata {
@@ -144,7 +136,7 @@ impl Metadata {
 /// - (allowlist is None OR peer in allowlist) AND
 /// - (denylist is None OR peer NOT in denylist) AND
 /// - (require_bond is false OR peer has posted bond)
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct AccessControl {
     /// If set, only these peers can query (None = all allowed)
@@ -157,18 +149,6 @@ pub struct AccessControl {
     pub bond_amount: Option<Amount>,
     /// Rate limit per peer (None = unlimited)
     pub max_queries_per_peer: Option<u32>,
-}
-
-impl Default for AccessControl {
-    fn default() -> Self {
-        Self {
-            allowlist: None,
-            denylist: None,
-            require_bond: false,
-            bond_amount: None,
-            max_queries_per_peer: None,
-        }
-    }
 }
 
 impl AccessControl {
@@ -309,12 +289,7 @@ impl Manifest {
     /// Create a new manifest for L0 content.
     ///
     /// This is the most common way to create a manifest for newly added content.
-    pub fn new_l0(
-        hash: Hash,
-        owner: PeerId,
-        metadata: Metadata,
-        timestamp: Timestamp,
-    ) -> Self {
+    pub fn new_l0(hash: Hash, owner: PeerId, metadata: Metadata, timestamp: Timestamp) -> Self {
         Self {
             hash,
             content_type: ContentType::L0,

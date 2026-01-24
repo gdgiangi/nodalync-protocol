@@ -313,6 +313,9 @@ mod tests {
         let config = CliConfig::default();
         let toml_str = toml::to_string_pretty(&config).unwrap();
         let parsed: CliConfig = toml::from_str(&toml_str).unwrap();
-        assert_eq!(config.economics.default_price, parsed.economics.default_price);
+        assert_eq!(
+            config.economics.default_price,
+            parsed.economics.default_price
+        );
     }
 }

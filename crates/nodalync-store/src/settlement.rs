@@ -138,9 +138,9 @@ impl SettlementQueueStore for SqliteSettlementQueue {
 
         match value {
             Some(v) => {
-                let timestamp: Timestamp = v.parse().map_err(|_| {
-                    StoreError::invalid_data("Invalid last_settlement_time format")
-                })?;
+                let timestamp: Timestamp = v
+                    .parse()
+                    .map_err(|_| StoreError::invalid_data("Invalid last_settlement_time format"))?;
                 Ok(Some(timestamp))
             }
             None => Ok(None),

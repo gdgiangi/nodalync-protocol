@@ -129,14 +129,14 @@ where
         // Record payment (determines if we're paying or receiving)
         if payment.recipient == self.peer_id() {
             // We're receiving
-            channel.receive(payment.clone(), timestamp).map_err(|_| {
-                OpsError::InsufficientChannelBalance
-            })?;
+            channel
+                .receive(payment.clone(), timestamp)
+                .map_err(|_| OpsError::InsufficientChannelBalance)?;
         } else {
             // We're paying
-            channel.pay(payment.clone(), timestamp).map_err(|_| {
-                OpsError::InsufficientChannelBalance
-            })?;
+            channel
+                .pay(payment.clone(), timestamp)
+                .map_err(|_| OpsError::InsufficientChannelBalance)?;
         }
 
         // Store updated channel
@@ -296,7 +296,10 @@ mod tests {
         let (mut ops, _temp) = create_test_ops();
         let peer = test_peer_id();
 
-        let channel = ops.open_payment_channel(&peer, 100_0000_0000).await.unwrap();
+        let channel = ops
+            .open_payment_channel(&peer, 100_0000_0000)
+            .await
+            .unwrap();
 
         assert_eq!(channel.peer_id, peer);
         assert_eq!(channel.state, ChannelState::Opening);
@@ -309,7 +312,9 @@ mod tests {
         let (mut ops, _temp) = create_test_ops();
         let peer = test_peer_id();
 
-        ops.open_payment_channel(&peer, 100_0000_0000).await.unwrap();
+        ops.open_payment_channel(&peer, 100_0000_0000)
+            .await
+            .unwrap();
 
         // Second open should fail
         let result = ops.open_payment_channel(&peer, 100_0000_0000).await;
@@ -349,7 +354,8 @@ mod tests {
         let channel_id = content_hash(b"channel");
 
         // Accept a channel first (so it's open)
-        ops.accept_payment_channel(&channel_id, &peer, 500, 500).unwrap();
+        ops.accept_payment_channel(&channel_id, &peer, 500, 500)
+            .unwrap();
 
         // Close the channel
         ops.close_payment_channel(&peer).await.unwrap();
@@ -366,7 +372,8 @@ mod tests {
         let channel_id = content_hash(b"channel");
 
         // Accept a channel first (so it's open)
-        ops.accept_payment_channel(&channel_id, &peer, 500, 500).unwrap();
+        ops.accept_payment_channel(&channel_id, &peer, 500, 500)
+            .unwrap();
 
         // Dispute the channel
         ops.dispute_payment_channel(&peer).unwrap();
@@ -385,13 +392,16 @@ mod tests {
         assert!(!ops.has_open_channel(&peer).unwrap());
 
         // Open channel (Opening state)
-        ops.open_payment_channel(&peer, 100_0000_0000).await.unwrap();
+        ops.open_payment_channel(&peer, 100_0000_0000)
+            .await
+            .unwrap();
         assert!(!ops.has_open_channel(&peer).unwrap()); // Opening != Open
 
         // Accept channel from different peer
         let peer2 = test_peer_id();
         let channel_id = content_hash(b"channel2");
-        ops.accept_payment_channel(&channel_id, &peer2, 500, 500).unwrap();
+        ops.accept_payment_channel(&channel_id, &peer2, 500, 500)
+            .unwrap();
         assert!(ops.has_open_channel(&peer2).unwrap());
     }
 
@@ -405,7 +415,8 @@ mod tests {
         assert!(ops.get_channel_balance(&peer).unwrap().is_none());
 
         // Accept channel
-        ops.accept_payment_channel(&channel_id, &peer, 500, 1000).unwrap();
+        ops.accept_payment_channel(&channel_id, &peer, 500, 1000)
+            .unwrap();
 
         // Check balance
         let balance = ops.get_channel_balance(&peer).unwrap().unwrap();

@@ -138,25 +138,37 @@ mod tests {
         let err = EncodeError::Cbor("test error".to_string());
         assert!(format!("{}", err).contains("CBOR encoding failed"));
 
-        let err = EncodeError::PayloadTooLarge { size: 1000, max: 500 };
+        let err = EncodeError::PayloadTooLarge {
+            size: 1000,
+            max: 500,
+        };
         assert!(format!("{}", err).contains("1000 bytes"));
         assert!(format!("{}", err).contains("500 bytes"));
     }
 
     #[test]
     fn test_decode_error_display() {
-        let err = DecodeError::InvalidMagic { expected: 0x00, got: 0xFF };
+        let err = DecodeError::InvalidMagic {
+            expected: 0x00,
+            got: 0xFF,
+        };
         assert!(format!("{}", err).contains("0x00"));
         assert!(format!("{}", err).contains("0xff"));
 
-        let err = DecodeError::InvalidVersion { expected: 0x01, got: 0x02 };
+        let err = DecodeError::InvalidVersion {
+            expected: 0x01,
+            got: 0x02,
+        };
         assert!(format!("{}", err).contains("0x01"));
         assert!(format!("{}", err).contains("0x02"));
 
         let err = DecodeError::InvalidMessageType(0x9999);
         assert!(format!("{}", err).contains("0x9999"));
 
-        let err = DecodeError::TruncatedMessage { expected: 100, got: 50 };
+        let err = DecodeError::TruncatedMessage {
+            expected: 100,
+            got: 50,
+        };
         assert!(format!("{}", err).contains("100"));
         assert!(format!("{}", err).contains("50"));
     }

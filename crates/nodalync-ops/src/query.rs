@@ -104,7 +104,10 @@ where
         let l1_summary = self.extract_l1_summary(hash)?;
 
         // 5. Return response
-        Ok(PreviewResponse { manifest, l1_summary })
+        Ok(PreviewResponse {
+            manifest,
+            l1_summary,
+        })
     }
 
     /// Query and retrieve full content.
@@ -159,7 +162,9 @@ where
                 // If we have the content locally but don't own it, serve from local
                 if let Some(content) = self.state.content.load(hash)? {
                     let receipt = PaymentReceipt {
-                        payment_id: content_hash(&[hash.0.as_slice(), &timestamp.to_be_bytes()].concat()),
+                        payment_id: content_hash(
+                            &[hash.0.as_slice(), &timestamp.to_be_bytes()].concat(),
+                        ),
                         amount: payment_amount,
                         timestamp,
                         channel_nonce: 1,
@@ -185,12 +190,9 @@ where
 
                 // Content manifest exists but content not local - try network
                 if let Some(network) = self.network().cloned() {
-                    return self.fetch_content_from_network(
-                        hash,
-                        &manifest.owner,
-                        payment_amount,
-                        &network,
-                    ).await;
+                    return self
+                        .fetch_content_from_network(hash, &manifest.owner, payment_amount, &network)
+                        .await;
                 }
 
                 // No network available and content not local
@@ -204,12 +206,14 @@ where
                         // Get libp2p peer ID from announcement's addresses
                         // For now, we need to find the peer who published this content
                         // In a real implementation, we'd track the publisher's peer ID
-                        return self.fetch_content_from_dht_announce(
-                            hash,
-                            &announce,
-                            payment_amount,
-                            &network,
-                        ).await;
+                        return self
+                            .fetch_content_from_dht_announce(
+                                hash,
+                                &announce,
+                                payment_amount,
+                                &network,
+                            )
+                            .await;
                     }
                 }
 
@@ -235,11 +239,8 @@ where
             .ok_or(OpsError::PeerIdNotFound)?;
 
         // Create payment
-        let payment_id = content_hash(&[
-            hash.0.as_slice(),
-            &owner.0,
-            &timestamp.to_be_bytes(),
-        ].concat());
+        let payment_id =
+            content_hash(&[hash.0.as_slice(), &owner.0, &timestamp.to_be_bytes()].concat());
 
         let payment = Payment::new(
             payment_id,
@@ -310,16 +311,14 @@ where
                     for libp2p_peer in network.connected_peers() {
                         // Try querying this peer
                         let timestamp = current_timestamp();
-                        let payment_id = content_hash(&[
-                            hash.0.as_slice(),
-                            &timestamp.to_be_bytes(),
-                        ].concat());
+                        let payment_id =
+                            content_hash(&[hash.0.as_slice(), &timestamp.to_be_bytes()].concat());
 
                         // We don't have the Nodalync peer ID, so we create a placeholder recipient
                         // In a real implementation, we'd exchange peer info first
                         let recipient = network
                             .nodalync_peer_id(&libp2p_peer)
-                            .unwrap_or_else(|| PeerId([0u8; 20]));
+                            .unwrap_or(PeerId([0u8; 20]));
 
                         let payment = Payment::new(
                             payment_id,

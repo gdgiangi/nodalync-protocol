@@ -41,14 +41,14 @@ async fn test_hedera_testnet_connectivity() {
     println!("Account ID: {}", account_id_str);
 
     // Parse account ID
-    let account_id = AccountId::from_str(&account_id_str)
-        .expect("Failed to parse account ID");
+    let account_id = AccountId::from_str(&account_id_str).expect("Failed to parse account ID");
     println!("Parsed account ID: {:?}", account_id);
 
     // Parse private key (remove 0x prefix if present)
-    let key_str = private_key_str.strip_prefix("0x").unwrap_or(&private_key_str);
-    let private_key = PrivateKey::from_str(key_str)
-        .expect("Failed to parse private key");
+    let key_str = private_key_str
+        .strip_prefix("0x")
+        .unwrap_or(&private_key_str);
+    let private_key = PrivateKey::from_str(key_str).expect("Failed to parse private key");
     println!("Private key parsed successfully");
 
     // Create testnet client
@@ -71,7 +71,10 @@ async fn test_hedera_testnet_connectivity() {
     println!("SUCCESS! Connected to Hedera testnet");
     println!("===========================================");
     println!("Account: {}", account_id_str);
-    println!("Balance: {} HBAR ({} tinybars)", hbar_balance, tinybar_balance);
+    println!(
+        "Balance: {} HBAR ({} tinybars)",
+        hbar_balance, tinybar_balance
+    );
     println!("===========================================");
 
     // Basic assertion - account should exist (balance query succeeded)
@@ -89,7 +92,9 @@ async fn test_hedera_account_info() {
     };
 
     let account_id = AccountId::from_str(&account_id_str).unwrap();
-    let key_str = private_key_str.strip_prefix("0x").unwrap_or(&private_key_str);
+    let key_str = private_key_str
+        .strip_prefix("0x")
+        .unwrap_or(&private_key_str);
     let private_key = PrivateKey::from_str(key_str).unwrap();
 
     let client = Client::for_testnet();
@@ -127,8 +132,7 @@ async fn test_private_key_derivation() {
     // Test that we can derive public key from private key
     let key_hex = "d21f3bfe69929b1d6e0f37fa9622b96f874a892f7236a7e0e3c8d7b62b422d8b";
 
-    let private_key = PrivateKey::from_str(key_hex)
-        .expect("Failed to parse private key");
+    let private_key = PrivateKey::from_str(key_hex).expect("Failed to parse private key");
 
     let public_key = private_key.public_key();
 

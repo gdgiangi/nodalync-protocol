@@ -39,6 +39,7 @@ impl Payment {
     /// Create a new payment.
     ///
     /// Note: The id and signature should be computed by the caller.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: Hash,
         channel_id: Hash,
@@ -102,7 +103,12 @@ pub struct Channel {
 
 impl Channel {
     /// Create a new channel in Opening state.
-    pub fn new(channel_id: Hash, peer_id: PeerId, my_deposit: Amount, timestamp: Timestamp) -> Self {
+    pub fn new(
+        channel_id: Hash,
+        peer_id: PeerId,
+        my_deposit: Amount,
+        timestamp: Timestamp,
+    ) -> Self {
         Self {
             channel_id,
             peer_id,
@@ -301,18 +307,10 @@ mod tests {
         let query_hash = test_hash(b"content");
         let recipient = test_peer_id();
 
-        let entry1 = ProvenanceEntry::with_weight(
-            test_hash(b"src1"),
-            test_peer_id(),
-            Visibility::Shared,
-            2,
-        );
-        let entry2 = ProvenanceEntry::with_weight(
-            test_hash(b"src2"),
-            test_peer_id(),
-            Visibility::Shared,
-            3,
-        );
+        let entry1 =
+            ProvenanceEntry::with_weight(test_hash(b"src1"), test_peer_id(), Visibility::Shared, 2);
+        let entry2 =
+            ProvenanceEntry::with_weight(test_hash(b"src2"), test_peer_id(), Visibility::Shared, 3);
 
         let payment = Payment::new(
             test_hash(b"payment"),

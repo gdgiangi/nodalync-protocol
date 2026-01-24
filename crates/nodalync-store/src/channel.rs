@@ -23,7 +23,10 @@ impl SqliteChannelStore {
     }
 
     /// Serialize a channel for storage.
-    fn serialize_channel(peer: &PeerId, channel: &Channel) -> (Vec<u8>, Vec<u8>, u8, i64, i64, i64, i64) {
+    fn serialize_channel(
+        peer: &PeerId,
+        channel: &Channel,
+    ) -> (Vec<u8>, Vec<u8>, u8, i64, i64, i64, i64) {
         (
             peer.0.to_vec(),
             channel.channel_id.0.to_vec(),
@@ -60,16 +63,20 @@ impl SqliteChannelStore {
     }
 
     /// Serialize a payment for storage.
-    fn serialize_payment(peer: &PeerId, payment: &Payment) -> Result<(
-        Vec<u8>,         // id
-        Vec<u8>,         // channel_peer
-        Vec<u8>,         // channel_id
-        i64,             // amount
-        Vec<u8>,         // recipient
-        Vec<u8>,         // query_hash
-        String,          // provenance (JSON)
-        i64,             // timestamp
-        Vec<u8>,         // signature
+    #[allow(clippy::type_complexity)]
+    fn serialize_payment(
+        peer: &PeerId,
+        payment: &Payment,
+    ) -> Result<(
+        Vec<u8>, // id
+        Vec<u8>, // channel_peer
+        Vec<u8>, // channel_id
+        i64,     // amount
+        Vec<u8>, // recipient
+        Vec<u8>, // query_hash
+        String,  // provenance (JSON)
+        i64,     // timestamp
+        Vec<u8>, // signature
     )> {
         let provenance_json = serde_json::to_string(&payment.provenance)?;
 
@@ -178,7 +185,15 @@ impl ChannelStore for SqliteChannelStore {
                 channel_id = ?2, state = ?3, my_balance = ?4, their_balance = ?5,
                 nonce = ?6, last_update = ?7
              WHERE peer_id = ?1",
-            params![peer_bytes, channel_id, state, my_balance, their_balance, nonce, last_update],
+            params![
+                peer_bytes,
+                channel_id,
+                state,
+                my_balance,
+                their_balance,
+                nonce,
+                last_update
+            ],
         )?;
 
         if rows_affected == 0 {
@@ -223,8 +238,17 @@ impl ChannelStore for SqliteChannelStore {
     fn add_payment(&mut self, peer: &PeerId, payment: Payment) -> Result<()> {
         let conn = self.conn.lock().unwrap();
 
-        let (id, channel_peer, channel_id, amount, recipient, query_hash, provenance, timestamp, signature) =
-            Self::serialize_payment(peer, &payment)?;
+        let (
+            id,
+            channel_peer,
+            channel_id,
+            amount,
+            recipient,
+            query_hash,
+            provenance,
+            timestamp,
+            signature,
+        ) = Self::serialize_payment(peer, &payment)?;
 
         conn.execute(
             "INSERT INTO payments (id, channel_peer, channel_id, amount, recipient, query_hash, provenance, timestamp, signature, settled)
@@ -279,7 +303,10 @@ impl SqliteChannelStore {
         let conn = self.conn.lock().unwrap();
         let peer_bytes = peer.0.to_vec();
 
-        conn.execute("DELETE FROM payments WHERE channel_peer = ?1", [&peer_bytes])?;
+        conn.execute(
+            "DELETE FROM payments WHERE channel_peer = ?1",
+            [&peer_bytes],
+        )?;
         conn.execute("DELETE FROM channels WHERE peer_id = ?1", [&peer_bytes])?;
 
         Ok(())

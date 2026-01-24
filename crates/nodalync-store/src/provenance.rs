@@ -135,9 +135,8 @@ impl ProvenanceGraph for SqliteProvenanceGraph {
         let conn = self.conn.lock().unwrap();
         let hash_bytes = hash.0.to_vec();
 
-        let mut stmt = conn.prepare(
-            "SELECT content_hash FROM derived_from WHERE source_hash = ?1",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT content_hash FROM derived_from WHERE source_hash = ?1")?;
 
         let derivations: Vec<Hash> = stmt
             .query_map([hash_bytes], |row| {
@@ -196,7 +195,13 @@ impl ProvenanceGraph for SqliteProvenanceGraph {
              VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(content_hash, root_hash) DO UPDATE SET
              weight = weight + excluded.weight",
-            params![content_bytes, root_bytes, owner_bytes, visibility, entry.weight],
+            params![
+                content_bytes,
+                root_bytes,
+                owner_bytes,
+                visibility,
+                entry.weight
+            ],
         )?;
 
         Ok(())
@@ -208,9 +213,8 @@ impl SqliteProvenanceGraph {
     fn get_direct_sources(&self, conn: &Connection, hash: &Hash) -> Result<Vec<Hash>> {
         let hash_bytes = hash.0.to_vec();
 
-        let mut stmt = conn.prepare(
-            "SELECT source_hash FROM derived_from WHERE content_hash = ?1",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT source_hash FROM derived_from WHERE content_hash = ?1")?;
 
         let sources: Vec<Hash> = stmt
             .query_map([hash_bytes], |row| {

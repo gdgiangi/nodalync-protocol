@@ -119,11 +119,7 @@ mod tests {
 
     #[test]
     fn test_delay_for_attempt() {
-        let policy = RetryPolicy::new(
-            5,
-            Duration::from_millis(100),
-            Duration::from_secs(5),
-        );
+        let policy = RetryPolicy::new(5, Duration::from_millis(100), Duration::from_secs(5));
 
         // First attempt has no delay
         assert_eq!(policy.delay_for_attempt(0), Duration::ZERO);
@@ -137,11 +133,7 @@ mod tests {
 
     #[test]
     fn test_delay_capped_at_max() {
-        let policy = RetryPolicy::new(
-            10,
-            Duration::from_millis(100),
-            Duration::from_millis(500),
-        );
+        let policy = RetryPolicy::new(10, Duration::from_millis(100), Duration::from_millis(500));
 
         // Should be capped at max_delay
         assert_eq!(policy.delay_for_attempt(5), Duration::from_millis(500));

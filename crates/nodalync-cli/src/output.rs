@@ -192,7 +192,11 @@ impl Render for ListOutput {
         }
 
         if !unlisted.is_empty() {
-            lines.push(format!("{} ({})", "UNLISTED".yellow().bold(), unlisted.len()));
+            lines.push(format!(
+                "{} ({})",
+                "UNLISTED".yellow().bold(),
+                unlisted.len()
+            ));
             for m in unlisted {
                 lines.push(format_manifest_line(m));
             }
@@ -427,7 +431,11 @@ impl Render for VersionsOutput {
         )];
 
         for v in &self.versions {
-            let latest_marker = if v.is_latest { " [latest]".green() } else { "".into() };
+            let latest_marker = if v.is_latest {
+                " [latest]".green()
+            } else {
+                "".into()
+            };
             let timestamp = format_timestamp(v.timestamp);
             lines.push(format!(
                 "  v{}: {} ({}) - {}{}",
@@ -895,7 +903,10 @@ mod tests {
 
     #[test]
     fn test_output_format_parse() {
-        assert_eq!("human".parse::<OutputFormat>().unwrap(), OutputFormat::Human);
+        assert_eq!(
+            "human".parse::<OutputFormat>().unwrap(),
+            OutputFormat::Human
+        );
         assert_eq!("json".parse::<OutputFormat>().unwrap(), OutputFormat::Json);
         assert!("invalid".parse::<OutputFormat>().is_err());
     }

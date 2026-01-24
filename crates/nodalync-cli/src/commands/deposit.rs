@@ -6,7 +6,11 @@ use crate::error::CliResult;
 use crate::output::{OutputFormat, Render, TransactionOutput};
 
 /// Execute the deposit command.
-pub async fn deposit(config: CliConfig, format: OutputFormat, amount_ndl: f64) -> CliResult<String> {
+pub async fn deposit(
+    config: CliConfig,
+    format: OutputFormat,
+    amount_ndl: f64,
+) -> CliResult<String> {
     // Convert to units
     let amount = ndl_to_units(amount_ndl);
 

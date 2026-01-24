@@ -613,13 +613,8 @@ mod tests {
 
     #[test]
     fn test_relationship_creation() {
-        let rel = Relationship::new(
-            "r1",
-            "e1",
-            "schema:knows",
-            RelationshipObject::entity("e2"),
-        )
-        .with_confidence(0.9);
+        let rel = Relationship::new("r1", "e1", "schema:knows", RelationshipObject::entity("e2"))
+            .with_confidence(0.9);
 
         assert_eq!(rel.id, "r1");
         assert_eq!(rel.subject, "e1");
@@ -639,12 +634,7 @@ mod tests {
         graph.add_entity(entity1);
         graph.add_entity(entity2);
 
-        let rel = Relationship::new(
-            "r1",
-            "e1",
-            "schema:knows",
-            RelationshipObject::entity("e2"),
-        );
+        let rel = Relationship::new("r1", "e1", "schema:knows", RelationshipObject::entity("e2"));
         graph.add_relationship(rel);
 
         assert_eq!(graph.entity_count, 2);
@@ -689,7 +679,10 @@ mod tests {
     #[test]
     fn test_l2_merge_config_default() {
         let config = L2MergeConfig::default();
-        assert_eq!(config.conflict_resolution, ConflictResolution::HigherConfidence);
+        assert_eq!(
+            config.conflict_resolution,
+            ConflictResolution::HigherConfidence
+        );
         assert_eq!(config.min_match_confidence, 0.5);
         assert!(!config.preserve_metadata);
     }

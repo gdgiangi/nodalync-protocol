@@ -45,10 +45,7 @@ pub fn merge_l2(
 
         // Check ownership
         if manifest.owner != ctx.peer_id() {
-            return Err(CliError::User(format!(
-                "You don't own L2 graph {}",
-                graph
-            )));
+            return Err(CliError::User(format!("You don't own L2 graph {}", graph)));
         }
     }
 
