@@ -42,7 +42,21 @@ pub trait Operations {
     /// Extract L1 mentions from L0 content (rule-based for MVP)
     async fn extract_l1(&mut self, hash: &Hash) -> Result<L1Summary>;
     
-    /// Publish content to the network
+    /// Build L2 entity graph from L1 sources (always private)
+    async fn build_l2(
+        &mut self,
+        source_l1s: &[Hash],
+        config: Option<L2BuildConfig>,
+    ) -> Result<Hash>;
+    
+    /// Merge multiple of your own L2 graphs into one
+    async fn merge_l2(
+        &mut self,
+        source_l2s: &[Hash],
+        config: Option<L2MergeConfig>,
+    ) -> Result<Hash>;
+    
+    /// Publish content to the network (NOT allowed for L2)
     async fn publish(
         &mut self,
         hash: &Hash,
@@ -57,7 +71,7 @@ pub trait Operations {
     /// Create new version of existing content
     async fn update(&mut self, old_hash: &Hash, new_content: &[u8]) -> Result<Hash>;
     
-    /// Create L3 from multiple sources
+    /// Create L3 from multiple sources (can include L0, L1, L2, L3)
     async fn derive(
         &mut self,
         sources: &[Hash],
@@ -81,7 +95,7 @@ pub trait Operations {
     
     // === Visibility Operations ===
     
-    /// Change content visibility
+    /// Change content visibility (NOT allowed for L2)
     async fn set_visibility(&mut self, hash: &Hash, visibility: Visibility) -> Result<()>;
     
     /// Update access control
@@ -110,7 +124,6 @@ pub trait Operations {
     async fn trigger_settlement(&mut self) -> Result<Option<SettlementBatch>>;
 }
 ```
-```
 
 ---
 
@@ -123,6 +136,21 @@ async fn create(
     content_type: ContentType,
     metadata: Metadata,
 ) -> Result<Hash> {
+    // Reject L2 and L3 through CREATE - they have dedicated operations
+    match content_type {
+        ContentType::L2 => {
+            return Err(Error::InvalidOperation(
+                "Use build_l2() for L2 content".into()
+            ));
+        }
+        ContentType::L3 => {
+            return Err(Error::InvalidOperation(
+                "Use derive() for L3 content".into()
+            ));
+        }
+        ContentType::L0 | ContentType::L1 => {}
+    }
+    
     // 1. Compute hash
     let hash = content_hash(content);
     
@@ -134,30 +162,23 @@ async fn create(
         timestamp: current_timestamp(),
     };
     
-    // 3. Compute provenance (L0: self-referential)
-    let provenance = match content_type {
-        ContentType::L0 | ContentType::L1 => Provenance {
-            root_L0L1: vec![ProvenanceEntry {
-                hash: hash.clone(),
-                owner: self.identity.peer_id(),
-                visibility: Visibility::Private,
-                weight: 1,
-            }],
-            derived_from: vec![],
-            depth: 0,
-        },
-        ContentType::L3 => {
-            return Err(Error::InvalidOperation(
-                "Use derive() for L3 content".into()
-            ));
-        }
+    // 3. Compute provenance (L0/L1: self-referential)
+    let provenance = Provenance {
+        root_L0L1: vec![ProvenanceEntry {
+            hash: hash.clone(),
+            owner: self.identity.peer_id(),
+            visibility: Visibility::Private,
+            weight: 1,
+        }],
+        derived_from: vec![],
+        depth: if content_type == ContentType::L0 { 0 } else { 1 },
     };
     
     // 4. Create manifest (includes owner)
     let manifest = Manifest {
         hash: hash.clone(),
         content_type,
-        owner: self.identity.peer_id(),  // Owner is creator
+        owner: self.identity.peer_id(),
         version,
         visibility: Visibility::Private,
         access: AccessControl::default(),
@@ -346,6 +367,334 @@ impl L1ExtractorPlugin for OpenAIExtractor {
 
 ---
 
+## §7.1.2a BUILD_L2 (Entity Graph)
+
+Build a personal L2 entity graph from L1 sources. L2 is always private and never directly monetized.
+
+```rust
+async fn build_l2(
+    &mut self,
+    source_l1s: &[Hash],
+    config: Option<L2BuildConfig>,
+) -> Result<Hash> {
+    let config = config.unwrap_or_default();
+    
+    // 1. Validate we have at least one source
+    if source_l1s.is_empty() {
+        return Err(Error::InvalidOperation("build_l2 requires at least one L1 source".into()));
+    }
+    if source_l1s.len() > MAX_SOURCE_L1S_PER_L2 {
+        return Err(Error::InvalidOperation("too many L1 sources".into()));
+    }
+    
+    // 2. Load and verify all L1 sources (must be queried or owned)
+    let mut l1_refs = Vec::new();
+    let mut all_mentions: Vec<(Hash, Mention)> = Vec::new();
+    
+    for l1_hash in source_l1s {
+        // Check if we have it (either owned or cached from query)
+        let manifest = self.manifest_store.load(l1_hash)
+            .or_else(|_| self.cache.get_manifest(l1_hash))
+            .ok_or(Error::L2MissingSource)?;
+        
+        if manifest.content_type != ContentType::L1 {
+            return Err(Error::InvalidOperation("source must be L1".into()));
+        }
+        
+        // Load L1 summary to get mentions
+        let l1_summary = self.l1_store.load(l1_hash)?
+            .ok_or(Error::L2MissingSource)?;
+        
+        l1_refs.push(L1Reference {
+            l1_hash: l1_hash.clone(),
+            l0_hash: l1_summary.l0_hash.clone(),
+            mention_ids_used: vec![], // All mentions
+        });
+        
+        // Collect mentions with their L1 hash for reference
+        for mention in &l1_summary.preview_mentions {
+            all_mentions.push((l1_hash.clone(), mention.clone()));
+        }
+    }
+    
+    // 3. Extract entities from mentions
+    let raw_entities = extract_entities_from_mentions(&all_mentions, &config)?;
+    
+    // 4. Resolve entities (merge duplicates, link to external KBs)
+    let prefixes = config.prefixes.clone().unwrap_or_default();
+    let resolved_entities = resolve_entities(raw_entities, &config)?;
+    
+    if resolved_entities.is_empty() {
+        return Err(Error::InvalidOperation("no entities extracted".into()));
+    }
+    
+    // 5. Extract relationships
+    let relationships = extract_relationships(&resolved_entities, &all_mentions, &config)?;
+    
+    // 6. Build L2 graph
+    let mut l2_graph = L2EntityGraph {
+        id: Hash::default(), // Computed below
+        source_l1s: l1_refs,
+        source_l2s: vec![],
+        prefixes,
+        entities: resolved_entities.clone(),
+        relationships: relationships.clone(),
+        entity_count: resolved_entities.len() as u32,
+        relationship_count: relationships.len() as u32,
+        source_mention_count: all_mentions.len() as u32,
+    };
+    
+    // 7. Serialize and compute hash
+    let content = serialize(&l2_graph)?;
+    let hash = content_hash(&content);
+    l2_graph.id = hash.clone();
+    
+    // 8. Compute provenance (merge from all source L1s)
+    let mut root_entries: Vec<ProvenanceEntry> = Vec::new();
+    let mut max_depth = 0u32;
+    
+    for l1_hash in source_l1s {
+        let manifest = self.manifest_store.load(l1_hash)
+            .or_else(|_| self.cache.get_manifest(l1_hash))?;
+        
+        for entry in &manifest.provenance.root_L0L1 {
+            merge_or_increment(&mut root_entries, entry.clone());
+        }
+        max_depth = max_depth.max(manifest.provenance.depth);
+    }
+    
+    let provenance = Provenance {
+        root_L0L1: root_entries,
+        derived_from: source_l1s.to_vec(),
+        depth: max_depth + 1,
+    };
+    
+    // 9. Create manifest (L2 is ALWAYS private with zero price)
+    let manifest = Manifest {
+        hash: hash.clone(),
+        content_type: ContentType::L2,
+        owner: self.identity.peer_id(),
+        version: Version {
+            number: 1,
+            previous: None,
+            root: hash.clone(),
+            timestamp: current_timestamp(),
+        },
+        visibility: Visibility::Private,  // L2 is ALWAYS private
+        access: AccessControl::default(),
+        metadata: Metadata {
+            title: format!("Entity Graph ({} entities)", resolved_entities.len()),
+            description: None,
+            tags: vec![],
+            content_size: content.len() as u64,
+            mime_type: Some("application/x-nodalync-l2".into()),
+        },
+        economics: Economics {
+            price: 0,  // L2 is ALWAYS free (never queried)
+            currency: Currency::NDL,
+            total_queries: 0,
+            total_revenue: 0,
+        },
+        provenance,
+        created_at: current_timestamp(),
+        updated_at: current_timestamp(),
+    };
+    
+    // 10. Validate
+    self.validator.validate_content(&content, &manifest)?;
+    
+    // 11. Store
+    self.content_store.store_verified(&hash, &content)?;
+    self.manifest_store.store(&manifest)?;
+    
+    Ok(hash)
+}
+
+/// Helper: Extract entities from mentions
+fn extract_entities_from_mentions(
+    mentions: &[(Hash, Mention)],
+    config: &L2BuildConfig,
+) -> Result<Vec<Entity>> {
+    let mut entities = Vec::new();
+    let default_type = config.default_entity_type.clone()
+        .unwrap_or_else(|| "ndl:Concept".into());
+    
+    for (l1_hash, mention) in mentions {
+        for entity_name in &mention.entities {
+            // Create entity with mention reference
+            let entity = Entity {
+                id: content_hash(format!("{}:{}", entity_name, default_type).as_bytes()),
+                canonical_label: entity_name.clone(),
+                canonical_uri: None,
+                aliases: vec![],
+                entity_types: vec![default_type.clone()],
+                source_mentions: vec![MentionRef {
+                    l1_hash: l1_hash.clone(),
+                    mention_id: mention.id.clone(),
+                }],
+                confidence: 0.8,  // Default confidence
+                resolution_method: ResolutionMethod::ExactMatch,
+                description: None,
+                same_as: None,
+            };
+            entities.push(entity);
+        }
+    }
+    
+    Ok(entities)
+}
+```
+
+---
+
+## §7.1.2b MERGE_L2
+
+Merge multiple of your own L2 graphs into a unified graph.
+
+```rust
+async fn merge_l2(
+    &mut self,
+    source_l2s: &[Hash],
+    config: Option<L2MergeConfig>,
+) -> Result<Hash> {
+    let config = config.unwrap_or_default();
+    
+    // 1. Validate
+    if source_l2s.len() < 2 {
+        return Err(Error::InvalidOperation("merge_l2 requires at least 2 sources".into()));
+    }
+    if source_l2s.len() > MAX_SOURCE_L2S_PER_MERGE {
+        return Err(Error::InvalidOperation("too many L2 sources".into()));
+    }
+    
+    // 2. Load all L2 sources (must be local - L2 is never queried)
+    let mut all_entities: Vec<Entity> = Vec::new();
+    let mut all_relationships: Vec<Relationship> = Vec::new();
+    let mut all_l1_refs: Vec<L1Reference> = Vec::new();
+    let mut merged_prefixes = PrefixMap::default();
+    let mut root_entries: Vec<ProvenanceEntry> = Vec::new();
+    let mut max_depth = 0u32;
+    
+    for l2_hash in source_l2s {
+        // Must be local (owned)
+        let manifest = self.manifest_store.load(l2_hash)?
+            .ok_or(Error::NotFound)?;
+        
+        if manifest.content_type != ContentType::L2 {
+            return Err(Error::InvalidOperation("source must be L2".into()));
+        }
+        if manifest.owner != self.identity.peer_id() {
+            return Err(Error::InvalidOperation("can only merge your own L2s".into()));
+        }
+        
+        // Load L2 content
+        let content = self.content_store.load(l2_hash)?
+            .ok_or(Error::NotFound)?;
+        let l2_graph: L2EntityGraph = deserialize(&content)?;
+        
+        // Collect entities, relationships, refs
+        all_entities.extend(l2_graph.entities);
+        all_relationships.extend(l2_graph.relationships);
+        all_l1_refs.extend(l2_graph.source_l1s);
+        
+        // Merge prefixes (later ones override earlier)
+        for entry in l2_graph.prefixes.entries {
+            merged_prefixes.entries.retain(|e| e.prefix != entry.prefix);
+            merged_prefixes.entries.push(entry);
+        }
+        
+        // Merge provenance
+        for entry in &manifest.provenance.root_L0L1 {
+            merge_or_increment(&mut root_entries, entry.clone());
+        }
+        max_depth = max_depth.max(manifest.provenance.depth);
+    }
+    
+    // 3. Deduplicate L1 refs
+    let mut unique_l1_refs: Vec<L1Reference> = Vec::new();
+    for l1_ref in all_l1_refs {
+        if !unique_l1_refs.iter().any(|r| r.l1_hash == l1_ref.l1_hash) {
+            unique_l1_refs.push(l1_ref);
+        }
+    }
+    
+    // 4. Cross-graph entity resolution
+    let threshold = config.entity_merge_threshold.unwrap_or(0.8);
+    let resolved_entities = merge_entities(&all_entities, threshold)?;
+    
+    // 5. Update relationship entity references
+    let entity_id_map = build_entity_id_map(&all_entities, &resolved_entities);
+    let resolved_relationships = update_relationship_refs(&all_relationships, &entity_id_map)?;
+    
+    // 6. Build merged L2
+    let mut l2_graph = L2EntityGraph {
+        id: Hash::default(),
+        source_l1s: unique_l1_refs,
+        source_l2s: source_l2s.to_vec(),
+        prefixes: config.prefixes.clone().unwrap_or(merged_prefixes),
+        entities: resolved_entities.clone(),
+        relationships: resolved_relationships.clone(),
+        entity_count: resolved_entities.len() as u32,
+        relationship_count: resolved_relationships.len() as u32,
+        source_mention_count: resolved_entities.iter()
+            .map(|e| e.source_mentions.len())
+            .sum::<usize>() as u32,
+    };
+    
+    // 7. Hash
+    let content = serialize(&l2_graph)?;
+    let hash = content_hash(&content);
+    l2_graph.id = hash.clone();
+    
+    // 8. Provenance
+    let provenance = Provenance {
+        root_L0L1: root_entries,
+        derived_from: source_l2s.to_vec(),
+        depth: max_depth + 1,
+    };
+    
+    // 9. Create manifest
+    let manifest = Manifest {
+        hash: hash.clone(),
+        content_type: ContentType::L2,
+        owner: self.identity.peer_id(),
+        version: Version {
+            number: 1,
+            previous: None,
+            root: hash.clone(),
+            timestamp: current_timestamp(),
+        },
+        visibility: Visibility::Private,
+        access: AccessControl::default(),
+        metadata: Metadata {
+            title: format!("Merged Entity Graph ({} entities)", resolved_entities.len()),
+            description: None,
+            tags: vec![],
+            content_size: content.len() as u64,
+            mime_type: Some("application/x-nodalync-l2".into()),
+        },
+        economics: Economics {
+            price: 0,
+            currency: Currency::NDL,
+            total_queries: 0,
+            total_revenue: 0,
+        },
+        provenance,
+        created_at: current_timestamp(),
+        updated_at: current_timestamp(),
+    };
+    
+    // 10. Validate and store
+    self.validator.validate_content(&content, &manifest)?;
+    self.content_store.store_verified(&hash, &content)?;
+    self.manifest_store.store(&manifest)?;
+    
+    Ok(hash)
+}
+```
+
+---
+
 ## §7.1.3 PUBLISH
 
 ```rust
@@ -360,10 +709,15 @@ async fn publish(
     let mut manifest = self.manifest_store.load(hash)?
         .ok_or(Error::NotFound)?;
     
-    // 2. Validate price
+    // 2. L2 can NEVER be published
+    if manifest.content_type == ContentType::L2 {
+        return Err(Error::L2CannotPublish);
+    }
+    
+    // 3. Validate price
     validate_price(price)?;
     
-    // 3. Update manifest
+    // 4. Update manifest
     manifest.visibility = visibility;
     manifest.economics.price = price;
     if let Some(access) = access {
@@ -371,10 +725,10 @@ async fn publish(
     }
     manifest.updated_at = current_timestamp();
     
-    // 4. Save
+    // 5. Save
     self.manifest_store.update(&manifest)?;
     
-    // 5. Announce to network (if Shared)
+    // 6. Announce to network (if Shared)
     if visibility == Visibility::Shared {
         let l1_summary = self.get_or_extract_l1(hash).await?;
         let announce = AnnouncePayload {
@@ -396,6 +750,12 @@ async fn publish(
 
 ## §7.1.5 DERIVE (Create L3)
 
+Create L3 insight from sources. Sources can be any combination of:
+- L0 (raw documents) 
+- L1 (mentions)
+- L2 (your entity graphs - must be owned, not queried)
+- L3 (other insights)
+
 ```rust
 async fn derive(
     &mut self,
@@ -403,10 +763,25 @@ async fn derive(
     insight: &[u8],
     metadata: Metadata,
 ) -> Result<Hash> {
-    // 1. Verify all sources were queried
+    // 1. Verify all sources are accessible
     for source in sources {
-        if !self.cache.is_cached(source) && !self.content_store.exists(source) {
-            return Err(Error::SourceNotQueried(source.clone()));
+        let manifest = self.get_manifest(source)?;
+        
+        match manifest.content_type {
+            ContentType::L2 => {
+                // L2 must be owned (it's personal, never queried)
+                if manifest.owner != self.identity.peer_id() {
+                    return Err(Error::InvalidOperation(
+                        "can only derive from your own L2".into()
+                    ));
+                }
+            }
+            _ => {
+                // Other types: must be queried or owned
+                if !self.cache.is_cached(source) && !self.content_store.exists(source) {
+                    return Err(Error::SourceNotQueried(source.clone()));
+                }
+            }
         }
     }
     
@@ -415,7 +790,7 @@ async fn derive(
         .map(|h| self.get_manifest(h))
         .collect::<Result<Vec<_>>>()?;
     
-    // 3. Compute provenance
+    // 3. Compute provenance (roots are always L0/L1, traced through L2/L3)
     let mut root_entries: HashMap<Hash, ProvenanceEntry> = HashMap::new();
     
     for source in &source_manifests {
@@ -452,6 +827,7 @@ async fn derive(
     let manifest = Manifest {
         hash: hash.clone(),
         content_type: ContentType::L3,
+        owner: self.identity.peer_id(),
         version,
         visibility: Visibility::Private,
         access: AccessControl::default(),
@@ -937,20 +1313,22 @@ async fn trigger_settlement(&mut self) -> Result<Option<SettlementBatch>> {
 
 ```rust
 // Content lifecycle
-pub async fn create(...) -> Result<Hash>;
-pub async fn extract_l1(...) -> Result<L1Summary>;
-pub async fn publish(...) -> Result<()>;
+pub async fn create(...) -> Result<Hash>;           // L0/L1 only
+pub async fn extract_l1(...) -> Result<L1Summary>;  // L0 → L1
+pub async fn build_l2(...) -> Result<Hash>;         // L1s → L2 (always private)
+pub async fn merge_l2(...) -> Result<Hash>;         // L2s → L2 (always private)
+pub async fn publish(...) -> Result<()>;            // NOT allowed for L2
 pub async fn unpublish(...) -> Result<()>;
 pub async fn update(...) -> Result<Hash>;
-pub async fn derive(...) -> Result<Hash>;
+pub async fn derive(...) -> Result<Hash>;           // Any sources → L3
 pub async fn reference_l3_as_l0(...) -> Result<()>;
 
-// Querying
+// Querying (L2 is never queried)
 pub async fn preview(...) -> Result<(Manifest, L1Summary)>;
-pub async fn query(...) -> Result<QueryResponse>;  // Auto-opens channel if needed
+pub async fn query(...) -> Result<QueryResponse>;
 pub async fn get_versions(...) -> Result<Vec<VersionInfo>>;
 
-// Visibility/access
+// Visibility/access (L2 is always private)
 pub async fn set_visibility(...) -> Result<()>;
 pub async fn set_access(...) -> Result<()>;
 
@@ -960,10 +1338,10 @@ pub async fn accept_channel(...) -> Result<()>;
 pub async fn close_channel(...) -> Result<()>;
 pub async fn dispute_channel(...) -> Result<()>;
 
-// Settlement
+// Settlement (L2 is invisible to settlement)
 pub async fn trigger_settlement(...) -> Result<Option<SettlementBatch>>;
 
-// Handlers (for incoming messages)
+// Handlers (for incoming messages - no L2 handlers needed)
 pub async fn handle_preview_request(...) -> Result<PreviewResponsePayload>;
 pub async fn handle_query_request(...) -> Result<QueryResponsePayload>;
 pub async fn handle_version_request(...) -> Result<VersionResponsePayload>;
@@ -975,23 +1353,55 @@ pub async fn handle_channel_close(...) -> Result<ChannelClosePayload>;
 
 ## Test Cases
 
+### Content Lifecycle
 1. **Create L0**: Creates content, hash matches, owner set
-2. **Extract L1**: Rule-based extraction produces mentions
-3. **Create then publish**: Visibility changes, price set
-4. **Unpublish**: Visibility returns to Private
-5. **Update version**: New hash, version links correctly
-6. **Derive L3**: Sources merged, depth incremented, owner set
-7. **Query flow**: Request → auto-open channel → payment → response → cache
-8. **Query with existing channel**: Uses existing channel
-9. **Query insufficient balance**: Returns PAYMENT_REQUIRED
-10. **Access denied**: Private content returns NotFound
-11. **Unlisted access**: With hash works, without fails
-12. **Insufficient payment**: Rejected
-13. **Reference L3**: Only works if queried first
-14. **Channel open**: Creates channel, both sides have state
-15. **Channel close**: Cooperative close submits to chain
-16. **Channel dispute**: Submits dispute with latest state
-17. **Version request**: Returns all versions for root
+2. **Create L2 via create()**: Fails with "Use build_l2()"
+3. **Create L3 via create()**: Fails with "Use derive()"
+4. **Extract L1**: Rule-based extraction produces mentions
+
+### L2 Entity Graph
+5. **Build L2 from L1s**: Creates private L2, entities extracted
+6. **Build L2 no sources**: Fails
+7. **Build L2 from non-L1**: Fails
+8. **Build L2 from unqueried L1**: Fails
+9. **Merge L2s**: Combines entities, updates relationships
+10. **Merge L2s from different owners**: Fails ("can only merge your own L2s")
+11. **Merge single L2**: Fails (requires >= 2)
+12. **L2 is always private**: visibility forced to Private
+13. **L2 has zero price**: price forced to 0
+14. **Publish L2**: Fails with L2CannotPublish
+
+### L3 Derivation  
+15. **Derive L3 from L1**: Works, provenance correct
+16. **Derive L3 from L2**: Works if owned, provenance traces to L0/L1
+17. **Derive L3 from someone else's L2**: Fails
+18. **Derive L3 from mix**: L0, L1, L2, L3 all work together
+
+### Publishing
+19. **Publish L0/L1/L3**: Works, visibility changes
+20. **Unpublish**: Visibility returns to Private
+21. **Update version**: New hash, version links correctly
+
+### Query Flow
+22. **Query flow**: Request → auto-open channel → payment → response → cache
+23. **Query with existing channel**: Uses existing channel
+24. **Query insufficient balance**: Returns PAYMENT_REQUIRED
+25. **Query L2**: Not possible (L2 is always private)
+26. **Access denied**: Private content returns NotFound
+27. **Unlisted access**: With hash works, without fails
+28. **Insufficient payment**: Rejected
+
+### Economics
+29. **L3 from L2 provenance**: root_L0L1 contains original L0/L1, not L2
+30. **Settlement for L3**: L2 creator gets nothing, L0/L1 creators paid
+
+### Other Operations
+31. **Reference L3**: Only works if queried first
+32. **Channel open**: Creates channel, both sides have state
+33. **Channel close**: Cooperative close submits to chain
+34. **Channel dispute**: Submits dispute with latest state
+35. **Version request**: Returns all versions for root
+36. **Settlement trigger**: Creates batch, submits to chain
 18. **Settlement trigger**: Creates batch, submits to chain
 19. **Settlement threshold**: Triggers when threshold reached
 20. **Settlement interval**: Triggers after time elapsed

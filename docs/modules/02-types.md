@@ -22,12 +22,23 @@ pub enum ContentType {
     L0 = 0x00,
     /// Mentions (extracted atomic facts)
     L1 = 0x01,
+    /// Entity Graph (personal knowledge structure) - always private
+    L2 = 0x02,
     /// Insights (emergent synthesis)
     L3 = 0x03,
 }
 ```
 
-**Note:** L2 (Entity Graph) is internal only, not part of protocol messages.
+**Knowledge Layer Semantics:**
+
+| Layer | Queryable | Purpose |
+|-------|-----------|---------|
+| L0 | Yes | Original source material |
+| L1 | Yes | Structured, quotable claims |
+| L2 | **No** | Your personal perspective (cross-document linking) |
+| L3 | Yes | Original analysis and conclusions |
+
+**Note:** L2 is personal — always `visibility = Private`, never announced, never queried by others.
 
 ---
 
@@ -124,6 +135,238 @@ pub enum Confidence {
 
 ---
 
+## §4.4a Entity Graph (L2)
+
+L2 represents your personal knowledge graph — how you link entities across documents you've studied.
+
+### URI Type
+
+```rust
+/// URI for RDF interoperability
+/// Can be:
+///   - Full URI: "http://schema.org/Person"
+///   - Compact URI (CURIE): "schema:Person" (expanded using prefixes)
+///   - Protocol-defined: "ndl:Person"
+pub type Uri = String;
+```
+
+### Prefix Mapping
+
+```rust
+/// Maps short prefixes to full URI namespaces
+pub struct PrefixMap {
+    pub entries: Vec<PrefixEntry>,
+}
+
+pub struct PrefixEntry {
+    /// Short prefix, e.g., "schema"
+    pub prefix: String,
+    /// Full URI namespace, e.g., "http://schema.org/"
+    pub uri: String,
+}
+
+impl Default for PrefixMap {
+    fn default() -> Self {
+        Self {
+            entries: vec![
+                PrefixEntry { prefix: "ndl".into(), uri: "https://nodalync.io/ontology/".into() },
+                PrefixEntry { prefix: "schema".into(), uri: "http://schema.org/".into() },
+                PrefixEntry { prefix: "foaf".into(), uri: "http://xmlns.com/foaf/0.1/".into() },
+                PrefixEntry { prefix: "dc".into(), uri: "http://purl.org/dc/elements/1.1/".into() },
+                PrefixEntry { prefix: "rdf".into(), uri: "http://www.w3.org/1999/02/22-rdf-syntax-ns#".into() },
+                PrefixEntry { prefix: "rdfs".into(), uri: "http://www.w3.org/2000/01/rdf-schema#".into() },
+                PrefixEntry { prefix: "xsd".into(), uri: "http://www.w3.org/2001/XMLSchema#".into() },
+                PrefixEntry { prefix: "owl".into(), uri: "http://www.w3.org/2002/07/owl#".into() },
+            ],
+        }
+    }
+}
+```
+
+### L2 Entity Graph
+
+```rust
+pub struct L2EntityGraph {
+    /// H(serialized entities + relationships)
+    pub id: Hash,
+    
+    // === Sources ===
+    /// L1 summaries this graph was built from
+    pub source_l1s: Vec<L1Reference>,
+    /// Other L2 graphs merged/extended (for MERGE_L2)
+    pub source_l2s: Vec<Hash>,
+    
+    // === Namespace Prefixes ===
+    pub prefixes: PrefixMap,
+    
+    // === Graph Content ===
+    pub entities: Vec<Entity>,
+    pub relationships: Vec<Relationship>,
+    
+    // === Statistics ===
+    pub entity_count: u32,
+    pub relationship_count: u32,
+    pub source_mention_count: u32,
+}
+
+pub struct L1Reference {
+    /// Hash of the L1Summary content
+    pub l1_hash: Hash,
+    /// The original L0 this L1 came from
+    pub l0_hash: Hash,
+    /// Which specific mentions were used (empty = all)
+    pub mention_ids_used: Vec<Hash>,
+}
+```
+
+### Entity
+
+```rust
+pub struct Entity {
+    /// Stable entity ID: H(canonical_uri || canonical_label)
+    pub id: Hash,
+    
+    // === Identity ===
+    /// Primary human-readable name (max 200 chars)
+    pub canonical_label: String,
+    /// Canonical URI, e.g., "dbr:Albert_Einstein"
+    pub canonical_uri: Option<Uri>,
+    /// Alternative names/spellings (max 50)
+    pub aliases: Vec<String>,
+    
+    // === Type (RDF-compatible) ===
+    /// e.g., ["schema:Person", "foaf:Person"]
+    pub entity_types: Vec<Uri>,
+    
+    // === Evidence ===
+    /// Which L1 mentions establish this entity
+    pub source_mentions: Vec<MentionRef>,
+    
+    // === Confidence ===
+    /// 0.0 - 1.0, resolution confidence
+    pub confidence: f64,
+    pub resolution_method: ResolutionMethod,
+    
+    // === Optional Metadata ===
+    /// Summary description (max 500 chars)
+    pub description: Option<String>,
+    /// owl:sameAs links to external entities
+    pub same_as: Option<Vec<Uri>>,
+}
+
+pub struct MentionRef {
+    /// Which L1 contains this mention
+    pub l1_hash: Hash,
+    /// Specific mention ID within that L1
+    pub mention_id: Hash,
+}
+
+#[repr(u8)]
+pub enum ResolutionMethod {
+    /// Same string
+    ExactMatch = 0x00,
+    /// Case/punctuation normalized
+    Normalized = 0x01,
+    /// Known alias matched
+    Alias = 0x02,
+    /// Pronoun/reference resolved
+    Coreference = 0x03,
+    /// Matched via external KB
+    ExternalLink = 0x04,
+    /// Human-verified
+    Manual = 0x05,
+    /// ML model assisted
+    AIAssisted = 0x06,
+}
+```
+
+### Relationship
+
+```rust
+pub struct Relationship {
+    /// H(subject || predicate || object)
+    pub id: Hash,
+    
+    // === Triple ===
+    /// Entity ID (subject)
+    pub subject: Hash,
+    /// RDF predicate URI, e.g., "schema:worksFor"
+    pub predicate: Uri,
+    /// Entity ID, external ref, or literal value
+    pub object: RelationshipObject,
+    
+    // === Evidence ===
+    /// Mentions that support this relationship
+    pub source_mentions: Vec<MentionRef>,
+    /// 0.0 - 1.0
+    pub confidence: f64,
+    
+    // === Temporal (optional) ===
+    pub valid_from: Option<Timestamp>,
+    pub valid_to: Option<Timestamp>,
+}
+
+pub enum RelationshipObject {
+    /// Reference to another entity in this graph
+    EntityRef(Hash),
+    /// Reference to external entity by URI
+    ExternalRef(Uri),
+    /// A typed literal value
+    Literal(LiteralValue),
+}
+
+pub struct LiteralValue {
+    /// The value as string
+    pub value: String,
+    /// XSD datatype URI, e.g., "xsd:date" (None = plain string)
+    pub datatype: Option<Uri>,
+    /// Language tag, e.g., "en" (for strings only)
+    pub language: Option<String>,
+}
+```
+
+### L2 Build/Merge Configuration
+
+```rust
+pub struct L2BuildConfig {
+    /// Custom prefix mappings (merged with defaults)
+    pub prefixes: Option<PrefixMap>,
+    /// Default entity type if not detected, default: "ndl:Concept"
+    pub default_entity_type: Option<Uri>,
+    /// Minimum confidence to merge entities (default: 0.8)
+    pub resolution_threshold: Option<f64>,
+    /// Link to external knowledge bases
+    pub use_external_kb: Option<bool>,
+    /// Which KBs: ["http://www.wikidata.org/", ...]
+    pub external_kb_list: Option<Vec<Uri>>,
+    /// Infer implicit relationships
+    pub extract_implicit: Option<bool>,
+    /// Limit to specific predicates
+    pub relationship_predicates: Option<Vec<Uri>>,
+}
+
+pub struct L2MergeConfig {
+    /// Override prefix mappings
+    pub prefixes: Option<PrefixMap>,
+    /// Confidence threshold for cross-graph entity merging
+    pub entity_merge_threshold: Option<f64>,
+    /// Index of source to prefer on conflicts
+    pub prefer_source: Option<u32>,
+}
+```
+
+**L2 Constraints:**
+- `visibility` MUST be `Private` (L2 is never shared)
+- `economics.price` MUST be `0` (L2 is never queried)
+- `source_l1s.len() >= 1`
+- `entities.len() >= 1`
+- All entity IDs unique within graph
+- All relationship entity refs point to valid entities or external URIs
+- All MentionRefs point to valid L1s in `source_l1s`
+- `0.0 <= confidence <= 1.0`
+
+---
+
 ## §4.5 Provenance
 
 ```rust
@@ -150,9 +393,12 @@ pub struct ProvenanceEntry {
 ```
 
 **Constraints:**
+- `root_L0L1` contains only L0/L1 entries (never L2 or L3)
 - For L0: `root_L0L1 = [self]`, `derived_from = []`, `depth = 0`
-- For L3: `root_L0L1.len() >= 1`, `derived_from.len() >= 1`
-- All hashes in `derived_from` must have been queried by creator
+- For L1: `root_L0L1 = [parent L0]`, `derived_from = [L0 hash]`, `depth = 1`
+- For L2: `root_L0L1 = merged from source L1s`, `derived_from = L1/L2 hashes`, `depth >= 2`
+- For L3: `root_L0L1.len() >= 1`, `derived_from.len() >= 1`, `depth = max(sources) + 1`
+- All hashes in `derived_from` must have been queried by creator (or owned)
 - No self-reference allowed
 
 ---
@@ -378,6 +624,16 @@ pub mod constants {
     pub const MAX_MENTION_CONTENT_LENGTH: usize = 1000;
     pub const MAX_QUOTE_LENGTH: usize = 500;
     
+    // L2 Entity Graph limits
+    pub const MAX_ENTITIES_PER_L2: u32 = 10_000;
+    pub const MAX_RELATIONSHIPS_PER_L2: u32 = 50_000;
+    pub const MAX_ALIASES_PER_ENTITY: usize = 50;
+    pub const MAX_CANONICAL_LABEL_LENGTH: usize = 200;
+    pub const MAX_PREDICATE_LENGTH: usize = 100;
+    pub const MAX_ENTITY_DESCRIPTION_LENGTH: usize = 500;
+    pub const MAX_SOURCE_L1S_PER_L2: usize = 100;
+    pub const MAX_SOURCE_L2S_PER_MERGE: usize = 20;
+    
     // Economics
     pub const MIN_PRICE: Amount = 1;
     pub const MAX_PRICE: Amount = 10_000_000_000_000_000;  // 10^16
@@ -427,6 +683,16 @@ pub enum ErrorCode {
     InvalidVersion = 0x0202,
     InvalidManifest = 0x0203,
     ContentTooLarge = 0x0204,
+    
+    // L2 Entity Graph Errors (0x0210 - 0x021F)
+    L2InvalidStructure = 0x0210,
+    L2MissingSource = 0x0211,
+    L2EntityLimit = 0x0212,
+    L2RelationshipLimit = 0x0213,
+    L2InvalidEntityRef = 0x0214,
+    L2CycleDetected = 0x0215,
+    L2InvalidUri = 0x0216,
+    L2CannotPublish = 0x0217,
     
     // Network Errors (0x0300 - 0x03FF)
     PeerNotFound = 0x0300,

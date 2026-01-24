@@ -6,15 +6,21 @@ Track implementation progress by checking off items as they're completed. Each i
 
 | Phase | Status | Notes |
 |-------|--------|-------|
-| Phase 1: Foundation | ✅ Complete | nodalync-crypto, nodalync-types |
-| Phase 2: Core Logic | ✅ Complete | nodalync-wire, nodalync-store, nodalync-valid, nodalync-econ |
-| Phase 3: Operations | ✅ Complete | nodalync-ops fully wired with network integration |
+| Phase 1: Foundation | ✅ Complete | nodalync-crypto, nodalync-types (needs L2 update) |
+| Phase 2: Core Logic | ✅ Complete | nodalync-wire, nodalync-store, nodalync-valid (needs L2), nodalync-econ |
+| Phase 3: Operations | ✅ Complete | nodalync-ops (needs L2: BUILD_L2, MERGE_L2) |
 | Phase 4: External | 🟡 Partial | nodalync-net complete, nodalync-settle placeholder only |
 | Phase 5: CLI | 🔴 Not Started | nodalync-cli placeholder only |
 
-**Recent Changes:** Network integration completed in nodalync-ops. All publish, query, channel, and settlement operations now properly wire to the Network trait when available, with graceful fallback to local-only mode.
+**Recent Changes:** 
+- Network integration completed in nodalync-ops
+- **Spec v0.2.0:** L2 Entity Graph elevated to protocol-level content type
+- L2 is personal/private (never queried), uses URI-based ontology for RDF interop
+- Module docs updated: 02-types.md, 05-valid.md, 07-ops.md
 
 **Test Status:** 598+ tests passing across all crates.
+
+**Next Priority:** Implement L2 types, validation, and operations (BUILD_L2, MERGE_L2)
 
 ## Legend
 - [ ] Not started
@@ -61,7 +67,9 @@ Track implementation progress by checking off items as they're completed. Each i
 
 #### §4.1 ContentType
 - [x] Enum: L0 = 0x00, L1 = 0x01, L3 = 0x03
+- [ ] **Add L2 = 0x02** (spec v0.2.0)
 - [x] Serialization matches spec
+- [ ] L2 documented as always-private
 
 #### §4.2 Visibility
 - [x] Enum: Private = 0x00, Unlisted = 0x01, Shared = 0x02
@@ -79,10 +87,28 @@ Track implementation progress by checking off items as they're completed. Each i
 - [x] Classification enum
 - [x] Confidence enum
 
+#### §4.4a Entity Graph (L2) — NEW in spec v0.2.0
+- [ ] `Uri` type alias (String for RDF interop)
+- [ ] `PrefixMap` struct with default prefixes (ndl, schema, foaf, etc.)
+- [ ] `PrefixEntry` struct (prefix, uri)
+- [ ] `L2EntityGraph` struct (id, source_l1s, source_l2s, prefixes, entities, relationships, counts)
+- [ ] `L1Reference` struct (l1_hash, l0_hash, mention_ids_used)
+- [ ] `Entity` struct (id, canonical_label, canonical_uri, aliases, entity_types, source_mentions, confidence, resolution_method, description, same_as)
+- [ ] `MentionRef` struct (l1_hash, mention_id)
+- [ ] `ResolutionMethod` enum (ExactMatch, Normalized, Alias, Coreference, ExternalLink, Manual, AIAssisted)
+- [ ] `Relationship` struct (id, subject, predicate, object, source_mentions, confidence, valid_from, valid_to)
+- [ ] `RelationshipObject` enum (EntityRef, ExternalRef, Literal)
+- [ ] `LiteralValue` struct (value, datatype, language)
+- [ ] `L2BuildConfig` struct
+- [ ] `L2MergeConfig` struct
+- [ ] Test: L2EntityGraph serialization roundtrip
+- [ ] Test: PrefixMap default includes ndl, schema, foaf
+
 #### §4.5 Provenance
 - [x] Provenance struct: root_L0L1, derived_from, depth
 - [x] ProvenanceEntry struct: hash, owner, visibility, weight
 - [x] Constraints documented in types
+- [ ] **Update constraints for L2** (root_L0L1 contains only L0/L1, never L2/L3)
 
 #### §4.6 AccessControl
 - [x] Struct: allowlist, denylist, require_bond, bond_amount, max_queries_per_peer
@@ -156,6 +182,8 @@ Track implementation progress by checking off items as they're completed. Each i
 - [x] MessageHash domain separator
 - [x] ChannelStateHash domain separator
 
+**Note:** No L2-specific wire messages needed (L2 is never queried remotely)
+
 ---
 
 ### `nodalync-store` (Spec §5)
@@ -197,6 +225,8 @@ Track implementation progress by checking off items as they're completed. Each i
 - [x] Test: provenance graph traversal
 - [x] Test: settlement queue operations
 
+**Note:** L2 storage uses existing content/manifest stores (no special handling needed)
+
 ---
 
 ### `nodalync-valid` (Spec §9)
@@ -209,7 +239,40 @@ Track implementation progress by checking off items as they're completed. Each i
 - [x] Tags count <= 20, each <= 50 chars
 - [x] content_type valid
 - [x] visibility valid
+- [ ] **Add L2 to valid content types**
+- [ ] **L2-specific validation dispatch**
 - [x] Test: all validation rules
+
+#### §9.1a L2 Content Validation — NEW in spec v0.2.0
+- [ ] L2 visibility MUST be Private
+- [ ] L2 price MUST be 0
+- [ ] Deserialize L2EntityGraph
+- [ ] l2.id == manifest.hash
+- [ ] source_l1s.len() >= 1
+- [ ] source_l1s.len() <= MAX_SOURCE_L1S_PER_L2
+- [ ] entities.len() >= 1
+- [ ] entities.len() <= MAX_ENTITIES_PER_L2
+- [ ] relationships.len() <= MAX_RELATIONSHIPS_PER_L2
+- [ ] entity_count == entities.len()
+- [ ] relationship_count == relationships.len()
+- [ ] validate_prefix_map()
+- [ ] validate each entity (label length, aliases count, URI validity, confidence range, mention refs)
+- [ ] validate each relationship (subject exists, predicate URI valid, object valid, confidence range)
+- [ ] No duplicate entity IDs
+- [ ] Test: L2 with visibility != Private fails
+- [ ] Test: L2 with price != 0 fails
+- [ ] Test: L2 with empty entities fails
+- [ ] Test: L2 with duplicate entity IDs fails
+
+#### §9.1b URI/CURIE Validation — NEW in spec v0.2.0
+- [ ] `validate_uri(uri, prefixes)` — check full URI or valid CURIE
+- [ ] `expand_curie(curie, prefixes)` — expand "schema:Person" to full URI
+- [ ] Full URI must start with http:// or https://
+- [ ] CURIE prefix must exist in PrefixMap
+- [ ] Test: valid full URI passes
+- [ ] Test: valid CURIE passes
+- [ ] Test: unknown prefix fails
+- [ ] Test: CURIE expansion works
 
 #### §9.2 Version Validation
 - [x] v1: previous null, root == hash
@@ -222,13 +285,19 @@ Track implementation progress by checking off items as they're completed. Each i
 #### §9.3 Provenance Validation
 - [x] L0: root_L0L1 == [self], derived_from == [], depth == 0
 - [x] L3: root_L0L1 >= 1, derived_from >= 1
+- [ ] **L1: root_L0L1 from parent L0, derived_from = [L0], depth == 1**
+- [ ] **L2: root_L0L1 merged from L1s (only L0/L1 entries), derived_from = L1/L2 hashes, depth >= 2**
+- [ ] **All roots must be L0 or L1 (never L2 or L3)**
 - [x] All derived_from exist in sources
 - [x] root_L0L1 computation correct
 - [x] depth == max(sources.depth) + 1
 - [x] No self-reference
 - [x] Test: valid L0 provenance
+- [ ] Test: valid L1 provenance
+- [ ] Test: valid L2 provenance
 - [x] Test: valid L3 provenance
 - [x] Test: invalid provenance rejected
+- [ ] Test: L2 with L2/L3 in root_L0L1 fails
 
 #### §9.4 Payment Validation
 - [x] amount >= price
@@ -258,6 +327,10 @@ Track implementation progress by checking off items as they're completed. Each i
 - [x] Bond requirement check
 - [x] Test: all access scenarios
 
+#### §9.7 Publish Validation — NEW in spec v0.2.0
+- [ ] L2 content CANNOT be published (return L2CannotPublish error)
+- [ ] Test: PUBLISH on L2 fails
+
 ---
 
 ### `nodalync-econ` (Spec §10)
@@ -269,6 +342,8 @@ Track implementation progress by checking off items as they're completed. Each i
 - [x] Weight handling for duplicates
 - [x] Owner gets synthesis fee + own roots
 - [x] Test: distribution example from spec (Bob/Alice/Carol)
+
+**Note:** L2 is invisible to economics — L2 creator earns via L3 synthesis fees
 
 #### §10.3 Price Constraints
 - [x] MIN_PRICE = 1
@@ -297,7 +372,9 @@ Track implementation progress by checking off items as they're completed. Each i
 - [x] **Owner field set to creator**
 - [x] Manifest creation
 - [x] Local storage
+- [ ] **Reject L2 content_type** (use build_l2() instead)
 - [x] Test: create L0 content
+- [ ] Test: create with L2 content_type fails
 
 #### §7.1.2 EXTRACT_L1
 - [x] Load content
@@ -309,12 +386,49 @@ Track implementation progress by checking off items as they're completed. Each i
 - [x] **L1Extractor trait for plugin architecture**
 - [x] Test: L1 extraction
 
+#### §7.1.2a BUILD_L2 — NEW in spec v0.2.0
+- [ ] Validate source_l1s.len() >= 1
+- [ ] Validate source_l1s.len() <= MAX_SOURCE_L1S_PER_L2
+- [ ] Load and verify all L1 sources (must be queried or owned)
+- [ ] Extract entities from mentions
+- [ ] Resolve entities (merge duplicates, link to external KBs)
+- [ ] Extract relationships
+- [ ] Build L2EntityGraph structure
+- [ ] Compute hash
+- [ ] Compute provenance (merge roots from source L1s)
+- [ ] Create manifest with visibility=Private, price=0
+- [ ] Validate L2 content
+- [ ] Store locally
+- [ ] Test: build L2 from single L1
+- [ ] Test: build L2 from multiple L1s
+- [ ] Test: build L2 with no sources fails
+- [ ] Test: build L2 from non-L1 fails
+- [ ] Test: L2 is always private
+
+#### §7.1.2b MERGE_L2 — NEW in spec v0.2.0
+- [ ] Validate source_l2s.len() >= 2
+- [ ] Validate source_l2s.len() <= MAX_SOURCE_L2S_PER_MERGE
+- [ ] Load all L2 sources (must be local/owned)
+- [ ] Verify all sources are owned by current identity
+- [ ] Unify prefix mappings
+- [ ] Cross-graph entity resolution
+- [ ] Merge relationships (update entity refs)
+- [ ] Deduplicate L1 refs
+- [ ] Compute provenance (merge roots from source L2s)
+- [ ] Create manifest with visibility=Private, price=0
+- [ ] Validate and store
+- [ ] Test: merge two L2s
+- [ ] Test: merge L2 from different owner fails
+- [ ] Test: merge single L2 fails
+
 #### §7.1.3 PUBLISH
 - [x] Update visibility
 - [x] Update price
 - [x] Update access control
 - [x] DHT announce (if Shared) — wired in publish_content()
+- [ ] **Reject L2 content** (return L2CannotPublish)
 - [x] Test: publish with each visibility
+- [ ] Test: publish L2 fails
 
 #### §7.1.4 UPDATE
 - [x] New hash computation
@@ -325,6 +439,7 @@ Track implementation progress by checking off items as they're completed. Each i
 
 #### §7.1.5 DERIVE
 - [x] Verify all sources queried
+- [ ] **Allow L2 sources if owned** (L2 is never queried, only local)
 - [x] Compute provenance (merge root_L0L1)
 - [x] Handle weight for duplicates
 - [x] Calculate depth
@@ -332,6 +447,8 @@ Track implementation progress by checking off items as they're completed. Each i
 - [x] Store locally
 - [x] Test: derive from multiple sources
 - [x] Test: weight accumulation
+- [ ] Test: derive from own L2
+- [ ] Test: derive from someone else's L2 fails
 
 #### §7.1.6 REFERENCE_L3_AS_L0
 - [x] Verify L3 was queried
@@ -368,6 +485,8 @@ Track implementation progress by checking off items as they're completed. Each i
 - [x] **Handler: write ALL distributions to settlement queue**
 - [x] **Handler: check settlement trigger**
 - [x] Test: full query flow — unit tests pass, integration test pending
+
+**Note:** L2 is never queried (always private) — no L2 query handling needed
 
 #### §7.3.1 CHANNEL_OPEN
 - [x] Channel ID generation
@@ -498,6 +617,8 @@ Track implementation progress by checking off items as they're completed. Each i
 - [ ] `nodalync visibility <hash> <tier>` — Change visibility
 - [ ] `nodalync versions <hash>` — List versions
 - [ ] `nodalync update <hash> <file>` — Create new version
+- [ ] `nodalync build-l2 <l1-hashes...>` — Build L2 entity graph (NEW)
+- [ ] `nodalync merge-l2 <l2-hashes...>` — Merge L2 graphs (NEW)
 
 #### Configuration
 - [ ] Config file loading
@@ -536,6 +657,16 @@ Track implementation progress by checking off items as they're completed. Each i
 - [x] DHT_ALPHA = 3
 - [x] DHT_REPLICATION = 20
 
+#### L2 Constants — NEW in spec v0.2.0
+- [ ] MAX_ENTITIES_PER_L2 = 10000
+- [ ] MAX_RELATIONSHIPS_PER_L2 = 50000
+- [ ] MAX_ALIASES_PER_ENTITY = 50
+- [ ] MAX_CANONICAL_LABEL_LENGTH = 200
+- [ ] MAX_PREDICATE_LENGTH = 100
+- [ ] MAX_ENTITY_DESCRIPTION_LENGTH = 500
+- [ ] MAX_SOURCE_L1S_PER_L2 = 100
+- [ ] MAX_SOURCE_L2S_PER_MERGE = 20
+
 ---
 
 ## Error Codes Verification (Appendix C)
@@ -561,6 +692,16 @@ Track implementation progress by checking off items as they're completed. Each i
 - [x] TIMEOUT = 0x0302
 - [x] INTERNAL_ERROR = 0xFFFF
 
+#### L2 Error Codes — NEW in spec v0.2.0
+- [ ] L2_INVALID_STRUCTURE = 0x0210
+- [ ] L2_MISSING_SOURCE = 0x0211
+- [ ] L2_ENTITY_LIMIT = 0x0212
+- [ ] L2_RELATIONSHIP_LIMIT = 0x0213
+- [ ] L2_INVALID_ENTITY_REF = 0x0214
+- [ ] L2_CYCLE_DETECTED = 0x0215
+- [ ] L2_INVALID_URI = 0x0216
+- [ ] L2_CANNOT_PUBLISH = 0x0217
+
 ---
 
 ## Integration Tests
@@ -572,6 +713,12 @@ Track implementation progress by checking off items as they're completed. Each i
 - [ ] Multi-node: two nodes, one publishes, one queries — requires integration harness
 - [ ] Multi-node: provenance chain across 3+ nodes — requires integration harness
 
+#### L2 Integration Tests — NEW
+- [ ] Full flow: create L0 → extract L1 → build L2 → derive L3
+- [ ] Full flow: multiple L1s → build L2 → merge L2s
+- [ ] Full flow: L3 from L2 → query L3 → verify provenance traces to L0/L1
+- [ ] Verify L2 creator gets nothing when L3 queried (value via synthesis fee only)
+
 ---
 
 ## Documentation
@@ -581,6 +728,7 @@ Track implementation progress by checking off items as they're completed. Each i
 - [x] Public API fully documented
 - [x] Examples in doc comments
 - [x] Architecture decision records (DESIGN_DECISIONS.md)
+- [x] Module docs updated for L2 (02-types.md, 05-valid.md, 07-ops.md)
 
 ---
 

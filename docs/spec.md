@@ -1,8 +1,8 @@
 # Nodalync Protocol Specification
 
-**Version:** 0.1.0-draft  
+**Version:** 0.2.0-draft  
 **Author:** Gabriel Giangi  
-**Date:** January 2025  
+**Date:** January 2026  
 **Status:** Draft
 
 ---
@@ -29,7 +29,7 @@
 
 ### 1.1 Purpose
 
-The Nodalync Protocol enables decentralized knowledge exchange with cryptographic provenance and automatic compensation. Participants publish knowledge (L0), extract atomic facts (L1), and synthesize insights (L3). Every query triggers payment distributed through the complete provenance chain.
+The Nodalync Protocol enables decentralized knowledge exchange with cryptographic provenance and automatic compensation. Participants publish knowledge (L0), extract atomic facts (L1), build entity graphs (L2), and synthesize insights (L3). Every query triggers payment distributed through the complete provenance chain to foundational contributors.
 
 ### 1.2 Design Principles
 
@@ -176,11 +176,23 @@ Anyone receiving C can verify:
 enum ContentType : uint8 {
     L0 = 0x00,      # Raw input (documents, notes, transcripts)
     L1 = 0x01,      # Mentions (extracted atomic facts)
+    L2 = 0x02,      # Entity Graph (linked entities and relationships)
     L3 = 0x03       # Insights (emergent synthesis)
 }
 ```
 
-Note: L2 (Entity Graph) is internal only, not part of protocol messages.
+**Knowledge Layer Semantics:**
+
+| Layer | Content | Typical Operation | Queryable | Value Added |
+|-------|---------|-------------------|-----------|-------------|
+| L0 | Raw documents, notes, transcripts | CREATE | Yes | Original source material |
+| L1 | Atomic facts extracted from L0 | EXTRACT_L1 | Yes | Structured, quotable claims |
+| L2 | Entities and relationships across L1s | BUILD_L2 | **No** (personal) | Cross-document linking, your perspective |
+| L3 | Novel insights synthesizing sources | DERIVE | Yes | Original analysis and conclusions |
+
+**L2 is Personal:** Your L2 represents your unique perspective — how you link entities, 
+resolve ambiguities, and structure knowledge. It is never shared or queried directly. 
+Its value surfaces when you create L3 insights that others find valuable enough to query.
 
 ### 4.2 Visibility
 
@@ -248,6 +260,192 @@ enum Confidence : uint8 {
 }
 ```
 
+### 4.4a Entity Graph (L2)
+
+L2 Entity Graphs are **personal knowledge structures**. They represent a node's 
+interpretation and linking of entities across their queried L1 sources. L2 is 
+never directly queried by others — its value surfaces when used to create L3 insights.
+
+```
+struct L2EntityGraph {
+    # === Core Identity ===
+    id: Hash,                           # H(serialized entities + relationships)
+    
+    # === Sources ===
+    source_l1s: L1Reference[],          # L1 summaries this graph was built from
+    source_l2s: Hash[],                 # Other L2 graphs merged/extended (optional)
+    
+    # === Namespace Prefixes (for compact URIs) ===
+    prefixes: PrefixMap,                # Maps short prefixes to full URIs
+    
+    # === Graph Content ===
+    entities: Entity[],                 # Resolved entities
+    relationships: Relationship[],      # Relationships between entities
+    
+    # === Statistics ===
+    entity_count: uint32,
+    relationship_count: uint32,
+    source_mention_count: uint32        # Total mentions linked
+}
+
+struct PrefixMap {
+    entries: PrefixEntry[]              # Ordered list of prefix mappings
+}
+
+struct PrefixEntry {
+    prefix: string,                     # Short form, e.g., "schema"
+    uri: string                         # Full URI, e.g., "http://schema.org/"
+}
+
+# Default prefixes (always available, can be overridden):
+#   "ndl"    -> "https://nodalync.io/ontology/"
+#   "schema" -> "http://schema.org/"
+#   "foaf"   -> "http://xmlns.com/foaf/0.1/"
+#   "dc"     -> "http://purl.org/dc/elements/1.1/"
+#   "rdf"    -> "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+#   "rdfs"   -> "http://www.w3.org/2000/01/rdf-schema#"
+#   "xsd"    -> "http://www.w3.org/2001/XMLSchema#"
+#   "owl"    -> "http://www.w3.org/2002/07/owl#"
+
+struct L1Reference {
+    l1_hash: Hash,                      # Hash of the L1Summary content
+    l0_hash: Hash,                      # The original L0 this L1 came from
+    mention_ids_used: Hash[]            # Which specific mentions were used
+}
+
+struct Entity {
+    id: Hash,                           # Stable entity ID: H(canonical_uri || canonical_label)
+    
+    # === Identity ===
+    canonical_label: string,            # Primary human-readable name (max 200 chars)
+    canonical_uri: Uri?,                # Optional: canonical URI (e.g., "dbr:Albert_Einstein")
+    aliases: string[],                  # Alternative names/spellings (max 50)
+    
+    # === Type (RDF-compatible) ===
+    entity_types: Uri[],                # e.g., ["schema:Person", "foaf:Person"]
+    
+    # === Evidence ===
+    source_mentions: MentionRef[],      # Which L1 mentions establish this entity
+    
+    # === Confidence ===
+    confidence: float64,                # 0.0 - 1.0, resolution confidence
+    resolution_method: ResolutionMethod,
+    
+    # === Optional Metadata ===
+    description: string?,               # Summary description (max 500 chars)
+    same_as: Uri[]?                     # Links to external entities (owl:sameAs)
+}
+
+# Uri can be:
+#   - Full URI: "http://schema.org/Person"
+#   - Compact URI (CURIE): "schema:Person" (expanded using prefixes)
+#   - Protocol-defined: "ndl:Person" (Nodalync ontology)
+type Uri = string
+
+struct MentionRef {
+    l1_hash: Hash,                      # Which L1 contains this mention
+    mention_id: Hash                    # Specific mention ID within that L1
+}
+
+struct Relationship {
+    id: Hash,                           # H(subject || predicate || object)
+    
+    # === Triple ===
+    subject: Hash,                      # Entity ID
+    predicate: Uri,                     # RDF predicate, e.g., "schema:worksFor"
+    object: RelationshipObject,         # Entity ID or literal
+    
+    # === Evidence ===
+    source_mentions: MentionRef[],      # Mentions that support this relationship
+    confidence: float64,                # 0.0 - 1.0
+    
+    # === Temporal (optional) ===
+    valid_from: Timestamp?,
+    valid_to: Timestamp?
+}
+
+enum RelationshipObject {
+    EntityRef(Hash),                    # Reference to another entity in this graph
+    ExternalRef(Uri),                   # Reference to external entity
+    Literal(LiteralValue)               # A typed value
+}
+
+struct LiteralValue {
+    value: string,                      # The value as string
+    datatype: Uri?,                     # XSD datatype, e.g., "xsd:date" (null = plain string)
+    language: string?                   # Language tag, e.g., "en" (for strings only)
+}
+
+# Standard XSD datatypes (use "xsd:" prefix):
+#   xsd:string, xsd:integer, xsd:decimal, xsd:boolean,
+#   xsd:date, xsd:dateTime, xsd:anyURI
+
+enum ResolutionMethod : uint8 {
+    ExactMatch    = 0x00,               # Same string
+    Normalized    = 0x01,               # Case/punctuation normalized
+    Alias         = 0x02,               # Known alias matched
+    Coreference   = 0x03,               # Pronoun/reference resolved
+    ExternalLink  = 0x04,               # Matched via external KB
+    Manual        = 0x05,               # Human-verified
+    AIAssisted    = 0x06                # ML model assisted
+}
+
+Constraints:
+    1. len(source_l1s) >= 1              # Must derive from at least one L1
+    2. len(entities) >= 1                 # Must have at least one entity
+    3. Each entity.id is unique within the graph
+    4. Each relationship references valid entity IDs (or external URIs)
+    5. All MentionRefs point to valid L1s in source_l1s
+    6. 0.0 <= confidence <= 1.0
+    7. len(canonical_label) <= 200
+    8. len(aliases) <= 50
+    9. All URIs are valid (full URI or valid CURIE with known prefix)
+    10. entity_count == len(entities)
+    11. relationship_count == len(relationships)
+    
+L2 Visibility:
+    - L2 content is ALWAYS Private (never Unlisted or Shared)
+    - L2 is never announced to DHT
+    - L2 has no price (cannot be queried for payment)
+    - L2's value is realized through L3 insights derived from it
+```
+
+### 4.4b Nodalync Ontology (ndl:)
+
+The protocol defines a minimal ontology at `https://nodalync.io/ontology/`:
+
+```
+# Entity Types
+ndl:Person
+ndl:Organization  
+ndl:Location
+ndl:Concept
+ndl:Event
+ndl:Work              # Paper, book, article
+ndl:Product
+ndl:Technology
+ndl:Metric            # Quantitative measure
+ndl:TimePoint
+
+# Relationship Predicates
+ndl:mentions          # L1 mention references entity
+ndl:relatedTo         # Generic relationship
+ndl:partOf
+ndl:createdBy
+ndl:locatedIn
+ndl:occurredAt
+ndl:hasValue
+ndl:sameAs            # Equivalent to owl:sameAs
+
+# Provenance Predicates
+ndl:derivedFrom       # Content derivation
+ndl:extractedFrom     # L1 extracted from L0
+ndl:builtFrom         # L2 built from L1s
+```
+
+Nodes are free to use any ontology. The `ndl:` namespace provides defaults
+for nodes that don't need external ontology integration.
+
 ### 4.5 Provenance
 
 ```
@@ -265,9 +463,34 @@ struct ProvenanceEntry {
 }
 
 Constraints:
-    - root_L0L1 MUST contain at least one entry for L3 content
+    - root_L0L1 contains entries of type L0 or L1 only (never L2 or L3)
     - L0 content: root_L0L1 = [self], derived_from = [], depth = 0
+    - L1 content: root_L0L1 = [parent L0], derived_from = [L0 hash], depth = 1
+    - L2 content: root_L0L1 = merged roots from source L1s, 
+                  derived_from = source L1/L2 hashes, depth = max(source.depth) + 1
+    - L3 content: root_L0L1 = merged roots from all sources,
+                  derived_from = source hashes, depth = max(source.depth) + 1
     - All entries in derived_from MUST have been queried by creator
+    
+Provenance Chain Examples:
+    Simple chain:
+        L0(doc) → L1(mentions) → L2(entities) → L3(insight)
+        depth:  0       1            2              3
+    
+    L3 deriving directly from L1 (valid, skipping L2):
+        L0(doc) → L1(mentions) → L3(insight)
+        depth:  0       1            2
+    
+    L3 from mix of L1 and L2:
+        L0(doc1) → L1(m1) → L2(graph) ─┐
+                                        ├→ L3(insight)
+        L0(doc2) → L1(m2) ─────────────┘
+        
+        L3.provenance = {
+            root_L0L1: [doc1, doc2],  # Merged from both paths
+            derived_from: [L2.hash, m2],
+            depth: 4  # max(3, 2) + 1
+        }
 ```
 
 ### 4.6 Access Control
@@ -848,26 +1071,165 @@ Procedure:
     5. Return summary
 ```
 
+#### 7.1.2a Build L2 (Entity Graph)
+
+Build an L2 Entity Graph from one or more L1 sources. L2 is your personal 
+knowledge structure — it is never published or queried by others.
+
+```
+BUILD_L2(source_l1s: Hash[], config: L2BuildConfig?) → Hash
+
+Preconditions:
+    - All source L1s have been queried (payment proof exists) OR are your own
+    - len(source_l1s) >= 1
+
+Procedure:
+    1. Verify all L1 sources are accessible:
+       For each l1_hash in source_l1s:
+           assert cache.has(l1_hash) OR content.has(l1_hash)
+           l1 = load_l1(l1_hash)
+           assert l1.content_type == L1
+           
+    2. Extract entities from mentions:
+       raw_entities = []
+       For each l1 in source_l1s:
+           For each mention in l1.mentions:
+               extracted = extract_entities(mention, config.prefixes)
+               raw_entities.extend(extracted)
+               
+    3. Resolve entities (merge duplicates):
+       resolved_entities = resolve_entities(raw_entities, config)
+       # Handles: exact match, alias resolution, coreference, external KB linking
+       # Assigns URIs from configured ontologies
+       
+    4. Extract relationships:
+       relationships = extract_relationships(resolved_entities, source_l1s, config)
+       # Uses predicates from configured ontologies (default: ndl:)
+       
+    5. Build L2 structure:
+       l2_graph = L2EntityGraph {
+           id: computed after serialization,
+           source_l1s: [L1Reference for each l1],
+           source_l2s: [],
+           prefixes: config.prefixes ?? default_prefixes(),
+           entities: resolved_entities,
+           relationships: relationships,
+           entity_count: len(resolved_entities),
+           relationship_count: len(relationships),
+           source_mention_count: total_mentions_linked
+       }
+       
+    6. Compute hash:
+       content = serialize(l2_graph)
+       hash = ContentHash(content)
+       l2_graph.id = hash
+       
+    7. Compute provenance:
+       root_entries = []
+       For each l1 in source_l1s:
+           l1_prov = get_provenance(l1)
+           For each entry in l1_prov.root_L0L1:
+               merge_or_increment(root_entries, entry)
+       
+       provenance = Provenance {
+           root_L0L1: root_entries,
+           derived_from: source_l1s,
+           depth: max(l1.provenance.depth for l1 in source_l1s) + 1
+       }
+       
+    8. Create manifest:
+       manifest = Manifest {
+           hash: hash,
+           content_type: L2,
+           owner: my_peer_id,
+           visibility: Private,           # L2 is ALWAYS private
+           economics: Economics { price: 0, ... },  # L2 has no price
+           provenance: provenance,
+           ...
+       }
+       
+    9. Store content and manifest locally
+    10. Return hash
+
+struct L2BuildConfig {
+    # Ontology configuration
+    prefixes: PrefixMap?,                # Custom prefix mappings
+    default_entity_type: Uri?,           # Default: "ndl:Concept"
+    
+    # Entity resolution settings
+    resolution_threshold: float64?,      # Minimum confidence to merge (default: 0.8)
+    use_external_kb: bool?,              # Link to external knowledge bases
+    external_kb_list: Uri[]?,            # Which KBs: ["http://www.wikidata.org/", ...]
+    
+    # Relationship extraction
+    extract_implicit: bool?,             # Infer implicit relationships
+    relationship_predicates: Uri[]?      # Limit to specific predicates
+}
+```
+
+#### 7.1.2b Merge L2
+
+Combine multiple of your own L2 Entity Graphs into a unified graph. This is useful
+when you have built separate graphs for different domains and want to unify them.
+
+```
+MERGE_L2(source_l2s: Hash[], config: L2MergeConfig?) → Hash
+
+Preconditions:
+    - All source L2s are your own (stored locally)
+    - len(source_l2s) >= 2
+
+Procedure:
+    1. Load all L2 sources (must be local, L2 is never queried)
+    2. Unify prefix mappings (merge, detect conflicts)
+    3. Collect all entities and relationships from sources
+    4. Cross-graph entity resolution (find same entities in different graphs)
+       # Match by: canonical_uri, same_as links, label similarity
+    5. Merge relationships (update entity references to merged IDs)
+    6. Build new L2 with:
+       source_l1s: union of all source L1 references
+       source_l2s: the input source_l2s
+       prefixes: merged prefix map
+    7. Compute provenance:
+       root_entries = merge roots from all source_l2s
+       provenance = Provenance {
+           root_L0L1: root_entries,
+           derived_from: source_l2s,
+           depth: max(l2.provenance.depth for l2 in source_l2s) + 1
+       }
+    8. Create manifest with visibility = Private
+    9. Store and return hash
+
+struct L2MergeConfig {
+    prefixes: PrefixMap?,                # Override prefix mappings
+    entity_merge_threshold: float64?,    # Confidence threshold for merging entities
+    prefer_source: uint32?               # Index of source to prefer on conflicts
+}
+```
+
 #### 7.1.3 Publish
 
-Make content available on the network.
+Make content available on the network. Note: L2 content cannot be published.
 
 ```
 PUBLISH(hash: Hash, visibility: Visibility, price: Amount, access: AccessControl?) → bool
 
 Preconditions:
     - Content exists locally
+    - content_type != L2  # L2 is always private
     - visibility != Private OR no-op
     
 Procedure:
     1. manifest = load_manifest(hash)
-    2. manifest.visibility = visibility
-    3. manifest.economics.price = price
-    4. manifest.access = access ?? default_access()
-    5. manifest.updated_at = now()
-    6. Save manifest
+    2. If manifest.content_type == L2:
+           Return error("L2 content cannot be published")
+    3. manifest.visibility = visibility
+    4. manifest.economics.price = price
+    5. manifest.access = access ?? default_access()
+    6. manifest.updated_at = now()
+    7. Save manifest
     
-    7. If visibility == Shared:
+    8. If visibility == Shared:
            l1_summary = get_or_extract_l1(hash)
            announce = AnnouncePayload {
                hash: hash,
@@ -879,7 +1241,7 @@ Procedure:
            }
            DHT.announce(hash, announce)
            
-    8. Return true
+    9. Return true
 ```
 
 #### 7.1.4 Update
@@ -927,6 +1289,12 @@ Create an L3 insight from multiple sources.
 ```
 DERIVE(sources: Hash[], insight_content: bytes, metadata: Metadata) → Hash
 
+Sources may include any combination of:
+    - L0 content (raw documents)
+    - L1 content (mention collections)
+    - L2 content (entity graphs)
+    - L3 content (other insights)
+
 Preconditions:
     - All sources have been queried (payment proof exists)
     - At least one source
@@ -942,6 +1310,10 @@ Procedure:
            source_prov = get_provenance(source)
            For each entry in source_prov.root_L0L1:
                merge_or_increment(root_entries, entry)
+       
+       # Note: For L0/L1 sources, merge their root_L0L1 directly
+       #       For L2 sources, merge the L2's root_L0L1 (traces back to L0/L1)
+       #       For L3 sources, merge the L3's root_L0L1 (recursive)
            
        provenance = Provenance {
            root_L0L1: root_entries,
@@ -1311,8 +1683,20 @@ Rules:
     4. len(manifest.metadata.description) <= 2000
     5. len(manifest.metadata.tags) <= 20
     6. For each tag: len(tag) <= 50
-    7. manifest.content_type in {L0, L1, L3}
+    7. manifest.content_type in {L0, L1, L2, L3}
     8. manifest.visibility in {Private, Unlisted, Shared}
+    
+    # L2-specific validation
+    9. If manifest.content_type == L2:
+           l2 = deserialize(content) as L2EntityGraph
+           assert l2.id == manifest.hash
+           assert len(l2.source_l1s) >= 1
+           assert len(l2.entities) >= 1
+           assert all entity IDs are unique
+           assert all relationship entity refs are valid
+           assert all MentionRefs point to valid source L1s
+           assert l2.entity_count == len(l2.entities)
+           assert l2.relationship_count == len(l2.relationships)
 ```
 
 ### 9.2 Version Validation
@@ -1344,21 +1728,38 @@ Rules:
            manifest.provenance.derived_from == []
            manifest.provenance.depth == 0
            
-    2. If manifest.content_type == L3:
+    2. If manifest.content_type == L1:
+           len(manifest.provenance.root_L0L1) >= 1
+           len(manifest.provenance.derived_from) == 1
+           derived_from[0] is an L0 hash
+           All root_L0L1 entries are type L0
+           manifest.provenance.depth == 1
+           
+    3. If manifest.content_type == L2:
+           len(manifest.provenance.root_L0L1) >= 1
+           len(manifest.provenance.derived_from) >= 1
+           All derived_from are L1 or L2 hashes
+           All root_L0L1 entries are type L0 or L1
+           manifest.provenance.depth >= 2
+           
+    4. If manifest.content_type == L3:
            len(manifest.provenance.root_L0L1) >= 1
            len(manifest.provenance.derived_from) >= 1
            All derived_from hashes exist in sources
+           All root_L0L1 entries are type L0 or L1
            
-    3. root_L0L1 computation is correct:
+    5. root_L0L1 computation is correct:
            computed = compute_root_L0L1(sources)
            manifest.provenance.root_L0L1 == computed
            
-    4. Depth is correct:
+    6. Depth is correct:
            manifest.provenance.depth == max(s.provenance.depth for s in sources) + 1
            
-    5. No self-reference:
+    7. No self-reference:
            manifest.hash not in manifest.provenance.derived_from
            manifest.hash not in [e.hash for e in manifest.provenance.root_L0L1]
+           
+    8. No cycles in provenance graph
 ```
 
 ### 9.4 Payment Validation
@@ -1874,6 +2275,16 @@ MAX_TAG_LENGTH = 50
 MAX_TITLE_LENGTH = 200
 MAX_DESCRIPTION_LENGTH = 2000
 
+# L2 Entity Graph limits
+MAX_ENTITIES_PER_L2 = 10000
+MAX_RELATIONSHIPS_PER_L2 = 50000
+MAX_ALIASES_PER_ENTITY = 50
+MAX_CANONICAL_LABEL_LENGTH = 200
+MAX_PREDICATE_LENGTH = 100
+MAX_ENTITY_DESCRIPTION_LENGTH = 500
+MAX_SOURCE_L1S_PER_L2 = 100
+MAX_SOURCE_L2S_PER_MERGE = 20
+
 # Economics
 MIN_PRICE = 1  # Smallest unit
 SYNTHESIS_FEE_NUMERATOR = 5
@@ -1913,6 +2324,16 @@ INVALID_PROVENANCE  = 0x0201
 INVALID_VERSION     = 0x0202
 INVALID_MANIFEST    = 0x0203
 CONTENT_TOO_LARGE   = 0x0204
+
+# L2 Entity Graph Errors (0x0210 - 0x021F)
+L2_INVALID_STRUCTURE    = 0x0210  # Malformed L2EntityGraph
+L2_MISSING_SOURCE       = 0x0211  # Source L1 not found
+L2_ENTITY_LIMIT         = 0x0212  # Too many entities
+L2_RELATIONSHIP_LIMIT   = 0x0213  # Too many relationships
+L2_INVALID_ENTITY_REF   = 0x0214  # Relationship references invalid entity
+L2_CYCLE_DETECTED       = 0x0215  # Circular entity reference
+L2_INVALID_URI          = 0x0216  # Invalid URI or CURIE format
+L2_CANNOT_PUBLISH       = 0x0217  # L2 content cannot be published
 
 # Network Errors (0x0300 - 0x03FF)
 PEER_NOT_FOUND      = 0x0300
@@ -1959,4 +2380,5 @@ nodalync/
 *End of Protocol Specification*
 
 **Version History:**
+- 0.2.0-draft (January 2026): Added L2 Entity Graph as protocol-level content type
 - 0.1.0-draft (January 2025): Initial draft
