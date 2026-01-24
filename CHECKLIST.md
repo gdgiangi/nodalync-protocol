@@ -93,54 +93,54 @@ Track implementation progress by checking off items as they're completed. Each i
 ### `nodalync-wire` (Spec §6, Appendix A)
 
 #### §6.1 Message Envelope
-- [ ] Message struct: version, type, id, timestamp, sender, payload, signature
-- [ ] MessageType enum with all 17 types
-- [ ] Protocol magic byte (0x00)
-- [ ] Protocol version (0x01)
+- [x] Message struct: version, type, id, timestamp, sender, payload, signature
+- [x] MessageType enum with all 17 types
+- [x] Protocol magic byte (0x00)
+- [x] Protocol version (0x01)
 
 #### §6.2 Discovery Messages
-- [ ] AnnouncePayload
-- [ ] AnnounceUpdatePayload
-- [ ] SearchPayload + SearchFilters
-- [ ] SearchResponsePayload + SearchResult
+- [x] AnnouncePayload
+- [x] AnnounceUpdatePayload
+- [x] SearchPayload + SearchFilters
+- [x] SearchResponsePayload + SearchResult
 
 #### §6.3 Preview Messages
-- [ ] PreviewRequestPayload
-- [ ] PreviewResponsePayload
+- [x] PreviewRequestPayload
+- [x] PreviewResponsePayload
 
 #### §6.4 Query Messages
-- [ ] QueryRequestPayload + VersionSpec
-- [ ] QueryResponsePayload + PaymentReceipt
-- [ ] QueryErrorPayload + QueryError enum
+- [x] QueryRequestPayload + VersionSpec
+- [x] QueryResponsePayload + PaymentReceipt
+- [x] QueryErrorPayload + QueryError enum
 
 #### §6.5 Version Messages
-- [ ] VersionRequestPayload
-- [ ] VersionResponsePayload + VersionInfo
+- [x] VersionRequestPayload
+- [x] VersionResponsePayload + VersionInfo
 
 #### §6.6 Channel Messages
-- [ ] ChannelOpenPayload
-- [ ] ChannelAcceptPayload
-- [ ] ChannelUpdatePayload + ChannelBalances
-- [ ] ChannelClosePayload
-- [ ] ChannelDisputePayload
+- [x] ChannelOpenPayload
+- [x] ChannelAcceptPayload
+- [x] ChannelUpdatePayload + ChannelBalances
+- [x] ChannelClosePayload
+- [x] ChannelDisputePayload
 
 #### §6.7 Settlement Messages
-- [ ] SettleBatchPayload + SettlementEntry
-- [ ] SettleConfirmPayload
+- [x] SettleBatchPayload + SettlementEntry
+- [x] SettleConfirmPayload
 
 #### §6.8 Peer Messages
-- [ ] PingPayload
-- [ ] PongPayload
-- [ ] PeerInfoPayload + Capability enum
+- [x] PingPayload
+- [x] PongPayload
+- [x] PeerInfoPayload + Capability enum
 
 #### Appendix A: Wire Formats
-- [ ] Deterministic CBOR encoding
-- [ ] Map keys sorted lexicographically
-- [ ] No indefinite-length arrays
-- [ ] Minimal integer encoding
-- [ ] ContentHash domain separator
-- [ ] MessageHash domain separator
-- [ ] ChannelStateHash domain separator
+- [x] Deterministic CBOR encoding
+- [x] Map keys sorted lexicographically
+- [x] No indefinite-length arrays
+- [x] Minimal integer encoding
+- [x] ContentHash domain separator
+- [x] MessageHash domain separator
+- [x] ChannelStateHash domain separator
 
 ---
 
