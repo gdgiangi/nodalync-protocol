@@ -41,3 +41,7 @@ sha2 = "0.10"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "test-util"] }
+nodalync-ops = { path = "../nodalync-ops" }
+nodalync-store = { path = "../nodalync-store" }
+nodalync-econ = { path = "../nodalync-econ" }
+tempfile = "3.10"

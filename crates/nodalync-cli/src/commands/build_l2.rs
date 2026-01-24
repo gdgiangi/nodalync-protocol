@@ -88,6 +88,8 @@ mod tests {
 
     #[test]
     fn test_build_l2_no_sources() {
+        std::env::set_var("NODALYNC_PASSWORD", "test_password");
+
         let temp_dir = TempDir::new().unwrap();
         let config = setup_config(&temp_dir);
 
@@ -101,6 +103,8 @@ mod tests {
 
     #[test]
     fn test_build_l2_source_not_found() {
+        std::env::set_var("NODALYNC_PASSWORD", "test_password");
+
         let temp_dir = TempDir::new().unwrap();
         let config = setup_config(&temp_dir);
 

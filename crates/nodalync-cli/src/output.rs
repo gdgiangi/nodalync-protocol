@@ -806,6 +806,89 @@ pub fn l1_to_preview(summary: &L1Summary) -> PreviewMentions {
     }
 }
 
+/// Output for earnings command.
+#[derive(Debug, Serialize)]
+pub struct EarningsOutput {
+    pub content: Vec<ContentEarning>,
+    pub total_earned: u64,
+    pub total_queries: u64,
+}
+
+/// Individual content earning record.
+#[derive(Debug, Serialize)]
+pub struct ContentEarning {
+    pub hash: String,
+    pub title: String,
+    pub queries: u64,
+    pub total_earned: u64,
+    pub price: u64,
+}
+
+impl Render for EarningsOutput {
+    fn render_human(&self) -> String {
+        if self.content.is_empty() {
+            return "No earnings yet.".dimmed().to_string();
+        }
+
+        let mut lines = vec![format!(
+            "{} {} from {} queries\n",
+            "Total Earnings:".green().bold(),
+            format_ndl(self.total_earned),
+            self.total_queries
+        )];
+
+        lines.push(format!("{}", "Content breakdown:".bold()));
+        for earning in &self.content {
+            let hash_short = short_hash(&earning.hash);
+            lines.push(format!(
+                "  {} \"{}\" - {} ({} queries @ {})",
+                hash_short.cyan(),
+                truncate_title(&earning.title, 30),
+                format_ndl(earning.total_earned).green(),
+                earning.queries,
+                format_ndl(earning.price)
+            ));
+        }
+
+        lines.join("\n")
+    }
+
+    fn render_json(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_default()
+    }
+}
+
+/// Output for reference command.
+#[derive(Debug, Serialize)]
+pub struct ReferenceOutput {
+    pub l3_hash: String,
+    pub l0_hash: String,
+}
+
+impl Render for ReferenceOutput {
+    fn render_human(&self) -> String {
+        format!(
+            "{} {} -> {}",
+            "Referenced L3 as L0:".green().bold(),
+            short_hash(&self.l3_hash),
+            short_hash(&self.l0_hash).cyan()
+        )
+    }
+
+    fn render_json(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_default()
+    }
+}
+
+/// Truncate a title for display.
+fn truncate_title(title: &str, max_len: usize) -> String {
+    if title.len() <= max_len {
+        title.to_string()
+    } else {
+        format!("{}...", &title[..max_len - 3])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

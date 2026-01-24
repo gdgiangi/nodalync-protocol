@@ -233,11 +233,33 @@ pub enum Commands {
         title: Option<String>,
     },
 
+    /// Reference external L3 as L0 for future derivations.
+    ///
+    /// Promotes an L3 synthesis to a primary source, allowing it
+    /// to be used as a foundation for new content.
+    Reference {
+        /// Hash of the L3 content to reference.
+        hash: String,
+    },
+
     // =========================================================================
     // Economics Commands
     // =========================================================================
     /// Show balance and pending earnings.
     Balance,
+
+    /// Show earnings breakdown by content.
+    ///
+    /// Lists content sorted by total revenue earned.
+    Earnings {
+        /// Filter by content hash prefix.
+        #[arg(long)]
+        content: Option<String>,
+
+        /// Maximum results to show.
+        #[arg(short, long, default_value = "10")]
+        limit: u32,
+    },
 
     /// Deposit tokens to protocol balance.
     Deposit {

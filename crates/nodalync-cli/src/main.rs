@@ -111,8 +111,12 @@ async fn run(cli: Cli) -> CliResult<()> {
 
         Commands::MergeL2 { graphs, title } => commands::merge_l2(config, format, &graphs, title)?,
 
+        Commands::Reference { hash } => commands::reference(config, format, &hash)?,
+
         // Economics commands
         Commands::Balance => commands::balance(config, format).await?,
+
+        Commands::Earnings { content, limit } => commands::earnings(config, format, content, limit)?,
 
         Commands::Deposit { amount } => commands::deposit(config, format, amount).await?,
 

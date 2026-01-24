@@ -49,6 +49,8 @@ mod tests {
 
     #[test]
     fn test_whoami_after_init() {
+        std::env::set_var("NODALYNC_PASSWORD", "test_password");
+
         let temp_dir = TempDir::new().unwrap();
         let config = setup_config(&temp_dir);
 
@@ -66,6 +68,8 @@ mod tests {
 
     #[test]
     fn test_whoami_json() {
+        std::env::set_var("NODALYNC_PASSWORD", "test_password");
+
         let temp_dir = TempDir::new().unwrap();
         let config = setup_config(&temp_dir);
 

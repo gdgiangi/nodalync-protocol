@@ -43,6 +43,8 @@ pub mod config;
 pub mod context;
 pub mod error;
 pub mod output;
+pub mod progress;
+pub mod prompt;
 
 // Re-export main types
 pub use cli::{Cli, Commands, OutputFormatArg, VisibilityArg};

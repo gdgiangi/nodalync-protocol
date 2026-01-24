@@ -8,6 +8,7 @@ use crate::config::{ndl_to_units, CliConfig};
 use crate::context::NodeContext;
 use crate::error::{CliError, CliResult};
 use crate::output::{OutputFormat, PublishOutput, Render};
+use crate::progress;
 
 /// Execute the publish command.
 pub async fn publish(
@@ -24,8 +25,16 @@ pub async fn publish(
         return Err(CliError::FileNotFound(file.display().to_string()));
     }
 
+    // Create spinner for human output
+    let spinner = if format == OutputFormat::Human {
+        progress::spinner("Reading file...")
+    } else {
+        progress::hidden()
+    };
+
     // Read file content
     let content = std::fs::read(file)?;
+    spinner.set_message("Hashing content...");
 
     // Get title from filename if not provided
     let title = title.unwrap_or_else(|| {
@@ -68,13 +77,16 @@ pub async fn publish(
     let hash = ctx.ops.create_content(&content, metadata.clone())?;
 
     // Extract L1 mentions (if L0 content)
+    spinner.set_message("Extracting mentions...");
     let mentions = match ctx.ops.extract_l1_summary(&hash) {
         Ok(summary) => Some(summary.mention_count as usize),
         Err(_) => None,
     };
 
     // Publish content
+    spinner.set_message("Publishing to network...");
     ctx.ops.publish_content(&hash, visibility, price_units).await?;
+    spinner.finish_and_clear();
 
     // Create output
     let output = PublishOutput {
@@ -106,6 +118,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_publish_file_not_found() {
+        std::env::set_var("NODALYNC_PASSWORD", "test_password");
+
         let temp_dir = TempDir::new().unwrap();
         let config = setup_config(&temp_dir);
 

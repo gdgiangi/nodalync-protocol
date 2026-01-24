@@ -97,6 +97,8 @@ mod tests {
 
     #[test]
     fn test_merge_l2_not_enough_graphs() {
+        std::env::set_var("NODALYNC_PASSWORD", "test_password");
+
         let temp_dir = TempDir::new().unwrap();
         let config = setup_config(&temp_dir);
 

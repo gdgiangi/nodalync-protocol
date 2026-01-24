@@ -18,10 +18,17 @@ pub fn init(config: CliConfig, format: OutputFormat) -> CliResult<String> {
     // Initialize storage
     let state = NodeContext::for_init(config.clone())?;
 
+    // Get password from environment (preferred for scripts/CI) or prompt
+    let password = if let Ok(pwd) = std::env::var("NODALYNC_PASSWORD") {
+        pwd
+    } else if crate::prompt::is_interactive() {
+        crate::prompt::password_with_confirm("Enter password to encrypt identity")?
+    } else {
+        return Err(CliError::User("Set NODALYNC_PASSWORD or run interactively".into()));
+    };
+
     // Generate identity
-    // For now we use a default password - in production this should prompt
-    let password = "nodalync"; // TODO: Prompt for password
-    let peer_id = state.identity.generate(password)?;
+    let peer_id = state.identity.generate(&password)?;
 
     // Save default config
     let config_path = default_config_path();
@@ -52,6 +59,9 @@ mod tests {
 
     #[test]
     fn test_init_creates_identity() {
+        // Set password for non-interactive test
+        std::env::set_var("NODALYNC_PASSWORD", "test_password");
+
         let temp_dir = TempDir::new().unwrap();
         let config = test_config(&temp_dir);
 
@@ -64,6 +74,9 @@ mod tests {
 
     #[test]
     fn test_init_fails_if_exists() {
+        // Set password for non-interactive test
+        std::env::set_var("NODALYNC_PASSWORD", "test_password");
+
         let temp_dir = TempDir::new().unwrap();
         let config = test_config(&temp_dir);
 

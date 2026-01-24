@@ -22,6 +22,7 @@ nodalync-settle.workspace = true
 clap.workspace = true
 indicatif.workspace = true
 colored.workspace = true
+dialoguer.workspace = true
 
 # Async
 tokio.workspace = true

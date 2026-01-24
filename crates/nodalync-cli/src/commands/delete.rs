@@ -31,11 +31,18 @@ pub fn delete(
         return Err(CliError::User("You don't own this content".to_string()));
     }
 
-    // If not forcing, we would prompt here
-    // For CLI, we just proceed (interactive prompt would be added in real impl)
+    // Prompt for confirmation if not forcing
     if !force {
-        // In a real implementation, we'd prompt for confirmation
-        // For now, just proceed
+        if !crate::prompt::is_interactive() {
+            return Err(CliError::User("Use --force for non-interactive delete".into()));
+        }
+        let prompt = format!(
+            "Delete \"{}\"? This cannot be undone.",
+            manifest.metadata.title
+        );
+        if !crate::prompt::confirm(&prompt)? {
+            return Ok("Cancelled.".to_string());
+        }
     }
 
     // Delete content file (but preserve manifest for provenance)
@@ -65,6 +72,8 @@ mod tests {
 
     #[test]
     fn test_delete_not_found() {
+        std::env::set_var("NODALYNC_PASSWORD", "test_password");
+
         let temp_dir = TempDir::new().unwrap();
         let config = setup_config(&temp_dir);
 

@@ -6,6 +6,7 @@ use crate::config::CliConfig;
 use crate::context::{parse_hash, NodeContext};
 use crate::error::{CliError, CliResult};
 use crate::output::{OutputFormat, QueryOutput, Render};
+use crate::progress;
 
 /// Execute the query command.
 pub async fn query(
@@ -17,8 +18,16 @@ pub async fn query(
     // Parse hash
     let hash = parse_hash(hash_str)?;
 
+    // Create spinner for human output
+    let spinner = if format == OutputFormat::Human {
+        progress::spinner("Connecting to network...")
+    } else {
+        progress::hidden()
+    };
+
     // Initialize context with network
     let mut ctx = NodeContext::with_network(config.clone()).await?;
+    spinner.set_message("Fetching content metadata...");
 
     // Get manifest first to know price
     let manifest = ctx
@@ -34,7 +43,9 @@ pub async fn query(
     let title = manifest.metadata.title.clone();
 
     // Query content
+    spinner.set_message("Querying content...");
     let response = ctx.ops.query_content(&hash, price, None).await?;
+    spinner.set_message("Saving content...");
 
     // Determine output path
     let save_path = output_path.unwrap_or_else(|| {
@@ -48,6 +59,7 @@ pub async fn query(
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&save_path, &response.content)?;
+    spinner.finish_and_clear();
 
     let output = QueryOutput {
         hash: hash.to_string(),
@@ -77,6 +89,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_query_not_found() {
+        std::env::set_var("NODALYNC_PASSWORD", "test_password");
+
         let temp_dir = TempDir::new().unwrap();
         let config = setup_config(&temp_dir);
 

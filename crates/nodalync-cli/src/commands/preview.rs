@@ -57,6 +57,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_preview_not_found() {
+        std::env::set_var("NODALYNC_PASSWORD", "test_password");
+
         let temp_dir = TempDir::new().unwrap();
         let config = setup_config(&temp_dir);
 
