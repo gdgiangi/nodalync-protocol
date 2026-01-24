@@ -1,0 +1,1 @@
+Read ARCHITECTURE.md and DESIGN_DECISIONS.md first. Implement modules in order starting with nodalync-crypto. For each module, read its spec from docs/modules/, write tests first, then implement. Check off items in CHECKLIST.md.
