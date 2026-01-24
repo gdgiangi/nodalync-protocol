@@ -33,23 +33,27 @@ creates perpetual economic participation in all derivative work.
 
 ### Status
 
-**Implementation in progress.**
+**v0.1.0 — Feature Complete**
 
-Core protocol logic (Phases 1-3) is complete with full test coverage:
-- ✅ `nodalync-crypto` — Cryptographic primitives
-- ✅ `nodalync-types` — Data structures
-- ✅ `nodalync-wire` — Wire protocol serialization
-- ✅ `nodalync-store` — Local storage layer
-- ✅ `nodalync-valid` — Validation rules
-- ✅ `nodalync-econ` — Revenue distribution
-- ✅ `nodalync-ops` — Protocol operations
+All five implementation phases complete with 738+ tests passing.
 
-Network layer (Phase 4) implemented:
-- ✅ `nodalync-net` — P2P networking (libp2p)
+| Phase | Crate | Status | Description |
+|-------|-------|--------|-------------|
+| 1 | `nodalync-crypto` | ✅ | Hashing (SHA-256), Ed25519 signing, PeerId derivation |
+| 1 | `nodalync-types` | ✅ | All data structures including L2 Entity Graph |
+| 2 | `nodalync-wire` | ✅ | Deterministic CBOR serialization, 17 message types |
+| 2 | `nodalync-store` | ✅ | SQLite manifests, filesystem content, settlement queue |
+| 2 | `nodalync-valid` | ✅ | Content, provenance, payment, L2 validation |
+| 2 | `nodalync-econ` | ✅ | 95/5 revenue distribution, Merkle batching |
+| 3 | `nodalync-ops` | ✅ | CREATE, DERIVE, BUILD_L2, MERGE_L2, QUERY |
+| 4 | `nodalync-net` | ✅ | libp2p (TCP/Noise/yamux), Kademlia DHT |
+| 4 | `nodalync-settle` | ✅ | Hedera SDK (feature-gated), MockSettlement for testing |
+| 5 | `nodalync-cli` | ✅ | Full CLI with interactive prompts, progress indicators |
 
-Remaining work:
-- ⏳ `nodalync-settle` — Hedera settlement integration
-- ⏳ `nodalync-cli` — Command-line interface
+**Recent additions:**
+- L2 Entity Graph with URI-based ontology (RDF interop)
+- Multi-node integration tests (51 scenarios)
+- Interactive CLI prompts and progress spinners
 
 ---
 
@@ -58,6 +62,7 @@ Remaining work:
 **Prerequisites:**
 - Rust 1.75+ (with cargo)
 - SQLite development headers
+- (Optional) `protoc` for Hedera SDK feature
 
 ```bash
 # Clone the repository
@@ -67,26 +72,68 @@ cd nodalync-protocol
 # Build all crates
 cargo build --workspace
 
-# Run tests
+# Run tests (738+ tests)
 cargo test --workspace
+
+# Build with Hedera support (requires protoc)
+cargo build --workspace --features hedera-sdk
 
 # Build documentation
 cargo doc --workspace --no-deps --open
 ```
 
+### CLI Usage
+
+```bash
+# Initialize identity
+nodalync init
+
+# Create and publish content
+nodalync publish my-document.txt --visibility shared --price 100
+
+# Build L2 entity graph from L1 sources
+nodalync build-l2 <l1-hash-1> <l1-hash-2>
+
+# Create L3 insight from sources
+nodalync synthesize --sources <hash1>,<hash2> --file insight.md
+
+# Query remote content
+nodalync query <hash>
+
+# Check earnings
+nodalync earnings
+```
+
+---
+
+### Knowledge Layers
+
+| Layer | Content | Operation | Queryable | Economics |
+|-------|---------|-----------|-----------|-----------|
+| **L0** | Raw documents, notes, transcripts | `CREATE` | Yes | Original source material |
+| **L1** | Atomic facts extracted from L0 | `EXTRACT_L1` | Yes | Structured, quotable claims |
+| **L2** | Entities and relationships across L1s | `BUILD_L2` | **No** (personal) | Your perspective, never monetized directly |
+| **L3** | Novel insights synthesizing sources | `DERIVE` | Yes | Original analysis and conclusions |
+
+**L2 is Personal:** Your L2 represents your unique interpretation — how you link entities, resolve ambiguities, and structure knowledge. It is never shared or queried. Its value surfaces when you create L3 insights that others find valuable.
+
 ---
 
 ### Core Ideas
 
-1. **Four-layer knowledge model** — L0 (raw sources) through L3 (emergent insights), with strict rules about what can be sold at each layer
+1. **Four-layer knowledge model** — L0 (raw sources) → L1 (facts) → L2 (entity graphs) → L3 (insights), with strict rules about what can be queried at each layer
 
 2. **Cryptographic provenance** — Every derived insight links back to its foundational sources via content-addressed hashes
 
-3. **Fair revenue distribution** — 95% of transaction value flows to L0 contributors; synthesis captures only 5%
+3. **Fair revenue distribution** — 95% of query payment flows to L0/L1 contributors; synthesis captures only 5%
 
-4. **AI-native interface** — MCP integration enables any agent to query personal knowledge bases with automatic compensation
+4. **L2 as personal perspective** — Your entity graph represents your unique understanding; value surfaces through L3 insights
 
-5. **Local-first sovereignty** — Your data stays on your node; buyers get query access, not downloads
+5. **URI-based ontology** — L2 uses RDF-compatible URIs (Schema.org, FOAF, custom) for semantic interoperability
+
+6. **AI-native interface** — MCP integration enables any agent to query knowledge bases with automatic compensation
+
+7. **Local-first sovereignty** — Your data stays on your node; buyers get query access, not downloads
 
 ---
 
