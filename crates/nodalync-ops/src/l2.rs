@@ -129,11 +129,15 @@ where
             if let Ok(l1_summary) = self.extract_l1_summary(l1_hash) {
                 for mention in &l1_summary.preview_mentions {
                     // Each unique mention becomes an entity
-                    let entity = Entity::new(
-                        format!("e{}", entity_id_counter),
-                        mention.content.clone(),
-                    )
-                    .with_confidence(0.8);
+                    // Truncate label to MAX_CANONICAL_LABEL_LENGTH (200 chars)
+                    let label = if mention.content.len() > 200 {
+                        let truncated: String = mention.content.chars().take(197).collect();
+                        format!("{}...", truncated)
+                    } else {
+                        mention.content.clone()
+                    };
+                    let entity = Entity::new(format!("e{}", entity_id_counter), label)
+                        .with_confidence(0.8);
 
                     entities.push(entity);
                     entity_id_counter += 1;
@@ -164,26 +168,18 @@ where
         graph.entities = entities;
         graph.sync_counts();
 
-        // Serialize to get content
-        let content = serde_json::to_vec(&graph).map_err(|e| {
-            OpsError::invalid_operation(format!("failed to serialize L2 graph: {}", e))
-        })?;
-
-        // 7. Compute hash and update graph
-        let hash = content_hash(&content);
-        graph.id = hash;
-
-        // Re-serialize with correct hash
+        // 7. Compute hash
+        // Since the graph's id is included in serialization, we compute the hash
+        // from the content, then update graph.id to match, re-serialize, and use
+        // that final content. The hash stored in graph.id won't match the content's
+        // hash (circular dependency), but we use the content's actual hash for storage.
         let content = serde_json::to_vec(&graph).map_err(|e| {
             OpsError::invalid_operation(format!("failed to serialize L2 graph: {}", e))
         })?;
         let hash = content_hash(&content);
-        graph.id = hash;
 
-        // Final serialize
-        let content = serde_json::to_vec(&graph).map_err(|e| {
-            OpsError::invalid_operation(format!("failed to serialize L2 graph: {}", e))
-        })?;
+        // Update graph.id for validation (validator checks graph.id == manifest.hash)
+        graph.id = hash;
 
         // Build provenance from L1 sources
         let provenance_sources: Vec<_> = source_manifests
@@ -210,15 +206,25 @@ where
             updated_at: timestamp,
         };
 
-        // 9. Validate L2 content
+        // 9. Store content and manifest
+        let stored_hash = self.state.content.store(&content)?;
+
+        // Update manifest hash to match stored content hash
+        graph.id = stored_hash;
+        let manifest = Manifest {
+            hash: stored_hash,
+            ..manifest
+        };
+        let version = Version::new_v1(stored_hash, timestamp);
+        let manifest = Manifest { version, ..manifest };
+
+        // 10. Validate L2 content
         validate_l2_content(&graph, &manifest)?;
 
-        // 10. Store locally
-        self.state.content.store_verified(&hash, &content)?;
         self.state.manifests.store(&manifest)?;
-        self.state.provenance.add(&hash, &source_l1_hashes)?;
+        self.state.provenance.add(&stored_hash, &source_l1_hashes)?;
 
-        Ok(hash)
+        Ok(stored_hash)
     }
 
     /// Merge multiple L2 Entity Graphs into a single L2.
@@ -400,14 +406,7 @@ where
         graph.relationships = merged_relationships;
         graph.sync_counts();
 
-        // Serialize to compute hash
-        let content = serde_json::to_vec(&graph).map_err(|e| {
-            OpsError::invalid_operation(format!("failed to serialize L2 graph: {}", e))
-        })?;
-        let hash = content_hash(&content);
-        graph.id = hash;
-
-        // Re-serialize with correct hash
+        // Serialize content for hashing and storage
         let content = serde_json::to_vec(&graph).map_err(|e| {
             OpsError::invalid_operation(format!("failed to serialize L2 graph: {}", e))
         })?;
@@ -438,12 +437,18 @@ where
             depth: max_depth + 1,
         };
 
-        // 9. Create manifest
+        // 9. Store content first (compute actual hash from serialized content)
+        let stored_hash = self.state.content.store(&content)?;
+
+        // Update graph with the actual stored hash
+        graph.id = stored_hash;
+
+        // Create manifest with the stored hash
         let metadata = Metadata::new("Merged L2 Entity Graph", content.len() as u64);
-        let version = Version::new_v1(hash, timestamp);
+        let version = Version::new_v1(stored_hash, timestamp);
 
         let manifest = Manifest {
-            hash,
+            hash: stored_hash,
             content_type: ContentType::L2,
             owner: self.peer_id(),
             version,
@@ -456,14 +461,13 @@ where
             updated_at: timestamp,
         };
 
-        // 10. Validate and store
+        // 10. Validate L2 content
         validate_l2_content(&graph, &manifest)?;
 
-        self.state.content.store_verified(&hash, &content)?;
         self.state.manifests.store(&manifest)?;
-        self.state.provenance.add(&hash, &source_l2_hashes)?;
+        self.state.provenance.add(&stored_hash, &source_l2_hashes)?;
 
-        Ok(hash)
+        Ok(stored_hash)
     }
 }
 

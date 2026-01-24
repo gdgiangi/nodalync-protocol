@@ -133,6 +133,7 @@ impl SqliteManifestStore {
         let content_type = match content_type_u8 {
             0 => ContentType::L0,
             1 => ContentType::L1,
+            2 => ContentType::L2,
             3 => ContentType::L3,
             _ => ContentType::L0, // Default fallback
         };

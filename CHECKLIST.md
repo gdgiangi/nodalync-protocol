@@ -709,10 +709,10 @@ Track implementation progress by checking off items as they're completed. Each i
 - [ ] Multi-node: provenance chain across 3+ nodes — requires integration harness
 
 #### L2 Integration Tests — NEW
-- [ ] Full flow: create L0 → extract L1 → build L2 → derive L3
-- [ ] Full flow: multiple L1s → build L2 → merge L2s
-- [ ] Full flow: L3 from L2 → query L3 → verify provenance traces to L0/L1
-- [ ] Verify L2 creator gets nothing when L3 queried (value via synthesis fee only)
+- [x] Full flow: create L0 → extract L1 → build L2 → derive L3
+- [x] Full flow: multiple L1s → build L2 → merge L2s
+- [x] Full flow: L3 from L2 → query L3 → verify provenance traces to L0/L1
+- [x] Verify L2 creator gets nothing when L3 queried (value via synthesis fee only)
 
 ---
 
