@@ -518,6 +518,13 @@ dependencies = [
 [[package]]
 name = "nodalync-valid"
 version = "0.1.0"
+dependencies = [
+ "nodalync-crypto",
+ "nodalync-types",
+ "nodalync-wire",
+ "serde_json",
+ "thiserror",
+]
 
 [[package]]
 name = "nodalync-wire"

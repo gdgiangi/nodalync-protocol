@@ -188,61 +188,61 @@ Track implementation progress by checking off items as they're completed. Each i
 ### `nodalync-valid` (Spec §9)
 
 #### §9.1 Content Validation
-- [ ] `ContentHash(content) == manifest.hash`
-- [ ] `len(content) == manifest.metadata.content_size`
-- [ ] Title length <= 200
-- [ ] Description length <= 2000
-- [ ] Tags count <= 20, each <= 50 chars
-- [ ] content_type valid
-- [ ] visibility valid
-- [ ] Test: all validation rules
+- [x] `ContentHash(content) == manifest.hash`
+- [x] `len(content) == manifest.metadata.content_size`
+- [x] Title length <= 200
+- [x] Description length <= 2000
+- [x] Tags count <= 20, each <= 50 chars
+- [x] content_type valid
+- [x] visibility valid
+- [x] Test: all validation rules
 
 #### §9.2 Version Validation
-- [ ] v1: previous null, root == hash
-- [ ] v2+: previous not null, root == previous.root
-- [ ] number == previous.number + 1
-- [ ] timestamp > previous.timestamp
-- [ ] Test: valid version chain
-- [ ] Test: invalid version rejected
+- [x] v1: previous null, root == hash
+- [x] v2+: previous not null, root == previous.root
+- [x] number == previous.number + 1
+- [x] timestamp > previous.timestamp
+- [x] Test: valid version chain
+- [x] Test: invalid version rejected
 
 #### §9.3 Provenance Validation
-- [ ] L0: root_L0L1 == [self], derived_from == [], depth == 0
-- [ ] L3: root_L0L1 >= 1, derived_from >= 1
-- [ ] All derived_from exist in sources
-- [ ] root_L0L1 computation correct
-- [ ] depth == max(sources.depth) + 1
-- [ ] No self-reference
-- [ ] Test: valid L0 provenance
-- [ ] Test: valid L3 provenance
-- [ ] Test: invalid provenance rejected
+- [x] L0: root_L0L1 == [self], derived_from == [], depth == 0
+- [x] L3: root_L0L1 >= 1, derived_from >= 1
+- [x] All derived_from exist in sources
+- [x] root_L0L1 computation correct
+- [x] depth == max(sources.depth) + 1
+- [x] No self-reference
+- [x] Test: valid L0 provenance
+- [x] Test: valid L3 provenance
+- [x] Test: invalid provenance rejected
 
 #### §9.4 Payment Validation
-- [ ] amount >= price
-- [ ] recipient == owner
-- [ ] query_hash == manifest.hash
-- [ ] channel.state == Open
-- [ ] channel.their_balance >= amount
-- [ ] nonce > channel.nonce
-- [ ] signature valid
-- [ ] provenance matches manifest
-- [ ] Test: all payment validation rules
+- [x] amount >= price
+- [x] recipient == owner
+- [x] query_hash == manifest.hash
+- [x] channel.state == Open
+- [x] channel.their_balance >= amount
+- [x] nonce > channel.nonce
+- [x] signature valid
+- [x] provenance matches manifest
+- [x] Test: all payment validation rules
 
 #### §9.5 Message Validation
-- [ ] version == PROTOCOL_VERSION
-- [ ] type is valid MessageType
-- [ ] timestamp within ±5 minutes
-- [ ] sender is valid PeerId
-- [ ] signature valid
-- [ ] payload decodes correctly
-- [ ] Test: valid message accepted
-- [ ] Test: invalid message rejected
+- [x] version == PROTOCOL_VERSION
+- [x] type is valid MessageType
+- [x] timestamp within ±5 minutes
+- [x] sender is valid PeerId
+- [x] signature valid
+- [x] payload decodes correctly
+- [x] Test: valid message accepted
+- [x] Test: invalid message rejected
 
 #### §9.6 Access Validation
-- [ ] Private: always deny external
-- [ ] Unlisted: check allowlist/denylist
-- [ ] Shared: check denylist only
-- [ ] Bond requirement check
-- [ ] Test: all access scenarios
+- [x] Private: always deny external
+- [x] Unlisted: check allowlist/denylist
+- [x] Shared: check denylist only
+- [x] Bond requirement check
+- [x] Test: all access scenarios
 
 ---
 
