@@ -33,16 +33,46 @@ creates perpetual economic participation in all derivative work.
 
 ### Status
 
-This is an early draft seeking collaborators and feedback.
+**Implementation in progress.**
 
-The protocol design is complete. Implementation has not begun.
+Core protocol logic (Phases 1-3) is complete with full test coverage:
+- ✅ `nodalync-crypto` — Cryptographic primitives
+- ✅ `nodalync-types` — Data structures
+- ✅ `nodalync-wire` — Wire protocol serialization
+- ✅ `nodalync-store` — Local storage layer
+- ✅ `nodalync-valid` — Validation rules
+- ✅ `nodalync-econ` — Revenue distribution
+- ✅ `nodalync-ops` — Protocol operations
 
-Looking for people with experience in:
-- Distributed systems
-- Cryptographic data structures
-- Knowledge graphs / semantic web
-- AI agent development (MCP, tool use)
-- Token economics / mechanism design
+Network layer (Phase 4) implemented:
+- ✅ `nodalync-net` — P2P networking (libp2p)
+
+Remaining work:
+- ⏳ `nodalync-settle` — Hedera settlement integration
+- ⏳ `nodalync-cli` — Command-line interface
+
+---
+
+### Building
+
+**Prerequisites:**
+- Rust 1.75+ (with cargo)
+- SQLite development headers
+
+```bash
+# Clone the repository
+git clone https://github.com/gdgiangi/nodalync-protocol.git
+cd nodalync-protocol
+
+# Build all crates
+cargo build --workspace
+
+# Run tests
+cargo test --workspace
+
+# Build documentation
+cargo doc --workspace --no-deps --open
+```
 
 ---
 

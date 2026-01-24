@@ -1,0 +1,47 @@
+[package]
+name = "nodalync-net"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# Nodalync crates
+nodalync-crypto = { path = "../nodalync-crypto" }
+nodalync-types = { path = "../nodalync-types" }
+nodalync-wire = { path = "../nodalync-wire" }
+
+# libp2p with required features
+libp2p = { version = "0.54", features = [
+    "tcp",
+    "noise",
+    "yamux",
+    "kad",
+    "gossipsub",
+    "request-response",
+    "identify",
+    "macros",
+    "tokio",
+] }
+
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Error handling
+thiserror = "1"
+
+# Logging
+tracing = "0.1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+
+# Cryptography (for GossipSub message IDs)
+sha2 = "0.10"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "test-util"] }
+nodalync-ops = { path = "../nodalync-ops" }
+nodalync-store = { path = "../nodalync-store" }
+nodalync-econ = { path = "../nodalync-econ" }
+tempfile = "3.10"

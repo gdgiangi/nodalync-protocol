@@ -1,0 +1,15 @@
+[package]
+name = "nodalync-valid"
+version.workspace = true
+edition.workspace = true
+description = "Validation rules for the Nodalync protocol"
+license.workspace = true
+
+[dependencies]
+nodalync-types = { path = "../nodalync-types" }
+nodalync-crypto = { path = "../nodalync-crypto" }
+nodalync-wire = { path = "../nodalync-wire" }
+thiserror = "1.0"
+
+[dev-dependencies]
+serde_json = "1.0"

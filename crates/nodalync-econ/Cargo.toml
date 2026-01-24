@@ -1,0 +1,13 @@
+[package]
+name = "nodalync-econ"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nodalync-types = { path = "../nodalync-types" }
+nodalync-crypto = { path = "../nodalync-crypto" }
+thiserror = "1.0"
+sha2 = "0.10"
+
+[dev-dependencies]
+serde_json = "1.0"

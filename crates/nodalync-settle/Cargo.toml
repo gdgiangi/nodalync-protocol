@@ -1,0 +1,25 @@
+[package]
+name = "nodalync-settle"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nodalync-crypto = { path = "../nodalync-crypto" }
+nodalync-types = { path = "../nodalync-types" }
+nodalync-wire = { path = "../nodalync-wire" }
+hedera = { version = "0.29", optional = true }
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+default = []
+# Enable real Hedera integration (requires protoc installed)
+hedera-sdk = ["hedera"]
+# Enable testnet integration tests
+testnet = ["hedera-sdk"]

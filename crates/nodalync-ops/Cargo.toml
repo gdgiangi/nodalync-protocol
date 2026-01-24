@@ -1,0 +1,23 @@
+[package]
+name = "nodalync-ops"
+version.workspace = true
+edition.workspace = true
+description = "Protocol operations for the Nodalync protocol"
+readme = "README.md"
+
+[dependencies]
+nodalync-crypto = { path = "../nodalync-crypto" }
+nodalync-types = { path = "../nodalync-types" }
+nodalync-store = { path = "../nodalync-store" }
+nodalync-valid = { path = "../nodalync-valid" }
+nodalync-econ = { path = "../nodalync-econ" }
+nodalync-wire = { path = "../nodalync-wire" }
+nodalync-net = { path = "../nodalync-net" }
+thiserror = "1.0"
+async-trait = "0.1"
+rand = "0.8"
+serde_json = "1.0"
+
+[dev-dependencies]
+tempfile = "3.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
