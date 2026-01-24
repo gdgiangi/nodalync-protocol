@@ -1,0 +1,10 @@
+{
+  "network": "hederaTestnet",
+  "contractId": "0.0.7729011",
+  "evmAddress": "0xc6b4bFD28AF2F6999B32510557380497487A60dD",
+  "deployer": "0x89cd3ec89e55E1211b2D1969AB9d73c06Ce85e5d",
+  "deployerAccountId": "0.0.7703962",
+  "deployedAt": "2026-01-24T20:00:09.107Z",
+  "transactionHash": "0x4b00948820008f9937d149ea2acaf872f5f87bef44fd16991a698d0c0451a13d",
+  "hashScanUrl": "https://hashscan.io/testnet/contract/0.0.7729011"
+}

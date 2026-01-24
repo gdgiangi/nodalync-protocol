@@ -1,0 +1,32 @@
+{
+  "name": "nodalync-contracts",
+  "version": "1.0.0",
+  "description": "Nodalync Protocol Smart Contracts",
+  "main": "index.js",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "test:local": "hardhat test --network hardhat",
+    "deploy:local": "hardhat run scripts/deploy.js --network hardhat",
+    "deploy:testnet": "hardhat run scripts/deploy.js --network hederaTestnet",
+    "deploy:testnet:sdk": "node scripts/deploy-hedera-sdk.js",
+    "deploy:mainnet": "hardhat run scripts/deploy.js --network hederaMainnet",
+    "clean": "hardhat clean",
+    "coverage": "hardhat coverage"
+  },
+  "keywords": [
+    "nodalync",
+    "hedera",
+    "smart-contracts",
+    "settlement"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "devDependencies": {
+    "@hashgraph/sdk": "^2.80.0",
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "dotenv": "^17.2.3",
+    "hardhat": "^2.28.3"
+  }
+}

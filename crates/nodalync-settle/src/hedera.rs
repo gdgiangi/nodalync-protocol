@@ -5,6 +5,7 @@
 
 #![cfg(feature = "hedera-sdk")]
 
+use std::str::FromStr;
 use std::sync::RwLock;
 
 use async_trait::async_trait;
@@ -254,8 +255,8 @@ impl Settlement for HederaSettlement {
                     .function_with_parameters(
                         "attest",
                         ContractFunctionParameters::new()
-                            .add_bytes32(content_hash.0)
-                            .add_bytes32(provenance_root.0),
+                            .add_bytes32(&content_hash.0)
+                            .add_bytes32(&provenance_root.0),
                     )
                     .execute(&self.client)
                     .await
@@ -323,8 +324,8 @@ impl Settlement for HederaSettlement {
                     .function_with_parameters(
                         "openChannel",
                         ContractFunctionParameters::new()
-                            .add_bytes32(channel_hash.0)
-                            .add_address(hedera_peer.to_solidity_address().unwrap())
+                            .add_bytes32(&channel_hash.0)
+                            .add_address(&hedera_peer.to_solidity_address().unwrap())
                             .add_uint256(deposit.into())
                             .add_uint256(0u64.into()), // peer deposit (0 initially)
                     )
@@ -370,10 +371,10 @@ impl Settlement for HederaSettlement {
                     .function_with_parameters(
                         "closeChannel",
                         ContractFunctionParameters::new()
-                            .add_bytes32(channel_id.0 .0)
+                            .add_bytes32(&channel_id.0 .0)
                             .add_uint256(final_state.initiator.into())
                             .add_uint256(final_state.responder.into())
-                            .add_bytes(sig_bytes.clone()),
+                            .add_bytes(&sig_bytes),
                     )
                     .execute(&self.client)
                     .await
@@ -414,11 +415,11 @@ impl Settlement for HederaSettlement {
                     .function_with_parameters(
                         "disputeChannel",
                         ContractFunctionParameters::new()
-                            .add_bytes32(channel_id.0 .0)
+                            .add_bytes32(&channel_id.0 .0)
                             .add_uint64(state.nonce)
                             .add_uint256(state.balances.initiator.into())
                             .add_uint256(state.balances.responder.into())
-                            .add_bytes(state.signature.0.to_vec()),
+                            .add_bytes(&state.signature.0),
                     )
                     .execute(&self.client)
                     .await
@@ -459,11 +460,11 @@ impl Settlement for HederaSettlement {
                     .function_with_parameters(
                         "counterDispute",
                         ContractFunctionParameters::new()
-                            .add_bytes32(channel_id.0 .0)
+                            .add_bytes32(&channel_id.0 .0)
                             .add_uint64(better_state.nonce)
                             .add_uint256(better_state.balances.initiator.into())
                             .add_uint256(better_state.balances.responder.into())
-                            .add_bytes(better_state.signature.0.to_vec()),
+                            .add_bytes(&better_state.signature.0),
                     )
                     .execute(&self.client)
                     .await
@@ -495,7 +496,7 @@ impl Settlement for HederaSettlement {
                     .gas(self.config.gas.max_gas_channel_close)
                     .function_with_parameters(
                         "resolveDispute",
-                        ContractFunctionParameters::new().add_bytes32(channel_id.0 .0),
+                        ContractFunctionParameters::new().add_bytes32(&channel_id.0 .0),
                     )
                     .execute(&self.client)
                     .await
@@ -528,19 +529,27 @@ impl Settlement for HederaSettlement {
             "Settling batch"
         );
 
-        // Encode entries
-        let mapper = self.account_mapper.read().unwrap();
-        let mut encoded_entries = Vec::new();
+        // Encode entries (scope the lock to release it before async operations)
+        let encoded_entries: Vec<Vec<u8>> = {
+            let mapper = self.account_mapper.read().unwrap();
+            let mut entries = Vec::new();
+            for entry in &batch.entries {
+                let account = mapper.require_account(&entry.recipient)?;
+                entries.push(self.encode_settlement_entry(
+                    &account,
+                    entry.amount,
+                    &entry.provenance_hashes,
+                ));
+            }
+            entries
+        };
 
-        for entry in &batch.entries {
-            let account = mapper.require_account(&entry.recipient)?;
-            encoded_entries.push(self.encode_settlement_entry(
-                &account,
-                entry.amount,
-                &entry.provenance_hashes,
-            ));
-        }
-        drop(mapper);
+        // Convert to slice of slices for the Hedera API
+        let entries_refs: Vec<&[u8]> = encoded_entries.iter().map(|e| e.as_slice()).collect();
+
+        // Clone values needed for the async closure
+        let batch_id = batch.batch_id.0;
+        let merkle_root = batch.merkle_root.0;
 
         let tx = self
             .retry_policy
@@ -551,9 +560,9 @@ impl Settlement for HederaSettlement {
                     .function_with_parameters(
                         "settleBatch",
                         ContractFunctionParameters::new()
-                            .add_bytes32(batch.batch_id.0)
-                            .add_bytes32(batch.merkle_root.0)
-                            .add_bytes_array(encoded_entries.clone()),
+                            .add_bytes32(&batch_id)
+                            .add_bytes32(&merkle_root)
+                            .add_bytes_array(&entries_refs),
                     )
                     .execute(&self.client)
                     .await
@@ -632,26 +641,31 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
 
-    fn get_test_config() -> Option<HederaConfig> {
+    fn get_test_credentials() -> Option<(String, String, String, NamedTempFile)> {
         let account_id = env::var("HEDERA_ACCOUNT_ID").ok()?;
         let private_key = env::var("HEDERA_PRIVATE_KEY").ok()?;
         let contract_id = env::var("HEDERA_CONTRACT_ID").ok()?;
 
-        // Write private key to temp file
+        // Write private key to temp file (strip 0x prefix if present)
+        let key_str = private_key.strip_prefix("0x").unwrap_or(&private_key);
         let mut temp_file = NamedTempFile::new().ok()?;
-        std::io::Write::write_all(&mut temp_file, private_key.as_bytes()).ok()?;
+        std::io::Write::write_all(&mut temp_file, key_str.as_bytes()).ok()?;
 
-        Some(HederaConfig::testnet(
-            &account_id,
-            temp_file.path().to_path_buf(),
-            &contract_id,
-        ))
+        Some((account_id, contract_id, private_key, temp_file))
     }
 
     #[tokio::test]
     #[ignore]
     async fn test_hedera_get_balance() {
-        let config = get_test_config().expect("Missing testnet config");
+        let (account_id, contract_id, _key, temp_file) =
+            get_test_credentials().expect("Missing testnet config");
+
+        let config = HederaConfig::testnet(
+            &account_id,
+            temp_file.path().to_path_buf(),
+            &contract_id,
+        );
+
         let settlement = HederaSettlement::new(config).await.unwrap();
 
         let balance = settlement.get_balance().await.unwrap();
@@ -662,7 +676,15 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_hedera_verify_settlement() {
-        let config = get_test_config().expect("Missing testnet config");
+        let (account_id, contract_id, _key, temp_file) =
+            get_test_credentials().expect("Missing testnet config");
+
+        let config = HederaConfig::testnet(
+            &account_id,
+            temp_file.path().to_path_buf(),
+            &contract_id,
+        );
+
         let settlement = HederaSettlement::new(config).await.unwrap();
 
         // Test with an invalid transaction ID

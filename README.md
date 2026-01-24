@@ -45,8 +45,16 @@ creates perpetual economic participation in all derivative work.
 | 2 | `nodalync-econ` | 95/5 revenue distribution, Merkle batching |
 | 3 | `nodalync-ops` | CREATE, DERIVE, BUILD_L2, MERGE_L2, QUERY |
 | 4 | `nodalync-net` | libp2p (TCP/Noise/yamux), Kademlia DHT |
-| 4 | `nodalync-settle` | Hedera SDK (feature-gated), MockSettlement for testing |
+| 4 | `nodalync-settle` | Hedera settlement, smart contract deployed to testnet |
 | 5 | `nodalync-cli` | Full CLI with interactive prompts, progress indicators |
+
+**Hedera Testnet:**
+
+| Resource | Value |
+|----------|-------|
+| Contract ID | `0.0.7729011` |
+| EVM Address | `0xc6b4bFD28AF2F6999B32510557380497487A60dD` |
+| HashScan | [View Contract](https://hashscan.io/testnet/contract/0.0.7729011) |
 
 ---
 
@@ -73,6 +81,9 @@ cargo build --workspace --features hedera-sdk
 
 # Build documentation
 cargo doc --workspace --no-deps --open
+
+# Run smart contract tests
+cd contracts && npm install && npm test
 ```
 
 ### CLI Usage

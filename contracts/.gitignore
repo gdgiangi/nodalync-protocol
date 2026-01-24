@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Hardhat artifacts
+artifacts/
+cache/
+typechain-types/
+
+# Coverage
+coverage/
+coverage.json
+
+# Deployments (keep deployment records but not local test deployments)
+deployments/hardhat.json
+
+# Environment
+.env
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
