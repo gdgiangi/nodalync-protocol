@@ -27,7 +27,7 @@ creates perpetual economic participation in all derivative work.
 
 ### Read the Paper
 
-📄 **[Nodalync Protocol v0.6 (PDF)](./Nodalync_Protocol.pdf)** — Draft, January 2026
+📄 **[Nodalync Protocol v0.7 (PDF)](./Nodalync_Protocol.pdf)** — Draft, January 2026
 
 ---
 
