@@ -6,7 +6,8 @@
 use async_trait::async_trait;
 use nodalync_crypto::{Hash, PeerId, Timestamp};
 use nodalync_types::{
-    AccessControl, Amount, Channel, L1Summary, Manifest, Metadata, Payment, Visibility,
+    AccessControl, Amount, Channel, L1Summary, L2BuildConfig, L2MergeConfig, Manifest, Metadata,
+    Payment, Visibility,
 };
 use nodalync_wire::{VersionInfo, VersionSpec};
 
@@ -250,6 +251,50 @@ pub trait Operations: Send + Sync {
     /// - Marks as settled
     /// - Updates last_settlement_time
     async fn trigger_settlement(&mut self) -> OpsResult<Option<Hash>>;
+
+    // =========================================================================
+    // L2 Entity Graph Operations
+    // =========================================================================
+
+    /// Build an L2 Entity Graph from L1 sources.
+    ///
+    /// L2 Entity Graphs are personal knowledge graphs that:
+    /// - Are always private (visibility = Private)
+    /// - Have price = 0 (never monetized directly)
+    /// - Enable L3 insights
+    /// - Creators earn through L3 synthesis fees
+    ///
+    /// # Arguments
+    ///
+    /// * `source_l1_hashes` - Hashes of L1 content to build from
+    /// * `config` - Optional build configuration
+    ///
+    /// # Returns
+    ///
+    /// The hash of the created L2 content.
+    async fn build_l2(
+        &mut self,
+        source_l1_hashes: Vec<Hash>,
+        config: Option<L2BuildConfig>,
+    ) -> OpsResult<Hash>;
+
+    /// Merge multiple L2 Entity Graphs into a single L2.
+    ///
+    /// All source L2s must be owned by the current identity.
+    ///
+    /// # Arguments
+    ///
+    /// * `source_l2_hashes` - Hashes of L2 content to merge
+    /// * `config` - Optional merge configuration
+    ///
+    /// # Returns
+    ///
+    /// The hash of the merged L2 content.
+    async fn merge_l2(
+        &mut self,
+        source_l2_hashes: Vec<Hash>,
+        config: Option<L2MergeConfig>,
+    ) -> OpsResult<Hash>;
 
     // =========================================================================
     // Utility Methods

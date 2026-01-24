@@ -126,6 +126,7 @@ pub mod error;
 pub mod extraction;
 pub mod handlers;
 pub mod helpers;
+pub mod l2;
 pub mod node_ops;
 pub mod ops;
 pub mod publish;

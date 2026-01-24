@@ -11,7 +11,7 @@ use thiserror::Error;
 /// Each variant includes a descriptive message explaining the validation failure.
 /// These errors map to the appropriate `ErrorCode` values when converted to
 /// protocol errors.
-#[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[derive(Debug, Error, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum ValidationError {
     // =========================================================================
@@ -312,6 +312,177 @@ pub enum ValidationError {
     },
 
     // =========================================================================
+    // L2 Entity Graph Validation Errors
+    // =========================================================================
+    /// L2 visibility is not Private
+    #[error("L2 visibility must be Private, got {visibility}")]
+    L2VisibilityNotPrivate {
+        /// The invalid visibility
+        visibility: String,
+    },
+
+    /// L2 price is not zero
+    #[error("L2 price must be 0, got {price}")]
+    L2PriceNotZero {
+        /// The invalid price
+        price: u64,
+    },
+
+    /// L2 graph ID doesn't match manifest hash
+    #[error("L2 graph ID does not match manifest hash")]
+    L2IdMismatch,
+
+    /// L2 has no sources
+    #[error("L2 must have at least one source")]
+    L2NoSources,
+
+    /// L2 has too many sources
+    #[error("L2 has too many sources: {count} exceeds maximum {max}")]
+    L2TooManySources {
+        /// Actual source count
+        count: usize,
+        /// Maximum allowed
+        max: usize,
+    },
+
+    /// L2 has too many entities
+    #[error("L2 has too many entities: {count} exceeds maximum {max}")]
+    L2TooManyEntities {
+        /// Actual entity count
+        count: usize,
+        /// Maximum allowed
+        max: usize,
+    },
+
+    /// L2 has too many relationships
+    #[error("L2 has too many relationships: {count} exceeds maximum {max}")]
+    L2TooManyRelationships {
+        /// Actual relationship count
+        count: usize,
+        /// Maximum allowed
+        max: usize,
+    },
+
+    /// L2 entity count mismatch
+    #[error("L2 entity count mismatch: declared {declared}, actual {actual}")]
+    L2EntityCountMismatch {
+        /// Declared count
+        declared: u32,
+        /// Actual count
+        actual: u32,
+    },
+
+    /// L2 relationship count mismatch
+    #[error("L2 relationship count mismatch: declared {declared}, actual {actual}")]
+    L2RelationshipCountMismatch {
+        /// Declared count
+        declared: u32,
+        /// Actual count
+        actual: u32,
+    },
+
+    /// L2 has duplicate entity ID
+    #[error("L2 has duplicate entity ID")]
+    L2DuplicateEntityId,
+
+    /// L2 invalid entity ID
+    #[error("L2 invalid entity ID: {id}")]
+    L2InvalidEntityId {
+        /// The invalid entity ID
+        id: String,
+    },
+
+    /// L2 invalid relationship ID
+    #[error("L2 invalid relationship ID: {id}")]
+    L2InvalidRelationshipId {
+        /// The invalid relationship ID
+        id: String,
+    },
+
+    /// L2 invalid entity reference
+    #[error("L2 invalid entity reference: {entity_id} in {context}")]
+    L2InvalidEntityRef {
+        /// The invalid entity ID
+        entity_id: String,
+        /// Context where the error occurred
+        context: String,
+    },
+
+    /// L2 invalid URI
+    #[error("L2 invalid URI '{uri}': {reason}")]
+    L2InvalidUri {
+        /// The invalid URI
+        uri: String,
+        /// Reason for invalidity
+        reason: String,
+    },
+
+    /// L2 invalid prefix
+    #[error("L2 invalid prefix '{prefix}': {reason}")]
+    L2InvalidPrefix {
+        /// The invalid prefix
+        prefix: String,
+        /// Reason for invalidity
+        reason: String,
+    },
+
+    /// L2 label too long
+    #[error("L2 canonical label too long: {length} chars exceeds maximum {max}")]
+    L2LabelTooLong {
+        /// Actual length
+        length: usize,
+        /// Maximum allowed
+        max: usize,
+    },
+
+    /// L2 too many aliases
+    #[error("L2 entity has too many aliases: {count} exceeds maximum {max}")]
+    L2TooManyAliases {
+        /// Actual count
+        count: usize,
+        /// Maximum allowed
+        max: usize,
+    },
+
+    /// L2 description too long
+    #[error("L2 entity description too long: {length} chars exceeds maximum {max}")]
+    L2DescriptionTooLong {
+        /// Actual length
+        length: usize,
+        /// Maximum allowed
+        max: usize,
+    },
+
+    /// L2 predicate too long
+    #[error("L2 predicate too long: {length} chars exceeds maximum {max}")]
+    L2PredicateTooLong {
+        /// Actual length
+        length: usize,
+        /// Maximum allowed
+        max: usize,
+    },
+
+    /// L2 invalid confidence score
+    #[error("L2 invalid confidence score: {value} (must be 0.0 to 1.0)")]
+    L2InvalidConfidence {
+        /// The invalid confidence value
+        value: f32,
+    },
+
+    /// L2 invalid source type
+    #[error("L2 source {hash} has invalid content type: {content_type}")]
+    L2InvalidSourceType {
+        /// Hash of the invalid source
+        hash: String,
+        /// The invalid content type
+        content_type: String,
+    },
+
+    /// L2 cannot be published
+    #[error("L2 content cannot be published (must remain private)")]
+    L2CannotPublish,
+
+    // =========================================================================
     // Generic Errors
     // =========================================================================
     /// Public key lookup failed
@@ -387,6 +558,31 @@ impl ValidationError {
                 ErrorCode::AccessDenied
             }
             Self::BondRequired { .. } => ErrorCode::PaymentRequired,
+
+            // L2 validation
+            Self::L2VisibilityNotPrivate { .. }
+            | Self::L2PriceNotZero { .. }
+            | Self::L2IdMismatch
+            | Self::L2NoSources
+            | Self::L2TooManySources { .. }
+            | Self::L2DuplicateEntityId
+            | Self::L2InvalidEntityId { .. }
+            | Self::L2InvalidRelationshipId { .. }
+            | Self::L2InvalidPrefix { .. }
+            | Self::L2LabelTooLong { .. }
+            | Self::L2TooManyAliases { .. }
+            | Self::L2DescriptionTooLong { .. }
+            | Self::L2PredicateTooLong { .. }
+            | Self::L2InvalidConfidence { .. }
+            | Self::L2InvalidSourceType { .. }
+            | Self::L2EntityCountMismatch { .. }
+            | Self::L2RelationshipCountMismatch { .. } => ErrorCode::L2InvalidStructure,
+
+            Self::L2TooManyEntities { .. } => ErrorCode::L2EntityLimit,
+            Self::L2TooManyRelationships { .. } => ErrorCode::L2RelationshipLimit,
+            Self::L2InvalidEntityRef { .. } => ErrorCode::L2InvalidEntityRef,
+            Self::L2InvalidUri { .. } => ErrorCode::L2InvalidUri,
+            Self::L2CannotPublish => ErrorCode::L2CannotPublish,
 
             // Generic
             Self::PublicKeyNotFound { .. } => ErrorCode::PeerNotFound,

@@ -120,6 +120,34 @@ pub const DHT_REPLICATION: usize = 20;
 /// Maximum retry attempts for message delivery
 pub const MAX_RETRY_ATTEMPTS: u32 = 3;
 
+// =============================================================================
+// L2 Entity Graph Limits
+// =============================================================================
+
+/// Maximum entities per L2 Entity Graph
+pub const MAX_ENTITIES_PER_L2: u32 = 10_000;
+
+/// Maximum relationships per L2 Entity Graph
+pub const MAX_RELATIONSHIPS_PER_L2: u32 = 50_000;
+
+/// Maximum aliases per entity
+pub const MAX_ALIASES_PER_ENTITY: usize = 50;
+
+/// Maximum canonical label length (characters)
+pub const MAX_CANONICAL_LABEL_LENGTH: usize = 200;
+
+/// Maximum predicate length (characters)
+pub const MAX_PREDICATE_LENGTH: usize = 100;
+
+/// Maximum entity description length (characters)
+pub const MAX_ENTITY_DESCRIPTION_LENGTH: usize = 500;
+
+/// Maximum source L1s that can be combined into a single L2
+pub const MAX_SOURCE_L1S_PER_L2: usize = 100;
+
+/// Maximum source L2s that can be merged into a single L2
+pub const MAX_SOURCE_L2S_PER_MERGE: usize = 20;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +212,17 @@ mod tests {
         assert_eq!(MAX_SUMMARY_LENGTH, 500);
         assert_eq!(MAX_MENTION_CONTENT_LENGTH, 1000);
         assert_eq!(MAX_QUOTE_LENGTH, 500);
+    }
+
+    #[test]
+    fn test_l2_limits() {
+        assert_eq!(MAX_ENTITIES_PER_L2, 10_000);
+        assert_eq!(MAX_RELATIONSHIPS_PER_L2, 50_000);
+        assert_eq!(MAX_ALIASES_PER_ENTITY, 50);
+        assert_eq!(MAX_CANONICAL_LABEL_LENGTH, 200);
+        assert_eq!(MAX_PREDICATE_LENGTH, 100);
+        assert_eq!(MAX_ENTITY_DESCRIPTION_LENGTH, 500);
+        assert_eq!(MAX_SOURCE_L1S_PER_L2, 100);
+        assert_eq!(MAX_SOURCE_L2S_PER_MERGE, 20);
     }
 }

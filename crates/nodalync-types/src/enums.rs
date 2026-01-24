@@ -10,9 +10,8 @@ use serde::{Deserialize, Serialize};
 /// Spec §4.1: ContentType identifies the layer of processed knowledge.
 /// - L0: Raw input (documents, notes, transcripts)
 /// - L1: Mentions (extracted atomic facts)
+/// - L2: Entity Graph (personal knowledge graph, always private)
 /// - L3: Insights (emergent synthesis)
-///
-/// Note: L2 (Entity Graph) is internal only, not part of protocol messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(u8)]
 #[non_exhaustive]
@@ -21,6 +20,8 @@ pub enum ContentType {
     L0 = 0x00,
     /// Mentions (extracted atomic facts)
     L1 = 0x01,
+    /// Entity Graph (personal knowledge graph, always private)
+    L2 = 0x02,
     /// Insights (emergent synthesis)
     L3 = 0x03,
 }
@@ -171,6 +172,36 @@ impl Default for ChannelState {
     }
 }
 
+/// Method used to resolve an entity mention to a canonical entity.
+///
+/// Spec §4.5: Tracks how entity resolution was performed in L2 Entity Graphs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u8)]
+#[non_exhaustive]
+#[serde(rename_all = "snake_case")]
+pub enum ResolutionMethod {
+    /// Exact string match
+    ExactMatch = 0x00,
+    /// Normalized form match (case, whitespace, punctuation)
+    Normalized = 0x01,
+    /// Matched via alias
+    Alias = 0x02,
+    /// Coreference resolution (pronouns, anaphora)
+    Coreference = 0x03,
+    /// Linked to external knowledge base
+    ExternalLink = 0x04,
+    /// Manual user assignment
+    Manual = 0x05,
+    /// AI-assisted resolution
+    AIAssisted = 0x06,
+}
+
+impl Default for ResolutionMethod {
+    fn default() -> Self {
+        Self::ExactMatch
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,6 +210,7 @@ mod tests {
     fn test_content_type_values() {
         assert_eq!(ContentType::L0 as u8, 0x00);
         assert_eq!(ContentType::L1 as u8, 0x01);
+        assert_eq!(ContentType::L2 as u8, 0x02);
         assert_eq!(ContentType::L3 as u8, 0x03);
     }
 
@@ -264,6 +296,7 @@ mod tests {
         assert_eq!(Confidence::default(), Confidence::Explicit);
         assert_eq!(Currency::default(), Currency::NDL);
         assert_eq!(ChannelState::default(), ChannelState::Opening);
+        assert_eq!(ResolutionMethod::default(), ResolutionMethod::ExactMatch);
     }
 
     #[test]
@@ -278,14 +311,26 @@ mod tests {
     }
 
     #[test]
+    fn test_resolution_method_values() {
+        assert_eq!(ResolutionMethod::ExactMatch as u8, 0x00);
+        assert_eq!(ResolutionMethod::Normalized as u8, 0x01);
+        assert_eq!(ResolutionMethod::Alias as u8, 0x02);
+        assert_eq!(ResolutionMethod::Coreference as u8, 0x03);
+        assert_eq!(ResolutionMethod::ExternalLink as u8, 0x04);
+        assert_eq!(ResolutionMethod::Manual as u8, 0x05);
+        assert_eq!(ResolutionMethod::AIAssisted as u8, 0x06);
+    }
+
+    #[test]
     fn test_hash_trait() {
         use std::collections::HashSet;
 
         let mut set = HashSet::new();
         set.insert(ContentType::L0);
         set.insert(ContentType::L1);
+        set.insert(ContentType::L2);
         set.insert(ContentType::L3);
-        assert_eq!(set.len(), 3);
-        assert!(set.contains(&ContentType::L1));
+        assert_eq!(set.len(), 4);
+        assert!(set.contains(&ContentType::L2));
     }
 }

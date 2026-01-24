@@ -7,7 +7,7 @@ use nodalync_crypto::Hash;
 use nodalync_econ::validate_price;
 use nodalync_net::Multiaddr;
 use nodalync_store::ManifestStore;
-use nodalync_types::{AccessControl, Amount, Manifest, Visibility};
+use nodalync_types::{AccessControl, Amount, ContentType, Manifest, Visibility};
 use nodalync_valid::Validator;
 use nodalync_wire::AnnouncePayload;
 
@@ -28,6 +28,8 @@ where
     /// 3. Updates visibility, price, access_control
     /// 4. Saves manifest
     /// 5. Announces to DHT (if network available)
+    ///
+    /// Note: L2 content cannot be published - it must remain private.
     pub async fn publish_content(
         &mut self,
         hash: &Hash,
@@ -40,6 +42,13 @@ where
             .manifests
             .load(hash)?
             .ok_or(OpsError::ManifestNotFound(*hash))?;
+
+        // L2 content cannot be published
+        if manifest.content_type == ContentType::L2 {
+            return Err(OpsError::Validation(
+                nodalync_valid::ValidationError::L2CannotPublish,
+            ));
+        }
 
         // Verify ownership
         if manifest.owner != self.peer_id() {

@@ -198,9 +198,23 @@ where
         }
 
         // 1. Verify all sources were queried (in cache or owned)
+        // Note: L2 sources are special - they can only be used if owned (never queried)
         for source_hash in sources {
+            let manifest_opt = self.state.manifests.load(source_hash)?;
             let is_cached = self.state.cache.is_cached(source_hash);
-            let is_owned = self.state.manifests.load(source_hash)?.is_some();
+            let is_owned = manifest_opt.is_some();
+
+            // Check if this is an L2 source
+            if let Some(ref manifest) = manifest_opt {
+                if manifest.content_type == ContentType::L2 {
+                    // L2 sources must be owned, not queried (L2 is never queryable)
+                    if manifest.owner != self.peer_id() {
+                        return Err(OpsError::AccessDenied);
+                    }
+                    continue; // L2 is valid if owned
+                }
+            }
+
             if !is_cached && !is_owned {
                 return Err(OpsError::SourceNotQueried(*source_hash));
             }

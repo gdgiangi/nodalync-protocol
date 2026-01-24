@@ -53,6 +53,7 @@ pub mod constants;
 pub mod content;
 pub mod enums;
 pub mod error;
+pub mod l2;
 pub mod manifest;
 pub mod provenance;
 pub mod settlement;
@@ -61,7 +62,8 @@ pub mod settlement;
 
 // Enums
 pub use enums::{
-    ChannelState, Classification, Confidence, ContentType, Currency, LocationType, Visibility,
+    ChannelState, Classification, Confidence, ContentType, Currency, LocationType,
+    ResolutionMethod, Visibility,
 };
 
 // Constants
@@ -84,6 +86,12 @@ pub use channel::{Channel, Payment};
 
 // Settlement types
 pub use settlement::{Distribution, SettlementBatch, SettlementEntry};
+
+// L2 Entity Graph types
+pub use l2::{
+    ConflictResolution, Entity, L1Reference, L2BuildConfig, L2EntityGraph, L2MergeConfig,
+    LiteralValue, MentionRef, PrefixEntry, PrefixMap, Relationship, RelationshipObject, Uri,
+};
 
 /// Amount in smallest unit (10^-8 NDL).
 ///

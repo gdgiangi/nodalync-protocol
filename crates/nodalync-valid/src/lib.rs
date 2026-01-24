@@ -89,6 +89,7 @@
 pub mod access;
 pub mod content;
 pub mod error;
+pub mod l2;
 pub mod message;
 pub mod payment;
 pub mod provenance;
@@ -101,6 +102,7 @@ pub use error::{ValidationError, ValidationResult};
 // Re-export standalone validation functions
 pub use access::{is_owner, validate_access, validate_access_basic, validate_access_with_owner_bypass};
 pub use content::{validate_content, validate_metadata};
+pub use l2::{expand_curie, is_valid_uri, validate_l2_content, validate_l2_provenance, validate_l2_publish};
 pub use message::{is_valid_message_type, validate_message, validate_message_basic};
 pub use payment::{validate_payment, validate_payment_basic, BondChecker, PublicKeyLookup};
 pub use provenance::validate_provenance;

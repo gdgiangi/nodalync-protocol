@@ -51,6 +51,11 @@ pub fn validate_provenance(manifest: &Manifest, sources: &[Manifest]) -> Validat
 
     match manifest.content_type {
         ContentType::L0 | ContentType::L1 => validate_l0_provenance(manifest),
+        ContentType::L2 => {
+            // L2 provenance is handled separately by validate_l2_provenance
+            // For now, validate using L3 rules (derived content)
+            validate_l3_provenance(manifest, sources)
+        }
         ContentType::L3 => validate_l3_provenance(manifest, sources),
         // Handle future content types - for now treat unknown types as invalid
         _ => Err(ValidationError::Internal(

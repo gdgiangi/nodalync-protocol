@@ -58,6 +58,24 @@ pub enum ErrorCode {
     /// Content exceeds size limit
     ContentTooLarge = 0x0204,
 
+    // L2 Entity Graph Errors (0x0210 - 0x021F)
+    /// L2 entity graph structure is invalid
+    L2InvalidStructure = 0x0210,
+    /// L2 is missing required source content
+    L2MissingSource = 0x0211,
+    /// L2 exceeds maximum entity count
+    L2EntityLimit = 0x0212,
+    /// L2 exceeds maximum relationship count
+    L2RelationshipLimit = 0x0213,
+    /// L2 contains invalid entity reference
+    L2InvalidEntityRef = 0x0214,
+    /// L2 entity graph contains a cycle
+    L2CycleDetected = 0x0215,
+    /// L2 contains invalid URI or CURIE
+    L2InvalidUri = 0x0216,
+    /// L2 content cannot be published (must remain private)
+    L2CannotPublish = 0x0217,
+
     // =========================================================================
     // Network Errors (0x0300 - 0x03FF)
     // =========================================================================
@@ -125,6 +143,14 @@ impl std::fmt::Display for ErrorCode {
             ErrorCode::InvalidVersion => write!(f, "INVALID_VERSION"),
             ErrorCode::InvalidManifest => write!(f, "INVALID_MANIFEST"),
             ErrorCode::ContentTooLarge => write!(f, "CONTENT_TOO_LARGE"),
+            ErrorCode::L2InvalidStructure => write!(f, "L2_INVALID_STRUCTURE"),
+            ErrorCode::L2MissingSource => write!(f, "L2_MISSING_SOURCE"),
+            ErrorCode::L2EntityLimit => write!(f, "L2_ENTITY_LIMIT"),
+            ErrorCode::L2RelationshipLimit => write!(f, "L2_RELATIONSHIP_LIMIT"),
+            ErrorCode::L2InvalidEntityRef => write!(f, "L2_INVALID_ENTITY_REF"),
+            ErrorCode::L2CycleDetected => write!(f, "L2_CYCLE_DETECTED"),
+            ErrorCode::L2InvalidUri => write!(f, "L2_INVALID_URI"),
+            ErrorCode::L2CannotPublish => write!(f, "L2_CANNOT_PUBLISH"),
             ErrorCode::PeerNotFound => write!(f, "PEER_NOT_FOUND"),
             ErrorCode::ConnectionFailed => write!(f, "CONNECTION_FAILED"),
             ErrorCode::Timeout => write!(f, "TIMEOUT"),
@@ -263,6 +289,16 @@ mod tests {
         assert_eq!(ErrorCode::InvalidManifest as u16, 0x0203);
         assert_eq!(ErrorCode::ContentTooLarge as u16, 0x0204);
 
+        // L2 errors
+        assert_eq!(ErrorCode::L2InvalidStructure as u16, 0x0210);
+        assert_eq!(ErrorCode::L2MissingSource as u16, 0x0211);
+        assert_eq!(ErrorCode::L2EntityLimit as u16, 0x0212);
+        assert_eq!(ErrorCode::L2RelationshipLimit as u16, 0x0213);
+        assert_eq!(ErrorCode::L2InvalidEntityRef as u16, 0x0214);
+        assert_eq!(ErrorCode::L2CycleDetected as u16, 0x0215);
+        assert_eq!(ErrorCode::L2InvalidUri as u16, 0x0216);
+        assert_eq!(ErrorCode::L2CannotPublish as u16, 0x0217);
+
         // Network errors
         assert_eq!(ErrorCode::PeerNotFound as u16, 0x0300);
         assert_eq!(ErrorCode::ConnectionFailed as u16, 0x0301);
@@ -289,6 +325,11 @@ mod tests {
         assert!(ErrorCode::PeerNotFound.is_network_error());
         assert!(ErrorCode::Timeout.is_network_error());
         assert!(!ErrorCode::Timeout.is_validation_error());
+
+        // L2 errors are validation errors
+        assert!(ErrorCode::L2InvalidStructure.is_validation_error());
+        assert!(ErrorCode::L2CannotPublish.is_validation_error());
+        assert!(!ErrorCode::L2InvalidStructure.is_channel_error());
     }
 
     #[test]
