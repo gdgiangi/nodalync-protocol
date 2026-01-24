@@ -195,7 +195,7 @@ pub fn create_merkle_proof(entries: &[SettlementEntry], index: usize) -> EconRes
 
     // Build proof by traversing up the tree
     while hashes.len() > 1 {
-        let is_right_sibling = current_index.is_multiple_of(2);
+        let is_right_sibling = current_index % 2 == 0;
         let sibling_index = if is_right_sibling {
             current_index + 1
         } else {
