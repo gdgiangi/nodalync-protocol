@@ -1,0 +1,44 @@
+# Git
+.git
+.gitignore
+.github
+
+# Build artifacts
+target/
+*.rs.bk
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Test files
+**/tests/
+**/*_test.rs
+
+# Node/Contract artifacts (not needed for Rust build)
+contracts/node_modules/
+contracts/artifacts/
+contracts/cache/
+contracts/typechain-types/
+contracts/coverage/
+
+# Local development
+.env
+.env.*
+*.log
+
+# macOS
+.DS_Store
+
+# Temporary files
+tmp/
+temp/
+*.tmp
