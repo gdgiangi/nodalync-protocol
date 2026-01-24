@@ -2,3 +2,15 @@
 name = "nodalync-types"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Data structures for the Nodalync protocol"
+
+[dependencies]
+nodalync-crypto = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = "1.0"

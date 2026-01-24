@@ -46,45 +46,45 @@ Track implementation progress by checking off items as they're completed. Each i
 ### `nodalync-types` (Spec §4)
 
 #### §4.1 ContentType
-- [ ] Enum: L0 = 0x00, L1 = 0x01, L3 = 0x03
-- [ ] Serialization matches spec
+- [x] Enum: L0 = 0x00, L1 = 0x01, L3 = 0x03
+- [x] Serialization matches spec
 
 #### §4.2 Visibility
-- [ ] Enum: Private = 0x00, Unlisted = 0x01, Shared = 0x02
-- [ ] Serialization matches spec
+- [x] Enum: Private = 0x00, Unlisted = 0x01, Shared = 0x02
+- [x] Serialization matches spec
 
 #### §4.3 Version
-- [ ] Struct: number, previous, root, timestamp
-- [ ] Constraints: v1 has null previous, root == self
-- [ ] Constraints: v2+ has non-null previous, root == previous.root
+- [x] Struct: number, previous, root, timestamp
+- [x] Constraints: v1 has null previous, root == self
+- [x] Constraints: v2+ has non-null previous, root == previous.root
 
 #### §4.4 Mention (L1)
-- [ ] Mention struct with all fields
-- [ ] SourceLocation struct
-- [ ] LocationType enum
-- [ ] Classification enum
-- [ ] Confidence enum
+- [x] Mention struct with all fields
+- [x] SourceLocation struct
+- [x] LocationType enum
+- [x] Classification enum
+- [x] Confidence enum
 
 #### §4.5 Provenance
-- [ ] Provenance struct: root_L0L1, derived_from, depth
-- [ ] ProvenanceEntry struct: hash, owner, visibility, weight
-- [ ] Constraints documented in types
+- [x] Provenance struct: root_L0L1, derived_from, depth
+- [x] ProvenanceEntry struct: hash, owner, visibility, weight
+- [x] Constraints documented in types
 
 #### §4.6 AccessControl
-- [ ] Struct: allowlist, denylist, require_bond, bond_amount, max_queries_per_peer
-- [ ] Access logic documented
+- [x] Struct: allowlist, denylist, require_bond, bond_amount, max_queries_per_peer
+- [x] Access logic documented
 
 #### §4.7 Economics
-- [ ] Struct: price, currency, total_queries, total_revenue
-- [ ] Currency enum (NDL = 0x00)
+- [x] Struct: price, currency, total_queries, total_revenue
+- [x] Currency enum (NDL = 0x00)
 
 #### §4.8 Manifest
-- [ ] Complete Manifest struct with all fields
-- [ ] **owner: PeerId field** (content owner)
-- [ ] Metadata struct
+- [x] Complete Manifest struct with all fields
+- [x] **owner: PeerId field** (content owner)
+- [x] Metadata struct
 
 #### §4.9 L1Summary
-- [ ] Struct: l0_hash, mention_count, preview_mentions, primary_topics, summary
+- [x] Struct: l0_hash, mention_count, preview_mentions, primary_topics, summary
 
 ---
 
@@ -499,53 +499,53 @@ Track implementation progress by checking off items as they're completed. Each i
 
 ## Constants Verification (Appendix B)
 
-- [ ] PROTOCOL_VERSION = 0x01
-- [ ] PROTOCOL_MAGIC = 0x00
-- [ ] MESSAGE_TIMEOUT_MS = 30000
-- [ ] CHANNEL_DISPUTE_PERIOD_MS = 86400000
-- [ ] MAX_CLOCK_SKEW_MS = 300000
-- [ ] MAX_CONTENT_SIZE = 104857600
-- [ ] MAX_MESSAGE_SIZE = 10485760
-- [ ] MAX_MENTIONS_PER_L0 = 1000
-- [ ] MAX_SOURCES_PER_L3 = 100
-- [ ] MAX_PROVENANCE_DEPTH = 100
-- [ ] MAX_TAGS = 20
-- [ ] MAX_TAG_LENGTH = 50
-- [ ] MAX_TITLE_LENGTH = 200
-- [ ] MAX_DESCRIPTION_LENGTH = 2000
-- [ ] MIN_PRICE = 1
-- [ ] SYNTHESIS_FEE_NUMERATOR = 5
-- [ ] SYNTHESIS_FEE_DENOMINATOR = 100
-- [ ] SETTLEMENT_BATCH_THRESHOLD = 10000000000
-- [ ] SETTLEMENT_BATCH_INTERVAL_MS = 3600000
-- [ ] DHT_BUCKET_SIZE = 20
-- [ ] DHT_ALPHA = 3
-- [ ] DHT_REPLICATION = 20
+- [x] PROTOCOL_VERSION = 0x01
+- [x] PROTOCOL_MAGIC = 0x00
+- [x] MESSAGE_TIMEOUT_MS = 30000
+- [x] CHANNEL_DISPUTE_PERIOD_MS = 86400000
+- [x] MAX_CLOCK_SKEW_MS = 300000
+- [x] MAX_CONTENT_SIZE = 104857600
+- [x] MAX_MESSAGE_SIZE = 10485760
+- [x] MAX_MENTIONS_PER_L0 = 1000
+- [x] MAX_SOURCES_PER_L3 = 100
+- [x] MAX_PROVENANCE_DEPTH = 100
+- [x] MAX_TAGS = 20
+- [x] MAX_TAG_LENGTH = 50
+- [x] MAX_TITLE_LENGTH = 200
+- [x] MAX_DESCRIPTION_LENGTH = 2000
+- [x] MIN_PRICE = 1
+- [x] SYNTHESIS_FEE_NUMERATOR = 5
+- [x] SYNTHESIS_FEE_DENOMINATOR = 100
+- [x] SETTLEMENT_BATCH_THRESHOLD = 10000000000
+- [x] SETTLEMENT_BATCH_INTERVAL_MS = 3600000
+- [x] DHT_BUCKET_SIZE = 20
+- [x] DHT_ALPHA = 3
+- [x] DHT_REPLICATION = 20
 
 ---
 
 ## Error Codes Verification (Appendix C)
 
-- [ ] NOT_FOUND = 0x0001
-- [ ] ACCESS_DENIED = 0x0002
-- [ ] PAYMENT_REQUIRED = 0x0003
-- [ ] PAYMENT_INVALID = 0x0004
-- [ ] RATE_LIMITED = 0x0005
-- [ ] VERSION_NOT_FOUND = 0x0006
-- [ ] CHANNEL_NOT_FOUND = 0x0100
-- [ ] CHANNEL_CLOSED = 0x0101
-- [ ] INSUFFICIENT_BALANCE = 0x0102
-- [ ] INVALID_NONCE = 0x0103
-- [ ] INVALID_SIGNATURE = 0x0104
-- [ ] INVALID_HASH = 0x0200
-- [ ] INVALID_PROVENANCE = 0x0201
-- [ ] INVALID_VERSION = 0x0202
-- [ ] INVALID_MANIFEST = 0x0203
-- [ ] CONTENT_TOO_LARGE = 0x0204
-- [ ] PEER_NOT_FOUND = 0x0300
-- [ ] CONNECTION_FAILED = 0x0301
-- [ ] TIMEOUT = 0x0302
-- [ ] INTERNAL_ERROR = 0xFFFF
+- [x] NOT_FOUND = 0x0001
+- [x] ACCESS_DENIED = 0x0002
+- [x] PAYMENT_REQUIRED = 0x0003
+- [x] PAYMENT_INVALID = 0x0004
+- [x] RATE_LIMITED = 0x0005
+- [x] VERSION_NOT_FOUND = 0x0006
+- [x] CHANNEL_NOT_FOUND = 0x0100
+- [x] CHANNEL_CLOSED = 0x0101
+- [x] INSUFFICIENT_BALANCE = 0x0102
+- [x] INVALID_NONCE = 0x0103
+- [x] INVALID_SIGNATURE = 0x0104
+- [x] INVALID_HASH = 0x0200
+- [x] INVALID_PROVENANCE = 0x0201
+- [x] INVALID_VERSION = 0x0202
+- [x] INVALID_MANIFEST = 0x0203
+- [x] CONTENT_TOO_LARGE = 0x0204
+- [x] PEER_NOT_FOUND = 0x0300
+- [x] CONNECTION_FAILED = 0x0301
+- [x] TIMEOUT = 0x0302
+- [x] INTERNAL_ERROR = 0xFFFF
 
 ---
 

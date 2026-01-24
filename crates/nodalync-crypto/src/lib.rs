@@ -35,6 +35,7 @@
 mod error;
 mod hash;
 mod identity;
+mod serde_impl;
 mod signature;
 
 pub use error::CryptoError;
