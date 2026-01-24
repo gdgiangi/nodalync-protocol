@@ -625,30 +625,30 @@ Use `MockSettlement` for testing without Hedera dependencies.
 ### `nodalync-cli`
 
 #### Commands
-- [ ] `nodalync init` — Create identity
-- [ ] `nodalync publish <file>` — Publish content
-- [ ] `nodalync search <query>` — Search network
-- [ ] `nodalync preview <hash>` — Get L1 preview
-- [ ] `nodalync query <hash>` — Query content
-- [ ] `nodalync synthesize` — Create L3
-- [ ] `nodalync list` — List local content
-- [ ] `nodalync balance` — Show balance
-- [ ] `nodalync settle` — Trigger settlement
-- [ ] `nodalync visibility <hash> <tier>` — Change visibility
-- [ ] `nodalync versions <hash>` — List versions
-- [ ] `nodalync update <hash> <file>` — Create new version
-- [ ] `nodalync build-l2 <l1-hashes...>` — Build L2 entity graph (NEW)
-- [ ] `nodalync merge-l2 <l2-hashes...>` — Merge L2 graphs (NEW)
+- [x] `nodalync init` — Create identity
+- [x] `nodalync publish <file>` — Publish content
+- [ ] `nodalync search <query>` — Search network (deferred: application layer)
+- [x] `nodalync preview <hash>` — Get L1 preview
+- [x] `nodalync query <hash>` — Query content
+- [x] `nodalync synthesize` — Create L3
+- [x] `nodalync list` — List local content
+- [x] `nodalync balance` — Show balance
+- [x] `nodalync settle` — Trigger settlement
+- [x] `nodalync visibility <hash> <tier>` — Change visibility
+- [x] `nodalync versions <hash>` — List versions
+- [x] `nodalync update <hash> <file>` — Create new version
+- [x] `nodalync build-l2 <l1-hashes...>` — Build L2 entity graph
+- [x] `nodalync merge-l2 <l2-hashes...>` — Merge L2 graphs
 
 #### Configuration
-- [ ] Config file loading
-- [ ] Default config generation
-- [ ] Config validation
+- [x] Config file loading
+- [x] Default config generation
+- [x] Config validation
 
 #### Output Formatting
-- [ ] JSON output option
-- [ ] Human-readable tables
-- [ ] Progress indicators
+- [x] JSON output option
+- [x] Human-readable tables
+- [ ] Progress indicators (indicatif available but not wired)
 
 ---
 
