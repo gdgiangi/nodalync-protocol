@@ -3,14 +3,15 @@
 //! This module implements preview, query, get_versions, and extract_l1 operations
 //! as specified in Protocol Specification §7.2 and §7.4.
 
-use nodalync_crypto::{content_hash, Hash, Signature};
+use nodalync_crypto::{content_hash, Hash, PeerId, Signature};
 use nodalync_store::{CacheStore, CachedContent, ContentStore, ManifestStore};
-use nodalync_types::{Amount, L1Summary, Manifest, Visibility};
+use nodalync_types::{Amount, L1Summary, Manifest, Payment, Visibility};
 use nodalync_valid::Validator;
-use nodalync_wire::{PaymentReceipt, VersionInfo, VersionSpec};
+use nodalync_wire::{PaymentReceipt, QueryRequestPayload, VersionInfo, VersionSpec};
 
 use crate::error::{OpsError, OpsResult};
 use crate::extraction::L1Extractor;
+use crate::helpers::verify_content_hash;
 use crate::node_ops::{current_timestamp, NodeOperations};
 use crate::ops::{PreviewResponse, QueryResponse};
 
@@ -109,15 +110,12 @@ where
     /// Query and retrieve full content.
     ///
     /// Spec §7.2.3 (requester side):
-    /// 1. Gets preview for price/owner
-    /// 2. Auto-opens channel if none exists
+    /// 1. Check if content is local (owned or cached)
+    /// 2. If not local, query from network (DHT lookup, payment, fetch)
     /// 3. Validates payment amount >= price
-    /// 4. Checks channel balance
-    /// 5. (Network call - stub for MVP)
-    /// 6. Verifies response hash
-    /// 7. Updates channel state (debit)
-    /// 8. Caches content
-    pub fn query_content(
+    /// 4. Verifies response hash
+    /// 5. Caches content
+    pub async fn query_content(
         &mut self,
         hash: &Hash,
         payment_amount: Amount,
@@ -125,71 +123,250 @@ where
     ) -> OpsResult<QueryResponse> {
         let timestamp = current_timestamp();
 
-        // 1. Get preview (this loads manifest and checks access)
-        let preview = self.preview_content(hash)?;
-        let manifest = &preview.manifest;
+        // First, try to get content locally (from preview which loads manifest)
+        match self.preview_content(hash) {
+            Ok(preview) => {
+                let manifest = &preview.manifest;
 
-        // Check if we already have the content locally
-        if manifest.owner == self.peer_id() {
-            // We own this content, just load it
-            let content = self
-                .state
-                .content
-                .load(hash)?
-                .ok_or(OpsError::NotFound(*hash))?;
+                // Check if we own this content - just load it directly
+                if manifest.owner == self.peer_id() {
+                    let content = self
+                        .state
+                        .content
+                        .load(hash)?
+                        .ok_or(OpsError::NotFound(*hash))?;
 
-            let receipt = PaymentReceipt {
-                payment_id: *hash,
-                amount: 0, // No payment for own content
-                timestamp,
-                channel_nonce: 0,
-                distributor_signature: Signature::from_bytes([0u8; 64]),
-            };
+                    let receipt = PaymentReceipt {
+                        payment_id: *hash,
+                        amount: 0, // No payment for own content
+                        timestamp,
+                        channel_nonce: 0,
+                        distributor_signature: Signature::from_bytes([0u8; 64]),
+                    };
 
-            return Ok(QueryResponse {
-                content,
-                manifest: manifest.clone(),
-                receipt,
-            });
+                    return Ok(QueryResponse {
+                        content,
+                        manifest: manifest.clone(),
+                        receipt,
+                    });
+                }
+
+                // Validate payment amount >= price
+                if payment_amount < manifest.economics.price {
+                    return Err(OpsError::PaymentInsufficient);
+                }
+
+                // If we have the content locally but don't own it, serve from local
+                if let Some(content) = self.state.content.load(hash)? {
+                    let receipt = PaymentReceipt {
+                        payment_id: content_hash(&[hash.0.as_slice(), &timestamp.to_be_bytes()].concat()),
+                        amount: payment_amount,
+                        timestamp,
+                        channel_nonce: 1,
+                        distributor_signature: Signature::from_bytes([0u8; 64]),
+                    };
+
+                    // Cache content
+                    let cached = CachedContent::new(
+                        *hash,
+                        content.clone(),
+                        manifest.owner,
+                        timestamp,
+                        receipt.clone(),
+                    );
+                    self.state.cache.cache(cached)?;
+
+                    return Ok(QueryResponse {
+                        content,
+                        manifest: manifest.clone(),
+                        receipt,
+                    });
+                }
+
+                // Content manifest exists but content not local - try network
+                if let Some(network) = self.network().cloned() {
+                    return self.fetch_content_from_network(
+                        hash,
+                        &manifest.owner,
+                        payment_amount,
+                        &network,
+                    ).await;
+                }
+
+                // No network available and content not local
+                Err(OpsError::NotFound(*hash))
+            }
+            Err(OpsError::ManifestNotFound(_)) => {
+                // Content not known locally - try DHT lookup
+                if let Some(network) = self.network().cloned() {
+                    // Lookup content in DHT
+                    if let Some(announce) = network.dht_get(hash).await? {
+                        // Get libp2p peer ID from announcement's addresses
+                        // For now, we need to find the peer who published this content
+                        // In a real implementation, we'd track the publisher's peer ID
+                        return self.fetch_content_from_dht_announce(
+                            hash,
+                            &announce,
+                            payment_amount,
+                            &network,
+                        ).await;
+                    }
+                }
+
+                Err(OpsError::NotFound(*hash))
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Fetch content from a known peer via the network.
+    async fn fetch_content_from_network(
+        &mut self,
+        hash: &Hash,
+        owner: &PeerId,
+        payment_amount: Amount,
+        network: &std::sync::Arc<dyn nodalync_net::Network>,
+    ) -> OpsResult<QueryResponse> {
+        let timestamp = current_timestamp();
+
+        // Get libp2p peer ID for the owner
+        let libp2p_peer = network
+            .libp2p_peer_id(owner)
+            .ok_or(OpsError::PeerIdNotFound)?;
+
+        // Create payment
+        let payment_id = content_hash(&[
+            hash.0.as_slice(),
+            &owner.0,
+            &timestamp.to_be_bytes(),
+        ].concat());
+
+        let payment = Payment::new(
+            payment_id,
+            Hash([0u8; 32]), // Channel ID - in full impl, would get from channel
+            payment_amount,
+            *owner,
+            *hash,
+            vec![], // Provenance entries would be added in full impl
+            timestamp,
+            Signature::from_bytes([0u8; 64]), // Signature would be real in full impl
+        );
+
+        // Send query request
+        let request = QueryRequestPayload {
+            hash: *hash,
+            query: None,
+            payment,
+            version_spec: None,
+        };
+
+        let response = network.send_query(libp2p_peer, request).await?;
+
+        // Verify content hash
+        if !verify_content_hash(&response.content, hash) {
+            return Err(OpsError::ContentHashMismatch);
         }
 
-        // 3. Validate payment amount >= price
-        if payment_amount < manifest.economics.price {
+        // Cache the content
+        let cached = CachedContent::new(
+            response.hash,
+            response.content.clone(),
+            response.manifest.owner,
+            timestamp,
+            response.payment_receipt.clone(),
+        );
+        self.state.cache.cache(cached)?;
+
+        // Also store the manifest for future reference
+        self.state.manifests.store(&response.manifest)?;
+
+        Ok(QueryResponse {
+            content: response.content,
+            manifest: response.manifest,
+            receipt: response.payment_receipt,
+        })
+    }
+
+    /// Fetch content from a DHT announcement.
+    async fn fetch_content_from_dht_announce(
+        &mut self,
+        hash: &Hash,
+        announce: &nodalync_wire::AnnouncePayload,
+        payment_amount: Amount,
+        network: &std::sync::Arc<dyn nodalync_net::Network>,
+    ) -> OpsResult<QueryResponse> {
+        // Validate payment amount against announced price
+        if payment_amount < announce.price {
             return Err(OpsError::PaymentInsufficient);
         }
 
-        // 2. Auto-open channel if none exists (for MVP, we stub this)
-        // In real implementation, this would check for existing channel
-        // and open one if needed
+        // Try to connect to one of the announced addresses
+        for addr_str in &announce.addresses {
+            if let Ok(addr) = addr_str.parse::<nodalync_net::Multiaddr>() {
+                // Try to dial the address
+                if network.dial(addr.clone()).await.is_ok() {
+                    // Extract peer ID from the address if possible
+                    // For simplicity, we try all connected peers that might serve this content
+                    for libp2p_peer in network.connected_peers() {
+                        // Try querying this peer
+                        let timestamp = current_timestamp();
+                        let payment_id = content_hash(&[
+                            hash.0.as_slice(),
+                            &timestamp.to_be_bytes(),
+                        ].concat());
 
-        // For MVP, we simulate local query if we have the content
-        if let Some(content) = self.state.content.load(hash)? {
-            let receipt = PaymentReceipt {
-                payment_id: content_hash(&[hash.0.as_slice(), &timestamp.to_be_bytes()].concat()),
-                amount: payment_amount,
-                timestamp,
-                channel_nonce: 1,
-                distributor_signature: Signature::from_bytes([0u8; 64]),
-            };
+                        // We don't have the Nodalync peer ID, so we create a placeholder recipient
+                        // In a real implementation, we'd exchange peer info first
+                        let recipient = network
+                            .nodalync_peer_id(&libp2p_peer)
+                            .unwrap_or_else(|| PeerId([0u8; 20]));
 
-            // 8. Cache content
-            let cached = CachedContent::new(
-                *hash,
-                content.clone(),
-                manifest.owner,
-                timestamp,
-                receipt.clone(),
-            );
-            self.state.cache.cache(cached)?;
+                        let payment = Payment::new(
+                            payment_id,
+                            Hash([0u8; 32]),
+                            payment_amount,
+                            recipient,
+                            *hash,
+                            vec![],
+                            timestamp,
+                            Signature::from_bytes([0u8; 64]),
+                        );
 
-            return Ok(QueryResponse {
-                content,
-                manifest: manifest.clone(),
-                receipt,
-            });
+                        let request = QueryRequestPayload {
+                            hash: *hash,
+                            query: None,
+                            payment,
+                            version_spec: None,
+                        };
+
+                        if let Ok(response) = network.send_query(libp2p_peer, request).await {
+                            // Verify content hash
+                            if verify_content_hash(&response.content, hash) {
+                                // Cache the content
+                                let cached = CachedContent::new(
+                                    response.hash,
+                                    response.content.clone(),
+                                    response.manifest.owner,
+                                    timestamp,
+                                    response.payment_receipt.clone(),
+                                );
+                                self.state.cache.cache(cached)?;
+
+                                // Store manifest
+                                self.state.manifests.store(&response.manifest)?;
+
+                                return Ok(QueryResponse {
+                                    content: response.content,
+                                    manifest: response.manifest,
+                                    receipt: response.payment_receipt,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
         }
 
-        // Content not available locally - would need network in full implementation
         Err(OpsError::NotFound(*hash))
     }
 
@@ -297,15 +474,15 @@ mod tests {
         assert_eq!(preview.l1_summary.l0_hash, hash);
     }
 
-    #[test]
-    fn test_query_own_content() {
+    #[tokio::test]
+    async fn test_query_own_content() {
         let (mut ops, _temp) = create_test_ops();
 
         let content = b"Test content for query";
         let meta = Metadata::new("Query Test", content.len() as u64);
         let hash = ops.create_content(content, meta).unwrap();
 
-        let response = ops.query_content(&hash, 100, None).unwrap();
+        let response = ops.query_content(&hash, 100, None).await.unwrap();
 
         assert_eq!(response.content, content.to_vec());
         assert_eq!(response.manifest.hash, hash);
@@ -333,8 +510,8 @@ mod tests {
         assert!(versions.iter().any(|v| v.number == 1));
     }
 
-    #[test]
-    fn test_query_insufficient_payment() {
+    #[tokio::test]
+    async fn test_query_insufficient_payment() {
         let (mut ops, _temp) = create_test_ops();
 
         // Create content with price
@@ -349,12 +526,12 @@ mod tests {
 
         // Query with insufficient payment should still work for own content
         // (owner doesn't pay themselves)
-        let result = ops.query_content(&hash, 100, None);
+        let result = ops.query_content(&hash, 100, None).await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_is_content_cached() {
+    #[tokio::test]
+    async fn test_is_content_cached() {
         let (mut ops, _temp) = create_test_ops();
 
         let content = b"Cached content";
@@ -365,7 +542,7 @@ mod tests {
         assert!(!ops.is_content_cached(&hash));
 
         // Query the content (this caches it for non-owned content)
-        let _ = ops.query_content(&hash, 0, None);
+        let _ = ops.query_content(&hash, 0, None).await;
 
         // Still not cached because we own it
         assert!(!ops.is_content_cached(&hash));

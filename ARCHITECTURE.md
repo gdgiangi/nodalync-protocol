@@ -12,15 +12,23 @@ This document defines the module structure, dependencies, and implementation ord
                                   │
           ┌───────────────────────┼───────────────────────┐
           │                       │                       │
-          ▼                       ▼                       ▼
-   ┌─────────────┐        ┌─────────────┐        ┌──────────────┐
-   │ nodalync-net│        │ nodalync-ops│        │nodalync-settle│
-   │  (P2P/DHT)  │        │ (operations)│        │   (chain)    │
-   └──────┬──────┘        └──────┬──────┘        └──────┬───────┘
-          │                      │                      │
-          │               ┌──────┴──────┐               │
-          │               │             │               │
-          ▼               ▼             ▼               ▼
+          ▼                       │                       ▼
+   ┌─────────────┐                │                ┌──────────────┐
+   │ nodalync-net│                │                │nodalync-settle│
+   │  (P2P/DHT)  │                │                │   (chain)    │
+   └──────┬──────┘                │                └──────┬───────┘
+          │                       │                       │
+          │        ┌──────────────┘                       │
+          │        │                                      │
+          │        ▼                                      │
+          │ ┌─────────────┐                               │
+          ├─│ nodalync-ops│                               │
+          │ │ (operations)│                               │
+          │ └──────┬──────┘                               │
+          │        │                                      │
+          │ ┌──────┴──────┐                               │
+          │ │             │                               │
+          ▼ ▼             ▼                               ▼
    ┌─────────────┐  ┌───────────┐ ┌───────────┐  ┌───────────┐
    │nodalync-wire│  │nodalync-  │ │nodalync-  │  │nodalync-  │
    │(serialization)│ │  store   │ │  valid    │  │   econ    │
@@ -40,6 +48,8 @@ This document defines the module structure, dependencies, and implementation ord
                          │(hash, sign)  │
                          └─────────────┘
 ```
+
+**Note:** `nodalync-net` depends on `nodalync-ops` to dispatch incoming messages to the appropriate handlers.
 
 ## Crates Overview
 

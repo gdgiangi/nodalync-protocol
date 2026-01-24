@@ -12,9 +12,11 @@ nodalync-store = { path = "../nodalync-store" }
 nodalync-valid = { path = "../nodalync-valid" }
 nodalync-econ = { path = "../nodalync-econ" }
 nodalync-wire = { path = "../nodalync-wire" }
+nodalync-net = { path = "../nodalync-net" }
 thiserror = "1.0"
 async-trait = "0.1"
 rand = "0.8"
+serde_json = "1.0"
 
 [dev-dependencies]
 tempfile = "3.8"

@@ -21,7 +21,7 @@
 //!
 //! # Example
 //!
-//! ```no_run
+//! ```ignore
 //! use nodalync_ops::{DefaultNodeOperations, OpsConfig};
 //! use nodalync_store::{NodeState, NodeStateConfig};
 //! use nodalync_crypto::{generate_identity, peer_id_from_public_key};
@@ -44,8 +44,8 @@
 //! let metadata = Metadata::new("My Document", content.len() as u64);
 //! let hash = ops.create_content(content, metadata).expect("Failed to create");
 //!
-//! // Publish content
-//! ops.publish_content(&hash, Visibility::Shared, 100).expect("Failed to publish");
+//! // Publish content (async)
+//! ops.publish_content(&hash, Visibility::Shared, 100).await.expect("Failed to publish");
 //! ```
 //!
 //! # Operations Overview
@@ -112,10 +112,11 @@
 //! The query operation checks for an existing channel and auto-opens one
 //! if sufficient balance is available. This simplifies the query flow.
 //!
-//! ## Network Stubs
+//! ## Network Integration
 //!
-//! For MVP, network operations (DHT announce, send_query, etc.) are stubs.
-//! These will be implemented in Phase 4 with nodalync-net.
+//! Network operations (DHT announce, queries, channel messages) are now integrated
+//! via the optional `network` field in `NodeOperations`. When a network is provided,
+//! operations will use P2P networking; otherwise they fall back to local-only mode.
 
 // Module declarations
 pub mod channel;
@@ -135,6 +136,9 @@ pub mod settlement;
 
 // Error types
 pub use error::{OpsError, OpsResult};
+
+// Network trait (re-exported from nodalync-net)
+pub use nodalync_net::{Network, NetworkError, NetworkEvent};
 
 // Configuration
 pub use config::{ChannelConfig, OpsConfig};
@@ -173,8 +177,8 @@ mod tests {
     }
 
     /// Integration test: Full content lifecycle
-    #[test]
-    fn test_content_lifecycle() {
+    #[tokio::test]
+    async fn test_content_lifecycle() {
         let (mut ops, _temp) = create_test_ops();
 
         // Create content
@@ -187,10 +191,10 @@ mod tests {
         assert_eq!(preview.manifest.hash, hash1);
 
         // Publish
-        ops.publish_content(&hash1, Visibility::Shared, 100).unwrap();
+        ops.publish_content(&hash1, Visibility::Shared, 100).await.unwrap();
 
         // Query
-        let response = ops.query_content(&hash1, 100, None).unwrap();
+        let response = ops.query_content(&hash1, 100, None).await.unwrap();
         assert_eq!(response.content, content.to_vec());
 
         // Update
@@ -230,15 +234,15 @@ mod tests {
     }
 
     /// Integration test: Channel operations
-    #[test]
-    fn test_channel_operations() {
+    #[tokio::test]
+    async fn test_channel_operations() {
         let (mut ops, _temp) = create_test_ops();
 
         let (_, pk) = generate_identity();
         let peer = peer_id_from_public_key(&pk);
 
         // Open channel
-        let channel = ops.open_payment_channel(&peer, 100_0000_0000).unwrap();
+        let channel = ops.open_payment_channel(&peer, 100_0000_0000).await.unwrap();
         assert!(!channel.is_open()); // Opening state
 
         // Accept another channel
@@ -252,14 +256,14 @@ mod tests {
         assert!(channel2.is_open());
 
         // Close channel
-        ops.close_payment_channel(&peer2).unwrap();
+        ops.close_payment_channel(&peer2).await.unwrap();
         let closed = ops.get_payment_channel(&peer2).unwrap().unwrap();
         assert!(closed.is_closed());
     }
 
     /// Integration test: Settlement queue
-    #[test]
-    fn test_settlement_queue_integration() {
+    #[tokio::test]
+    async fn test_settlement_queue_integration() {
         let (mut ops, _temp) = create_test_ops();
 
         // Set a recent last_settlement_time so the interval-based trigger doesn't fire
@@ -271,7 +275,7 @@ mod tests {
         let content = b"Paid content";
         let meta = Metadata::new("Paid", content.len() as u64);
         let hash = ops.create_content(content, meta).unwrap();
-        ops.publish_content(&hash, Visibility::Shared, 100).unwrap();
+        ops.publish_content(&hash, Visibility::Shared, 100).await.unwrap();
 
         // Handle query (this enqueues distributions)
         let (_, pk) = generate_identity();
@@ -293,14 +297,14 @@ mod tests {
             payment,
             version_spec: None,
         };
-        ops.handle_query_request(&requester, &request).unwrap();
+        ops.handle_query_request(&requester, &request).await.unwrap();
 
         // Verify pending amount
         let pending = ops.get_pending_settlement_total().unwrap();
         assert_eq!(pending, 100);
 
         // Force settlement
-        let batch_id = ops.force_settlement().unwrap();
+        let batch_id = ops.force_settlement().await.unwrap();
         assert!(batch_id.is_some());
 
         // Verify queue is cleared

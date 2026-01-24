@@ -7,6 +7,7 @@ use nodalync_crypto::{content_hash, Hash, PeerId};
 use nodalync_store::ChannelStore;
 use nodalync_types::{Amount, Channel, Payment};
 use nodalync_valid::Validator;
+use nodalync_wire::{ChannelBalances, ChannelClosePayload, ChannelOpenPayload};
 use rand::Rng;
 
 use crate::error::{OpsError, OpsResult};
@@ -33,8 +34,8 @@ where
     /// 1. Generates channel_id from hash(my_peer_id || peer_id || nonce)
     /// 2. Creates Channel with state=Opening
     /// 3. Stores locally
-    /// 4. (Send ChannelOpen - stub for MVP)
-    pub fn open_payment_channel(
+    /// 4. Sends ChannelOpen message (if network available)
+    pub async fn open_payment_channel(
         &mut self,
         peer: &PeerId,
         deposit: Amount,
@@ -64,8 +65,18 @@ where
         // 3. Store locally
         self.state.channels.create(peer, channel.clone())?;
 
-        // 4. Send ChannelOpen (stub for MVP)
-        // In full implementation: self.network.send_channel_open(peer, &channel)?;
+        // 4. Send ChannelOpen message (if network available)
+        if let Some(network) = self.network().cloned() {
+            if let Some(libp2p_peer) = network.libp2p_peer_id(peer) {
+                let payload = ChannelOpenPayload {
+                    channel_id,
+                    initial_balance: deposit,
+                    funding_tx: None,
+                };
+                // Best effort - don't fail if network send fails
+                let _ = network.send_channel_open(libp2p_peer, payload).await;
+            }
+        }
 
         Ok(channel)
     }
@@ -142,9 +153,9 @@ where
     /// Spec §7.3.3:
     /// 1. Gets channel
     /// 2. Computes final balances
-    /// 3. (Submit to settlement - stub for MVP)
+    /// 3. Sends ChannelClose message (if network available)
     /// 4. Updates state to Closed
-    pub fn close_payment_channel(&mut self, peer: &PeerId) -> OpsResult<()> {
+    pub async fn close_payment_channel(&mut self, peer: &PeerId) -> OpsResult<()> {
         let timestamp = current_timestamp();
 
         // 1. Get channel
@@ -160,11 +171,21 @@ where
         }
 
         // 2. Compute final balances (already stored in channel state)
-        let _my_balance = channel.my_balance;
-        let _their_balance = channel.their_balance;
+        let my_balance = channel.my_balance;
+        let their_balance = channel.their_balance;
 
-        // 3. Submit to settlement (stub for MVP)
-        // In full implementation: self.settlement.submit_close(&channel)?;
+        // 3. Send ChannelClose message (if network available)
+        if let Some(network) = self.network().cloned() {
+            if let Some(libp2p_peer) = network.libp2p_peer_id(peer) {
+                let payload = ChannelClosePayload {
+                    channel_id: channel.channel_id,
+                    final_balances: ChannelBalances::new(my_balance, their_balance),
+                    settlement_tx: vec![], // No on-chain tx for MVP
+                };
+                // Best effort - don't fail if network send fails
+                let _ = network.send_channel_close(libp2p_peer, payload).await;
+            }
+        }
 
         // 4. Update state to Closing then Closed
         channel.mark_closing(timestamp);
@@ -270,12 +291,12 @@ mod tests {
         )
     }
 
-    #[test]
-    fn test_open_channel() {
+    #[tokio::test]
+    async fn test_open_channel() {
         let (mut ops, _temp) = create_test_ops();
         let peer = test_peer_id();
 
-        let channel = ops.open_payment_channel(&peer, 100_0000_0000).unwrap();
+        let channel = ops.open_payment_channel(&peer, 100_0000_0000).await.unwrap();
 
         assert_eq!(channel.peer_id, peer);
         assert_eq!(channel.state, ChannelState::Opening);
@@ -283,25 +304,25 @@ mod tests {
         assert_eq!(channel.their_balance, 0);
     }
 
-    #[test]
-    fn test_open_channel_already_exists() {
+    #[tokio::test]
+    async fn test_open_channel_already_exists() {
         let (mut ops, _temp) = create_test_ops();
         let peer = test_peer_id();
 
-        ops.open_payment_channel(&peer, 100_0000_0000).unwrap();
+        ops.open_payment_channel(&peer, 100_0000_0000).await.unwrap();
 
         // Second open should fail
-        let result = ops.open_payment_channel(&peer, 100_0000_0000);
+        let result = ops.open_payment_channel(&peer, 100_0000_0000).await;
         assert!(matches!(result, Err(OpsError::ChannelAlreadyExists)));
     }
 
-    #[test]
-    fn test_open_channel_min_deposit() {
+    #[tokio::test]
+    async fn test_open_channel_min_deposit() {
         let (mut ops, _temp) = create_test_ops();
         let peer = test_peer_id();
 
         // Below minimum deposit
-        let result = ops.open_payment_channel(&peer, 10);
+        let result = ops.open_payment_channel(&peer, 10).await;
         assert!(matches!(result, Err(OpsError::InvalidOperation(_))));
     }
 
@@ -321,8 +342,8 @@ mod tests {
         assert_eq!(channel.their_balance, 500);
     }
 
-    #[test]
-    fn test_close_channel() {
+    #[tokio::test]
+    async fn test_close_channel() {
         let (mut ops, _temp) = create_test_ops();
         let peer = test_peer_id();
         let channel_id = content_hash(b"channel");
@@ -331,7 +352,7 @@ mod tests {
         ops.accept_payment_channel(&channel_id, &peer, 500, 500).unwrap();
 
         // Close the channel
-        ops.close_payment_channel(&peer).unwrap();
+        ops.close_payment_channel(&peer).await.unwrap();
 
         // Verify closed
         let channel = ops.get_payment_channel(&peer).unwrap().unwrap();
@@ -355,8 +376,8 @@ mod tests {
         assert_eq!(channel.state, ChannelState::Disputed);
     }
 
-    #[test]
-    fn test_has_open_channel() {
+    #[tokio::test]
+    async fn test_has_open_channel() {
         let (mut ops, _temp) = create_test_ops();
         let peer = test_peer_id();
 
@@ -364,7 +385,7 @@ mod tests {
         assert!(!ops.has_open_channel(&peer).unwrap());
 
         // Open channel (Opening state)
-        ops.open_payment_channel(&peer, 100_0000_0000).unwrap();
+        ops.open_payment_channel(&peer, 100_0000_0000).await.unwrap();
         assert!(!ops.has_open_channel(&peer).unwrap()); // Opening != Open
 
         // Accept channel from different peer

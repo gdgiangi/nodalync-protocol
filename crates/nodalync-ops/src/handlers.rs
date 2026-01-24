@@ -5,11 +5,12 @@
 
 use nodalync_crypto::{content_hash, PeerId, Signature};
 use nodalync_econ::distribute_revenue;
+use nodalync_net::NetworkEvent;
 use nodalync_store::{ChannelStore, ContentStore, ManifestStore, SettlementQueueStore, QueuedDistribution};
 use nodalync_types::{Channel, Payment, Visibility};
 use nodalync_valid::Validator;
 use nodalync_wire::{
-    ChannelAcceptPayload, ChannelClosePayload, ChannelOpenPayload,
+    ChannelAcceptPayload, ChannelClosePayload, ChannelOpenPayload, MessageType,
     PaymentReceipt, PreviewRequestPayload, PreviewResponsePayload, QueryRequestPayload,
     QueryResponsePayload, VersionInfo, VersionRequestPayload, VersionResponsePayload,
 };
@@ -69,7 +70,7 @@ where
     /// 7. Update manifest economics
     /// 8. Check settlement trigger (threshold/interval)
     /// 9. Load and return content with receipt
-    pub fn handle_query_request(
+    pub async fn handle_query_request(
         &mut self,
         requester: &PeerId,
         request: &QueryRequestPayload,
@@ -165,7 +166,7 @@ where
 
         // 8. Check settlement trigger (threshold/interval)
         // Don't fail the query if settlement fails
-        let _ = self.trigger_settlement_batch();
+        let _ = self.trigger_settlement_batch().await;
 
         // 9. Load and return content
         let content = self
@@ -303,6 +304,84 @@ where
 
         Ok(())
     }
+
+    /// Handle an incoming network event.
+    ///
+    /// This is the main entry point for processing network events and
+    /// dispatching to the appropriate handler. Returns an optional response
+    /// that should be encoded and sent back to the peer.
+    ///
+    /// The response is returned as (MessageType, serialized_payload) for the
+    /// caller to construct the actual Message envelope.
+    pub async fn handle_network_event(
+        &mut self,
+        event: NetworkEvent,
+    ) -> OpsResult<Option<(MessageType, Vec<u8>)>> {
+        match event {
+            NetworkEvent::InboundRequest { peer, data, .. } => {
+                // Decode the message type from the raw data
+                // The first 2 bytes after the header typically contain the message type
+                if data.len() < 2 {
+                    return Ok(None);
+                }
+
+                // Get the Nodalync peer ID if we have a mapping
+                let nodalync_peer = if let Some(network) = self.network() {
+                    network.nodalync_peer_id(&peer).unwrap_or_else(|| PeerId([0u8; 20]))
+                } else {
+                    PeerId([0u8; 20])
+                };
+
+                // Try to decode as JSON for MVP (the data is already decoded by network layer)
+                // In a real implementation, we'd have proper message framing
+                if let Ok(request) = serde_json::from_slice::<PreviewRequestPayload>(&data) {
+                    let response = self.handle_preview_request(&nodalync_peer, &request)?;
+                    let response_bytes = serde_json::to_vec(&response).unwrap_or_default();
+                    return Ok(Some((MessageType::PreviewResponse, response_bytes)));
+                }
+
+                if let Ok(request) = serde_json::from_slice::<QueryRequestPayload>(&data) {
+                    let response = self.handle_query_request(&nodalync_peer, &request).await?;
+                    let response_bytes = serde_json::to_vec(&response).unwrap_or_default();
+                    return Ok(Some((MessageType::QueryResponse, response_bytes)));
+                }
+
+                if let Ok(request) = serde_json::from_slice::<VersionRequestPayload>(&data) {
+                    let response = self.handle_version_request(&nodalync_peer, &request)?;
+                    let response_bytes = serde_json::to_vec(&response).unwrap_or_default();
+                    return Ok(Some((MessageType::VersionResponse, response_bytes)));
+                }
+
+                if let Ok(request) = serde_json::from_slice::<ChannelOpenPayload>(&data) {
+                    let response = self.handle_channel_open(&nodalync_peer, &request)?;
+                    let response_bytes = serde_json::to_vec(&response).unwrap_or_default();
+                    return Ok(Some((MessageType::ChannelAccept, response_bytes)));
+                }
+
+                if let Ok(request) = serde_json::from_slice::<ChannelClosePayload>(&data) {
+                    self.handle_channel_close(&nodalync_peer, &request)?;
+                    return Ok(None); // No response needed for close
+                }
+
+                // Unknown message type
+                Ok(None)
+            }
+            NetworkEvent::PeerConnected { peer } => {
+                // Log peer connection (could track connected peers in state)
+                let _ = peer;
+                Ok(None)
+            }
+            NetworkEvent::PeerDisconnected { peer } => {
+                // Log peer disconnection
+                let _ = peer;
+                Ok(None)
+            }
+            _ => {
+                // Other events don't require action from ops layer
+                Ok(None)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -345,15 +424,15 @@ mod tests {
         )
     }
 
-    #[test]
-    fn test_handle_preview_request() {
+    #[tokio::test]
+    async fn test_handle_preview_request() {
         let (mut ops, _temp) = create_test_ops();
 
         // Create and publish content
         let content = b"Test content for preview";
         let meta = Metadata::new("Preview Test", content.len() as u64);
         let hash = ops.create_content(content, meta).unwrap();
-        ops.publish_content(&hash, Visibility::Shared, 100).unwrap();
+        ops.publish_content(&hash, Visibility::Shared, 100).await.unwrap();
 
         // Handle preview request
         let requester = test_peer_id();
@@ -383,15 +462,15 @@ mod tests {
         assert!(matches!(result, Err(OpsError::AccessDenied)));
     }
 
-    #[test]
-    fn test_handle_query_request() {
+    #[tokio::test]
+    async fn test_handle_query_request() {
         let (mut ops, _temp) = create_test_ops();
 
         // Create and publish content
         let content = b"Test content for query";
         let meta = Metadata::new("Query Test", content.len() as u64);
         let hash = ops.create_content(content, meta).unwrap();
-        ops.publish_content(&hash, Visibility::Shared, 100).unwrap();
+        ops.publish_content(&hash, Visibility::Shared, 100).await.unwrap();
 
         // Handle query request
         let requester = test_peer_id();
@@ -405,22 +484,22 @@ mod tests {
             version_spec: None,
         };
 
-        let response = ops.handle_query_request(&requester, &request).unwrap();
+        let response = ops.handle_query_request(&requester, &request).await.unwrap();
 
         assert_eq!(response.hash, hash);
         assert_eq!(response.content, content.to_vec());
         assert_eq!(response.payment_receipt.amount, 100);
     }
 
-    #[test]
-    fn test_handle_query_request_insufficient_payment() {
+    #[tokio::test]
+    async fn test_handle_query_request_insufficient_payment() {
         let (mut ops, _temp) = create_test_ops();
 
         // Create and publish content with price
         let content = b"Paid content";
         let meta = Metadata::new("Paid", content.len() as u64);
         let hash = ops.create_content(content, meta).unwrap();
-        ops.publish_content(&hash, Visibility::Shared, 1000).unwrap();
+        ops.publish_content(&hash, Visibility::Shared, 1000).await.unwrap();
 
         // Handle query request with insufficient payment
         let requester = test_peer_id();
@@ -434,7 +513,7 @@ mod tests {
             version_spec: None,
         };
 
-        let result = ops.handle_query_request(&requester, &request);
+        let result = ops.handle_query_request(&requester, &request).await;
         assert!(matches!(result, Err(OpsError::PaymentInsufficient)));
     }
 
@@ -515,8 +594,8 @@ mod tests {
         assert!(channel.is_closed());
     }
 
-    #[test]
-    fn test_query_enqueues_distributions() {
+    #[tokio::test]
+    async fn test_query_enqueues_distributions() {
         let (mut ops, _temp) = create_test_ops();
 
         // Set a recent last_settlement_time so the interval-based trigger doesn't fire
@@ -528,7 +607,7 @@ mod tests {
         let content = b"Content for distribution test";
         let meta = Metadata::new("Dist Test", content.len() as u64);
         let hash = ops.create_content(content, meta).unwrap();
-        ops.publish_content(&hash, Visibility::Shared, 100).unwrap();
+        ops.publish_content(&hash, Visibility::Shared, 100).await.unwrap();
 
         // Initially no pending distributions
         assert_eq!(ops.get_pending_settlement_total().unwrap(), 0);
@@ -544,7 +623,7 @@ mod tests {
             payment,
             version_spec: None,
         };
-        ops.handle_query_request(&requester, &request).unwrap();
+        ops.handle_query_request(&requester, &request).await.unwrap();
 
         // Now we should have pending distributions
         let pending = ops.get_pending_settlement_total().unwrap();

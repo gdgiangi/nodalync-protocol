@@ -5,9 +5,11 @@
 
 use nodalync_crypto::Hash;
 use nodalync_econ::validate_price;
+use nodalync_net::Multiaddr;
 use nodalync_store::ManifestStore;
-use nodalync_types::{AccessControl, Amount, Visibility};
+use nodalync_types::{AccessControl, Amount, Manifest, Visibility};
 use nodalync_valid::Validator;
+use nodalync_wire::AnnouncePayload;
 
 use crate::error::{OpsError, OpsResult};
 use crate::extraction::L1Extractor;
@@ -25,8 +27,8 @@ where
     /// 2. Validates price
     /// 3. Updates visibility, price, access_control
     /// 4. Saves manifest
-    /// 5. (DHT announce - stub for MVP)
-    pub fn publish_content(
+    /// 5. Announces to DHT (if network available)
+    pub async fn publish_content(
         &mut self,
         hash: &Hash,
         visibility: Visibility,
@@ -57,18 +59,39 @@ where
         // 4. Save manifest
         self.state.manifests.update(&manifest)?;
 
-        // 5. DHT announce (stub for MVP)
-        // In full implementation: self.network.announce(hash, &manifest)?;
+        // 5. DHT announce (if network available)
+        // Extract L1 summary before borrowing network to avoid borrow checker issues
+        let l1_summary = self.extract_l1_summary(hash)?;
+        if let Some(network) = self.network().cloned() {
+            let payload = Self::create_announce_payload(&manifest, l1_summary, network.listen_addresses());
+            network.dht_announce(*hash, payload).await?;
+        }
 
         Ok(())
+    }
+
+    /// Create an AnnouncePayload from a manifest.
+    fn create_announce_payload(
+        manifest: &Manifest,
+        l1_summary: nodalync_types::L1Summary,
+        listen_addrs: Vec<Multiaddr>,
+    ) -> AnnouncePayload {
+        AnnouncePayload {
+            hash: manifest.hash,
+            content_type: manifest.content_type,
+            title: manifest.metadata.title.clone(),
+            l1_summary,
+            price: manifest.economics.price,
+            addresses: listen_addrs.iter().map(|addr: &Multiaddr| addr.to_string()).collect(),
+        }
     }
 
     /// Unpublish content from the network.
     ///
     /// Spec §7.1.3:
     /// - Sets visibility to Private
-    /// - (DHT remove - stub for MVP)
-    pub fn unpublish_content(&mut self, hash: &Hash) -> OpsResult<()> {
+    /// - Removes from DHT (if network available)
+    pub async fn unpublish_content(&mut self, hash: &Hash) -> OpsResult<()> {
         // Load manifest
         let mut manifest = self
             .state
@@ -88,8 +111,10 @@ where
         // Save manifest
         self.state.manifests.update(&manifest)?;
 
-        // DHT remove (stub for MVP)
-        // In full implementation: self.network.remove(hash)?;
+        // DHT remove (if network available)
+        if let Some(network) = self.network() {
+            network.dht_remove(hash).await?;
+        }
 
         Ok(())
     }
@@ -193,8 +218,8 @@ mod tests {
         (ops, temp_dir)
     }
 
-    #[test]
-    fn test_publish_content() {
+    #[tokio::test]
+    async fn test_publish_content() {
         let (mut ops, _temp) = create_test_ops();
 
         let content = b"Content to publish";
@@ -206,7 +231,7 @@ mod tests {
         assert_eq!(manifest.visibility, Visibility::Private);
 
         // Publish
-        ops.publish_content(&hash, Visibility::Shared, 100).unwrap();
+        ops.publish_content(&hash, Visibility::Shared, 100).await.unwrap();
 
         // Verify
         let manifest = ops.state.manifests.load(&hash).unwrap().unwrap();
@@ -214,8 +239,8 @@ mod tests {
         assert_eq!(manifest.economics.price, 100);
     }
 
-    #[test]
-    fn test_unpublish_content() {
+    #[tokio::test]
+    async fn test_unpublish_content() {
         let (mut ops, _temp) = create_test_ops();
 
         let content = b"Content to unpublish";
@@ -223,10 +248,10 @@ mod tests {
         let hash = ops.create_content(content, meta).unwrap();
 
         // Publish first
-        ops.publish_content(&hash, Visibility::Shared, 100).unwrap();
+        ops.publish_content(&hash, Visibility::Shared, 100).await.unwrap();
 
         // Unpublish
-        ops.unpublish_content(&hash).unwrap();
+        ops.unpublish_content(&hash).await.unwrap();
 
         // Verify
         let manifest = ops.state.manifests.load(&hash).unwrap().unwrap();
@@ -289,8 +314,8 @@ mod tests {
         assert_eq!(manifest.economics.price, 500);
     }
 
-    #[test]
-    fn test_publish_invalid_price() {
+    #[tokio::test]
+    async fn test_publish_invalid_price() {
         let (mut ops, _temp) = create_test_ops();
 
         let content = b"Content with invalid price";
@@ -298,12 +323,12 @@ mod tests {
         let hash = ops.create_content(content, meta).unwrap();
 
         // Price of 0 is allowed (free content)
-        let result = ops.publish_content(&hash, Visibility::Shared, 0);
+        let result = ops.publish_content(&hash, Visibility::Shared, 0).await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_publish_requires_ownership() {
+    #[tokio::test]
+    async fn test_publish_requires_ownership() {
         let (mut ops, _temp) = create_test_ops();
 
         // Create content
@@ -318,7 +343,7 @@ mod tests {
         ops.state.manifests.update(&manifest).unwrap();
 
         // Try to publish (should fail)
-        let result = ops.publish_content(&hash, Visibility::Shared, 100);
+        let result = ops.publish_content(&hash, Visibility::Shared, 100).await;
         assert!(matches!(result, Err(OpsError::AccessDenied)));
     }
 }

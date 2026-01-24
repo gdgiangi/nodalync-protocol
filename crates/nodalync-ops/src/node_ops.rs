@@ -3,7 +3,10 @@
 //! This module provides the `NodeOperations` struct that implements
 //! the `Operations` trait, orchestrating all protocol functionality.
 
+use std::sync::Arc;
+
 use nodalync_crypto::{PeerId, Timestamp};
+use nodalync_net::Network;
 use nodalync_store::NodeState;
 use nodalync_valid::Validator;
 
@@ -19,6 +22,10 @@ use crate::extraction::L1Extractor;
 ///
 /// This allows for different validation and extraction strategies while
 /// maintaining the same core operation logic.
+///
+/// When `network` is `Some`, operations will use P2P networking for DHT lookups,
+/// content queries, and channel messaging. When `None`, operations fall back to
+/// local-only mode (useful for testing or offline operation).
 pub struct NodeOperations<V, E>
 where
     V: Validator,
@@ -34,6 +41,11 @@ where
     pub config: OpsConfig,
     /// This node's peer ID.
     peer_id: PeerId,
+    /// Optional network for P2P operations.
+    ///
+    /// When `Some`, enables DHT announce/lookup, network queries, and channel messaging.
+    /// When `None`, operations are local-only.
+    network: Option<Arc<dyn Network>>,
 }
 
 impl<V, E> NodeOperations<V, E>
@@ -41,7 +53,7 @@ where
     V: Validator,
     E: L1Extractor,
 {
-    /// Create new NodeOperations with the given components.
+    /// Create new NodeOperations with the given components (no network).
     pub fn new(
         state: NodeState,
         validator: V,
@@ -55,6 +67,26 @@ where
             extractor,
             config,
             peer_id,
+            network: None,
+        }
+    }
+
+    /// Create new NodeOperations with a network for P2P operations.
+    pub fn with_network(
+        state: NodeState,
+        validator: V,
+        extractor: E,
+        config: OpsConfig,
+        peer_id: PeerId,
+        network: Arc<dyn Network>,
+    ) -> Self {
+        Self {
+            state,
+            validator,
+            extractor,
+            config,
+            peer_id,
+            network: Some(network),
         }
     }
 
@@ -77,6 +109,26 @@ where
     pub fn state_mut(&mut self) -> &mut NodeState {
         &mut self.state
     }
+
+    /// Get a reference to the network (if available).
+    pub fn network(&self) -> Option<&Arc<dyn Network>> {
+        self.network.as_ref()
+    }
+
+    /// Check if network is available.
+    pub fn has_network(&self) -> bool {
+        self.network.is_some()
+    }
+
+    /// Set the network for P2P operations.
+    pub fn set_network(&mut self, network: Arc<dyn Network>) {
+        self.network = Some(network);
+    }
+
+    /// Remove the network (switch to local-only mode).
+    pub fn clear_network(&mut self) {
+        self.network = None;
+    }
 }
 
 /// Default NodeOperations with DefaultValidator and RuleBasedExtractor.
@@ -84,7 +136,7 @@ pub type DefaultNodeOperations =
     NodeOperations<nodalync_valid::DefaultValidator, crate::extraction::RuleBasedExtractor>;
 
 impl DefaultNodeOperations {
-    /// Create a new NodeOperations with default validator and extractor.
+    /// Create a new NodeOperations with default validator and extractor (no network).
     pub fn with_defaults(state: NodeState, peer_id: PeerId) -> Self {
         Self::new(
             state,
@@ -95,7 +147,7 @@ impl DefaultNodeOperations {
         )
     }
 
-    /// Create with custom configuration.
+    /// Create with custom configuration (no network).
     pub fn with_config(state: NodeState, peer_id: PeerId, config: OpsConfig) -> Self {
         Self::new(
             state,
@@ -103,6 +155,39 @@ impl DefaultNodeOperations {
             crate::extraction::RuleBasedExtractor::new(),
             config,
             peer_id,
+        )
+    }
+
+    /// Create with default validator/extractor and a network.
+    pub fn with_defaults_and_network(
+        state: NodeState,
+        peer_id: PeerId,
+        network: Arc<dyn Network>,
+    ) -> Self {
+        Self::with_network(
+            state,
+            nodalync_valid::DefaultValidator::new(),
+            crate::extraction::RuleBasedExtractor::new(),
+            OpsConfig::default(),
+            peer_id,
+            network,
+        )
+    }
+
+    /// Create with custom configuration and a network.
+    pub fn with_config_and_network(
+        state: NodeState,
+        peer_id: PeerId,
+        config: OpsConfig,
+        network: Arc<dyn Network>,
+    ) -> Self {
+        Self::with_network(
+            state,
+            nodalync_valid::DefaultValidator::new(),
+            crate::extraction::RuleBasedExtractor::new(),
+            config,
+            peer_id,
+            network,
         )
     }
 }

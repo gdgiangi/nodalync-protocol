@@ -8,6 +8,7 @@ use nodalync_econ::{compute_batch_id, create_settlement_batch, should_settle};
 use nodalync_store::SettlementQueueStore;
 use nodalync_types::Payment;
 use nodalync_valid::Validator;
+use nodalync_wire::SettleConfirmPayload;
 
 use crate::error::OpsResult;
 use crate::extraction::L1Extractor;
@@ -24,12 +25,12 @@ where
     /// 1. Checks should_settle (threshold OR interval)
     /// 2. Gets pending from queue
     /// 3. Creates batch via create_settlement_batch
-    /// 4. (Submit to chain - stub for MVP)
+    /// 4. Broadcasts settlement confirmation (if network available)
     /// 5. Marks as settled
     /// 6. Updates last_settlement_time
     ///
     /// Returns the batch ID if settlement was triggered, None otherwise.
-    pub fn trigger_settlement_batch(&mut self) -> OpsResult<Option<Hash>> {
+    pub async fn trigger_settlement_batch(&mut self) -> OpsResult<Option<Hash>> {
         let timestamp = current_timestamp();
 
         // Get pending total and last settlement time
@@ -71,8 +72,17 @@ where
         let batch = create_settlement_batch(&payments);
         let batch_id = compute_batch_id(&batch.entries);
 
-        // 4. Submit to chain (stub for MVP)
-        // In full implementation: self.chain.submit_batch(&batch)?;
+        // 4. Broadcast settlement confirmation (if network available)
+        if let Some(network) = self.network().cloned() {
+            let confirm = SettleConfirmPayload {
+                batch_id,
+                transaction_id: format!("mvp-tx-{}", batch_id),
+                block_number: 0, // No on-chain tx for MVP
+                timestamp,
+            };
+            // Best effort broadcast
+            let _ = network.broadcast_settlement_confirm(confirm).await;
+        }
 
         // 5. Mark as settled
         let payment_ids: Vec<Hash> = pending.iter().map(|d| d.payment_id).collect();
@@ -100,7 +110,7 @@ where
     }
 
     /// Force settlement regardless of threshold/interval.
-    pub fn force_settlement(&mut self) -> OpsResult<Option<Hash>> {
+    pub async fn force_settlement(&mut self) -> OpsResult<Option<Hash>> {
         let timestamp = current_timestamp();
 
         // Get pending distributions
@@ -129,6 +139,17 @@ where
         // Create batch
         let batch = create_settlement_batch(&payments);
         let batch_id = compute_batch_id(&batch.entries);
+
+        // Broadcast settlement confirmation (if network available)
+        if let Some(network) = self.network().cloned() {
+            let confirm = SettleConfirmPayload {
+                batch_id,
+                transaction_id: format!("mvp-force-tx-{}", batch_id),
+                block_number: 0,
+                timestamp,
+            };
+            let _ = network.broadcast_settlement_confirm(confirm).await;
+        }
 
         // Mark as settled
         let payment_ids: Vec<Hash> = pending.iter().map(|d| d.payment_id).collect();
@@ -166,17 +187,17 @@ mod tests {
         peer_id_from_public_key(&public_key)
     }
 
-    #[test]
-    fn test_trigger_settlement_empty() {
+    #[tokio::test]
+    async fn test_trigger_settlement_empty() {
         let (mut ops, _temp) = create_test_ops();
 
         // No pending distributions, should return None
-        let result = ops.trigger_settlement_batch().unwrap();
+        let result = ops.trigger_settlement_batch().await.unwrap();
         assert!(result.is_none());
     }
 
-    #[test]
-    fn test_force_settlement() {
+    #[tokio::test]
+    async fn test_force_settlement() {
         let (mut ops, _temp) = create_test_ops();
 
         // Add some distributions to the queue
@@ -199,7 +220,7 @@ mod tests {
         ops.state.settlement.enqueue(dist2).unwrap();
 
         // Force settlement
-        let batch_id = ops.force_settlement().unwrap();
+        let batch_id = ops.force_settlement().await.unwrap();
         assert!(batch_id.is_some());
 
         // Queue should now be empty

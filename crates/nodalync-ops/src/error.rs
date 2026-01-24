@@ -81,6 +81,17 @@ pub enum OpsError {
     ManifestNotFound(Hash),
 
     // =========================================================================
+    // Network Errors
+    // =========================================================================
+    /// Network error.
+    #[error("network error: {0}")]
+    Network(#[from] nodalync_net::NetworkError),
+
+    /// Peer ID mapping not found.
+    #[error("peer ID not found for libp2p peer")]
+    PeerIdNotFound,
+
+    // =========================================================================
     // Wrapped Errors
     // =========================================================================
     /// Storage error.
