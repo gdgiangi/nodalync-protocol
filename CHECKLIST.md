@@ -299,14 +299,14 @@ Track implementation progress by checking off items as they're completed. Each i
 - [x] Update visibility
 - [x] Update price
 - [x] Update access control
-- [ ] DHT announce (if Shared)
+- [~] DHT announce (if Shared) — network integration pending
 - [x] Test: publish with each visibility
 
 #### §7.1.4 UPDATE
 - [x] New hash computation
 - [x] Version linking (previous, root)
 - [x] Inherit visibility
-- [ ] DHT update announcement
+- [~] DHT update announcement — network integration pending
 - [x] Test: version chain creation
 
 #### §7.1.5 DERIVE
@@ -326,25 +326,25 @@ Track implementation progress by checking off items as they're completed. Each i
 - [x] Test: reference creation
 
 #### §7.2.1 DISCOVER (Note: Hash-only for MVP)
-- [ ] DHT lookup by hash
+- [x] DHT lookup by hash — implemented in nodalync-net
 - [x] **No keyword search (application layer)**
-- [ ] Test: lookup returns AnnouncePayload — requires nodalync-net
+- [~] Test: lookup returns AnnouncePayload — requires integration test
 
 #### §7.2.2 PREVIEW
-- [ ] Send PREVIEW_REQUEST
-- [ ] Receive PREVIEW_RESPONSE
+- [~] Send PREVIEW_REQUEST — network integration pending
+- [~] Receive PREVIEW_RESPONSE — network integration pending
 - [x] Handler: check visibility
 - [x] Handler: check access
 - [x] Handler: return L1Summary
 - [x] Test: preview for each visibility
 
 #### §7.2.3 QUERY
-- [ ] **Auto-open channel if needed** — config ready, network stub
+- [~] **Auto-open channel if needed** — config ready, network integration pending
 - [x] **Check available balance for auto-open**
 - [x] **Return PAYMENT_REQUIRED if insufficient**
 - [x] Ensure channel exists
 - [x] Get price from preview
-- [ ] Send QUERY_REQUEST
+- [~] Send QUERY_REQUEST — network integration pending
 - [x] Verify response
 - [x] Update channel state
 - [x] Cache content
@@ -353,11 +353,11 @@ Track implementation progress by checking off items as they're completed. Each i
 - [x] Handler: update economics
 - [x] **Handler: write ALL distributions to settlement queue**
 - [x] **Handler: check settlement trigger**
-- [ ] Test: full query flow
+- [~] Test: full query flow — requires network integration
 
 #### §7.3.1 CHANNEL_OPEN
 - [x] Channel ID generation
-- [ ] CHANNEL_OPEN message
+- [~] CHANNEL_OPEN message — network integration pending
 - [x] CHANNEL_ACCEPT handling
 - [x] Channel state initialization
 - [x] Test: channel opening
@@ -370,13 +370,13 @@ Track implementation progress by checking off items as they're completed. Each i
 
 #### §7.3.3 CHANNEL_CLOSE
 - [x] Aggregate pending payments
-- [ ] Sign final state
-- [ ] CHANNEL_CLOSE message
-- [ ] Settlement submission
+- [~] Sign final state — network integration pending
+- [~] CHANNEL_CLOSE message — network integration pending
+- [~] Settlement submission — requires nodalync-settle
 - [x] Test: cooperative close
 
 #### §7.3.4 CHANNEL_DISPUTE
-- [ ] Submit dispute with latest state
+- [~] Submit dispute with latest state — requires nodalync-settle
 - [x] Update local state to Disputed
 - [x] Test: dispute initiation
 
@@ -391,54 +391,54 @@ Track implementation progress by checking off items as they're completed. Each i
 - [x] Create batch (aggregate by recipient)
 - [x] Batch ID generation
 - [x] Merkle root computation
-- [ ] On-chain submission
+- [~] On-chain submission — requires nodalync-settle
 - [x] Mark settled in queue
-- [ ] Confirmation broadcast
+- [~] Confirmation broadcast — network integration pending
 - [x] Test: batch settlement
 
 ---
 
 ## Phase 4: External Integration
 
-### `nodalync-net` (Spec §11)
+### `nodalync-net` (Spec §11) — ✅ Implemented
 
 #### §11.1 Transport
-- [ ] TCP transport
-- [ ] QUIC transport (optional)
-- [ ] WebSocket transport (optional)
-- [ ] yamux multiplexing
-- [ ] Noise protocol security
+- [x] TCP transport
+- [ ] QUIC transport (optional, future enhancement)
+- [ ] WebSocket transport (optional, future enhancement)
+- [x] yamux multiplexing
+- [x] Noise protocol security
 
 #### §11.2 Discovery (Hash-Only for MVP)
-- [ ] Kademlia DHT
-- [ ] Bucket size: 20
-- [ ] Alpha: 3
-- [ ] Replication: 20
-- [ ] **dht_announce(): hash -> AnnouncePayload**
-- [ ] **dht_get(): hash -> AnnouncePayload**
-- [ ] **dht_remove(): remove announcement**
-- [ ] **No keyword search (application layer)**
-- [ ] Test: DHT announce and lookup by hash
+- [x] Kademlia DHT
+- [x] Bucket size: 20
+- [x] Alpha: 3
+- [x] Replication: 20
+- [x] **dht_announce(): hash -> AnnouncePayload**
+- [x] **dht_get(): hash -> AnnouncePayload**
+- [x] **dht_remove(): remove announcement**
+- [x] **No keyword search (application layer)**
+- [x] Test: DHT announce and lookup by hash
 
 #### §11.3 Peer Discovery
-- [ ] Bootstrap nodes
-- [ ] DNS discovery (optional)
-- [ ] Peer exchange
-- [ ] NAT traversal (STUN)
-- [ ] Test: peer discovery
+- [x] Bootstrap nodes
+- [ ] DNS discovery (optional, future enhancement)
+- [x] Peer exchange
+- [~] NAT traversal (STUN) — future enhancement
+- [x] Test: peer discovery
 
 #### §11.4 Message Routing
-- [ ] Point-to-point messages
-- [ ] DHT lookup for peer addresses
-- [ ] GossipSub for announcements
-- [ ] Request-response protocol
-- [ ] Timeout handling (30s)
-- [ ] Retry logic (3 attempts)
-- [ ] Test: message delivery
+- [x] Point-to-point messages
+- [x] DHT lookup for peer addresses
+- [x] GossipSub for announcements
+- [x] Request-response protocol
+- [x] Timeout handling (30s)
+- [x] Retry logic (3 attempts)
+- [x] Test: message delivery
 
 ---
 
-### `nodalync-settle` (Spec §12)
+### `nodalync-settle` (Spec §12) — Placeholder Only
 
 #### §12.2 On-Chain Data
 - [ ] Balance tracking
@@ -455,14 +455,14 @@ Track implementation progress by checking off items as they're completed. Each i
 - [ ] disputeChannel()
 - [ ] **counterDispute()** (submit higher-nonce state)
 - [ ] resolveDispute()
-- [ ] **settleBatch() - distributes to ALL recipients**
+- [ ] **settleBatch() — distributes to ALL recipients**
 - [ ] Test: all contract operations (testnet)
 
 #### Settlement Queue Integration
-- [ ] Read from nodalync-store settlement queue
-- [ ] Aggregate distributions by recipient
-- [ ] Submit batch to chain
-- [ ] Mark distributions as settled
+- [x] Settlement queue exists in nodalync-store
+- [x] Aggregate distributions by recipient (in nodalync-econ)
+- [ ] Read from queue and submit batch to chain
+- [ ] Mark distributions as settled after on-chain confirmation
 - [ ] Test: end-to-end settlement flow
 
 ---
@@ -551,19 +551,27 @@ Track implementation progress by checking off items as they're completed. Each i
 
 ## Integration Tests
 
-- [ ] Full flow: create → publish → search → query
-- [ ] Full flow: derive from multiple sources → query → verify distribution
-- [ ] Full flow: version update → query old vs new
-- [ ] Full flow: channel open → payments → close → settle
-- [ ] Multi-node: two nodes, one publishes, one queries
-- [ ] Multi-node: provenance chain across 3+ nodes
+- [~] Full flow: create → publish → search → query — local ops work, network pending
+- [~] Full flow: derive from multiple sources → query → verify distribution — local ops work, network pending
+- [~] Full flow: version update → query old vs new — local ops work, network pending
+- [~] Full flow: channel open → payments → close → settle — local ops work, settlement pending
+- [ ] Multi-node: two nodes, one publishes, one queries — requires integration harness
+- [ ] Multi-node: provenance chain across 3+ nodes — requires integration harness
 
 ---
 
 ## Documentation
 
-- [ ] README.md updated with build instructions
-- [ ] Each crate has module-level docs
-- [ ] Public API fully documented
-- [ ] Examples in doc comments
-- [ ] Architecture decision records (if any deviations from spec)
+- [x] README.md updated with build instructions
+- [x] Each crate has module-level docs
+- [x] Public API fully documented
+- [x] Examples in doc comments
+- [x] Architecture decision records (DESIGN_DECISIONS.md)
+
+---
+
+## Code Quality (Verified January 24, 2026)
+
+- [x] All tests passing (cargo test --workspace)
+- [x] Documentation builds (cargo doc --workspace)
+- [~] Clippy warnings — minor suggestions only, no errors
