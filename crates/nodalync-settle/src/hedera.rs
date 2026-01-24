@@ -3,8 +3,6 @@
 //! This module is only available when the `hedera-sdk` feature is enabled.
 //! It requires `protoc` to be installed for compilation.
 
-#![cfg(feature = "hedera-sdk")]
-
 use std::str::FromStr;
 use std::sync::RwLock;
 
@@ -51,7 +49,7 @@ impl HederaSettlement {
     pub async fn new(config: HederaConfig) -> SettleResult<Self> {
         // Read private key from file
         let key_bytes = std::fs::read_to_string(&config.private_key_path)?;
-        let private_key = PrivateKey::from_str(&key_bytes.trim())
+        let private_key = PrivateKey::from_str(key_bytes.trim())
             .map_err(|e| SettleError::config(format!("invalid private key: {}", e)))?;
 
         // Parse account and contract IDs
@@ -634,7 +632,6 @@ mod tests {
 
     use super::*;
     use std::env;
-    use std::path::PathBuf;
     use tempfile::NamedTempFile;
 
     fn get_test_credentials() -> Option<(String, String, String, NamedTempFile)> {

@@ -5,12 +5,15 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
+//! ```rust,no_run
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! use nodalync_settle::faucet::{HederaFaucet, FaucetConfig};
 //!
 //! let faucet = HederaFaucet::testnet();
 //! let result = faucet.request_hbar("0.0.12345").await?;
 //! println!("Funded account with {} HBAR", result.amount_hbar);
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! # Limitations
@@ -258,10 +261,13 @@ impl HederaFaucet {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust,no_run
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// use nodalync_settle::faucet::request_testnet_hbar;
 ///
 /// let result = request_testnet_hbar("0.0.12345").await?;
+/// # Ok(())
+/// # }
 /// ```
 pub async fn request_testnet_hbar(account_id: &str) -> SettleResult<FaucetResult> {
     HederaFaucet::testnet().request_hbar(account_id).await

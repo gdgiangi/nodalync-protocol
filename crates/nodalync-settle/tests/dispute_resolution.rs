@@ -30,10 +30,9 @@
 #![cfg(feature = "hedera-sdk")]
 
 use nodalync_crypto::{content_hash, generate_identity, peer_id_from_public_key, Signature};
-use nodalync_settle::{types::AccountId, HederaConfig, HederaSettlement, SettleResult, Settlement};
+use nodalync_settle::{HederaConfig, HederaSettlement, Settlement};
 use nodalync_wire::{ChannelBalances, ChannelUpdatePayload};
 use std::env;
-use std::path::PathBuf;
 use tempfile::NamedTempFile;
 
 /// Get test credentials from environment variables.
@@ -96,7 +95,7 @@ async fn test_open_channel() {
     };
 
     // Create a peer and register their account
-    let peer = test_peer_id();
+    let _peer = test_peer_id();
 
     // Check initial balance
     let balance = settlement.get_balance().await.unwrap();
