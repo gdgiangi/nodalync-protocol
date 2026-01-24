@@ -277,124 +277,124 @@ Track implementation progress by checking off items as they're completed. Each i
 ### `nodalync-ops` (Spec §7)
 
 #### §7.1.1 CREATE
-- [ ] Hash computation
-- [ ] Version initialization (v1)
-- [ ] Provenance initialization (L0: self-referential)
-- [ ] **Owner field set to creator**
-- [ ] Manifest creation
-- [ ] Local storage
-- [ ] Test: create L0 content
+- [x] Hash computation
+- [x] Version initialization (v1)
+- [x] Provenance initialization (L0: self-referential)
+- [x] **Owner field set to creator**
+- [x] Manifest creation
+- [x] Local storage
+- [x] Test: create L0 content
 
 #### §7.1.2 EXTRACT_L1
-- [ ] Load content
-- [ ] **Rule-based extraction (MVP)**
-- [ ] classify_sentence() helper
-- [ ] extract_entities() helper
-- [ ] Generate L1Summary
-- [ ] Store L1 data
-- [ ] **L1Extractor trait for plugin architecture**
-- [ ] Test: L1 extraction
+- [x] Load content
+- [x] **Rule-based extraction (MVP)**
+- [x] classify_sentence() helper
+- [x] extract_entities() helper
+- [x] Generate L1Summary
+- [x] Store L1 data
+- [x] **L1Extractor trait for plugin architecture**
+- [x] Test: L1 extraction
 
 #### §7.1.3 PUBLISH
-- [ ] Update visibility
-- [ ] Update price
-- [ ] Update access control
+- [x] Update visibility
+- [x] Update price
+- [x] Update access control
 - [ ] DHT announce (if Shared)
-- [ ] Test: publish with each visibility
+- [x] Test: publish with each visibility
 
 #### §7.1.4 UPDATE
-- [ ] New hash computation
-- [ ] Version linking (previous, root)
-- [ ] Inherit visibility
+- [x] New hash computation
+- [x] Version linking (previous, root)
+- [x] Inherit visibility
 - [ ] DHT update announcement
-- [ ] Test: version chain creation
+- [x] Test: version chain creation
 
 #### §7.1.5 DERIVE
-- [ ] Verify all sources queried
-- [ ] Compute provenance (merge root_L0L1)
-- [ ] Handle weight for duplicates
-- [ ] Calculate depth
-- [ ] **Owner field set to creator**
-- [ ] Store locally
-- [ ] Test: derive from multiple sources
-- [ ] Test: weight accumulation
+- [x] Verify all sources queried
+- [x] Compute provenance (merge root_L0L1)
+- [x] Handle weight for duplicates
+- [x] Calculate depth
+- [x] **Owner field set to creator**
+- [x] Store locally
+- [x] Test: derive from multiple sources
+- [x] Test: weight accumulation
 
 #### §7.1.6 REFERENCE_L3_AS_L0
-- [ ] Verify L3 was queried
-- [ ] Create reference (not copy)
-- [ ] Provenance inheritance documented
-- [ ] Test: reference creation
+- [x] Verify L3 was queried
+- [x] Create reference (not copy)
+- [x] Provenance inheritance documented
+- [x] Test: reference creation
 
 #### §7.2.1 DISCOVER (Note: Hash-only for MVP)
 - [ ] DHT lookup by hash
-- [ ] **No keyword search (application layer)**
-- [ ] Test: lookup returns AnnouncePayload
+- [x] **No keyword search (application layer)**
+- [ ] Test: lookup returns AnnouncePayload — requires nodalync-net
 
 #### §7.2.2 PREVIEW
 - [ ] Send PREVIEW_REQUEST
 - [ ] Receive PREVIEW_RESPONSE
-- [ ] Handler: check visibility
-- [ ] Handler: check access
-- [ ] Handler: return L1Summary
-- [ ] Test: preview for each visibility
+- [x] Handler: check visibility
+- [x] Handler: check access
+- [x] Handler: return L1Summary
+- [x] Test: preview for each visibility
 
 #### §7.2.3 QUERY
-- [ ] **Auto-open channel if needed**
-- [ ] **Check available balance for auto-open**
-- [ ] **Return PAYMENT_REQUIRED if insufficient**
-- [ ] Ensure channel exists
-- [ ] Get price from preview
+- [ ] **Auto-open channel if needed** — config ready, network stub
+- [x] **Check available balance for auto-open**
+- [x] **Return PAYMENT_REQUIRED if insufficient**
+- [x] Ensure channel exists
+- [x] Get price from preview
 - [ ] Send QUERY_REQUEST
-- [ ] Verify response
-- [ ] Update channel state
-- [ ] Cache content
-- [ ] Handler: validate access
-- [ ] Handler: validate payment
-- [ ] Handler: update economics
-- [ ] **Handler: write ALL distributions to settlement queue**
-- [ ] **Handler: check settlement trigger**
+- [x] Verify response
+- [x] Update channel state
+- [x] Cache content
+- [x] Handler: validate access
+- [x] Handler: validate payment
+- [x] Handler: update economics
+- [x] **Handler: write ALL distributions to settlement queue**
+- [x] **Handler: check settlement trigger**
 - [ ] Test: full query flow
 
 #### §7.3.1 CHANNEL_OPEN
-- [ ] Channel ID generation
+- [x] Channel ID generation
 - [ ] CHANNEL_OPEN message
-- [ ] CHANNEL_ACCEPT handling
-- [ ] Channel state initialization
-- [ ] Test: channel opening
+- [x] CHANNEL_ACCEPT handling
+- [x] Channel state initialization
+- [x] Test: channel opening
 
 #### §7.3.2 CHANNEL_ACCEPT (Handler)
-- [ ] Validate no existing channel
-- [ ] Create channel state
-- [ ] Return ChannelAcceptPayload
-- [ ] Test: accept incoming channel
+- [x] Validate no existing channel
+- [x] Create channel state
+- [x] Return ChannelAcceptPayload
+- [x] Test: accept incoming channel
 
 #### §7.3.3 CHANNEL_CLOSE
-- [ ] Aggregate pending payments
+- [x] Aggregate pending payments
 - [ ] Sign final state
 - [ ] CHANNEL_CLOSE message
 - [ ] Settlement submission
-- [ ] Test: cooperative close
+- [x] Test: cooperative close
 
 #### §7.3.4 CHANNEL_DISPUTE
 - [ ] Submit dispute with latest state
-- [ ] Update local state to Disputed
-- [ ] Test: dispute initiation
+- [x] Update local state to Disputed
+- [x] Test: dispute initiation
 
 #### §7.4 VERSION_REQUEST (Handler)
-- [ ] Get all versions for root
-- [ ] Return VersionResponsePayload
-- [ ] Test: version listing
+- [x] Get all versions for root
+- [x] Return VersionResponsePayload
+- [x] Test: version listing
 
 #### §7.5 SETTLE_BATCH
-- [ ] Check trigger conditions (threshold/interval)
-- [ ] Get pending distributions from queue
-- [ ] Create batch (aggregate by recipient)
-- [ ] Batch ID generation
-- [ ] Merkle root computation
+- [x] Check trigger conditions (threshold/interval)
+- [x] Get pending distributions from queue
+- [x] Create batch (aggregate by recipient)
+- [x] Batch ID generation
+- [x] Merkle root computation
 - [ ] On-chain submission
-- [ ] Mark settled in queue
+- [x] Mark settled in queue
 - [ ] Confirmation broadcast
-- [ ] Test: batch settlement
+- [x] Test: batch settlement
 
 ---
 
