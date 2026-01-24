@@ -95,6 +95,7 @@
 mod account_mapping;
 mod config;
 mod error;
+pub mod faucet;
 #[cfg(feature = "hedera-sdk")]
 mod hedera;
 mod mock;
@@ -106,6 +107,7 @@ pub mod types;
 pub use account_mapping::AccountMapper;
 pub use config::{GasConfig, HederaConfig, HederaNetwork, RetryConfig};
 pub use error::{SettleError, SettleResult};
+pub use faucet::{request_testnet_hbar, FaucetConfig, FaucetResult, HederaFaucet};
 #[cfg(feature = "hedera-sdk")]
 pub use hedera::HederaSettlement;
 pub use mock::{MockSettlement, MockSettlementBuilder};

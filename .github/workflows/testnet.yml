@@ -1,0 +1,182 @@
+name: Testnet Integration Tests
+
+on:
+  # Run daily at 2 AM UTC
+  schedule:
+    - cron: '0 2 * * *'
+
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      skip_faucet:
+        description: 'Skip faucet funding step'
+        required: false
+        default: false
+        type: boolean
+      run_dispute_tests:
+        description: 'Run dispute resolution tests'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  RUST_LOG: nodalync=debug
+
+jobs:
+  testnet-integration:
+    name: Hedera Testnet Integration
+    runs-on: ubuntu-latest
+    # Only run if secrets are available (not on forks)
+    if: github.repository == 'gdgiangi/nodalync-protocol'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          protoc --version
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-testnet-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-testnet-
+            ${{ runner.os }}-cargo-
+
+      - name: Check Hedera credentials
+        id: check-credentials
+        run: |
+          if [[ -n "${{ secrets.HEDERA_ACCOUNT_ID }}" && -n "${{ secrets.HEDERA_PRIVATE_KEY }}" ]]; then
+            echo "credentials_available=true" >> $GITHUB_OUTPUT
+            echo "✓ Hedera credentials are configured"
+          else
+            echo "credentials_available=false" >> $GITHUB_OUTPUT
+            echo "✗ Hedera credentials not configured - skipping testnet tests"
+          fi
+
+      - name: Request testnet HBAR (optional)
+        if: steps.check-credentials.outputs.credentials_available == 'true' && inputs.skip_faucet != true
+        continue-on-error: true
+        run: |
+          echo "Requesting HBAR from testnet faucet..."
+          # Use curl to request HBAR from the faucet
+          # This is rate-limited, so failures are expected
+          curl -X POST "https://faucet.hedera.com/api/account/${{ secrets.HEDERA_ACCOUNT_ID }}" \
+            -H "Content-Type: application/json" \
+            --max-time 30 || echo "Faucet request failed (may be rate-limited)"
+
+      - name: Run connectivity test
+        if: steps.check-credentials.outputs.credentials_available == 'true'
+        env:
+          HEDERA_ACCOUNT_ID: ${{ secrets.HEDERA_ACCOUNT_ID }}
+          HEDERA_PRIVATE_KEY: ${{ secrets.HEDERA_PRIVATE_KEY }}
+        run: |
+          echo "Running Hedera connectivity test..."
+          cargo test -p nodalync-settle --test hedera_connectivity --features hedera-sdk -- --nocapture
+
+      - name: Run basic integration tests
+        if: steps.check-credentials.outputs.credentials_available == 'true'
+        env:
+          HEDERA_ACCOUNT_ID: ${{ secrets.HEDERA_ACCOUNT_ID }}
+          HEDERA_PRIVATE_KEY: ${{ secrets.HEDERA_PRIVATE_KEY }}
+          HEDERA_CONTRACT_ID: ${{ secrets.HEDERA_CONTRACT_ID }}
+        run: |
+          echo "Running Hedera integration tests..."
+          # Run the ignored tests (integration tests)
+          cargo test -p nodalync-settle --features testnet -- --ignored --nocapture
+
+      - name: Run dispute resolution tests
+        if: steps.check-credentials.outputs.credentials_available == 'true' && (inputs.run_dispute_tests == true || inputs.run_dispute_tests == null)
+        env:
+          HEDERA_ACCOUNT_ID: ${{ secrets.HEDERA_ACCOUNT_ID }}
+          HEDERA_PRIVATE_KEY: ${{ secrets.HEDERA_PRIVATE_KEY }}
+          HEDERA_CONTRACT_ID: ${{ secrets.HEDERA_CONTRACT_ID }}
+        run: |
+          echo "Running dispute resolution tests..."
+          cargo test -p nodalync-settle --features testnet --test dispute_resolution -- --ignored --nocapture
+
+      - name: Run faucet integration test
+        if: steps.check-credentials.outputs.credentials_available == 'true'
+        continue-on-error: true
+        env:
+          HEDERA_ACCOUNT_ID: ${{ secrets.HEDERA_ACCOUNT_ID }}
+        run: |
+          echo "Running faucet integration test..."
+          # This test is expected to fail due to rate limiting in CI
+          cargo test -p nodalync-settle --features testnet test_faucet_request -- --ignored --nocapture || true
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "==================================================="
+          echo "Testnet Integration Test Summary"
+          echo "==================================================="
+          echo ""
+          if [[ "${{ steps.check-credentials.outputs.credentials_available }}" == "true" ]]; then
+            echo "✓ Hedera credentials: Configured"
+            echo "✓ Contract ID: ${{ secrets.HEDERA_CONTRACT_ID }}"
+          else
+            echo "✗ Hedera credentials: Not configured"
+            echo ""
+            echo "To enable testnet tests, add the following secrets:"
+            echo "  - HEDERA_ACCOUNT_ID: Your testnet account (e.g., 0.0.12345)"
+            echo "  - HEDERA_PRIVATE_KEY: Private key (hex, with or without 0x)"
+            echo "  - HEDERA_CONTRACT_ID: Settlement contract ID"
+          fi
+          echo "==================================================="
+
+  # Contract tests using Hardhat (local network)
+  contract-tests:
+    name: Smart Contract Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: contracts/package-lock.json
+
+      - name: Install contract dependencies
+        working-directory: contracts
+        run: npm ci
+
+      - name: Compile contracts
+        working-directory: contracts
+        run: npm run compile
+
+      - name: Run contract tests
+        working-directory: contracts
+        run: npm test
+
+      - name: Contract test summary
+        if: always()
+        run: |
+          echo "==================================================="
+          echo "Smart Contract Test Summary"
+          echo "==================================================="
+          echo ""
+          echo "✓ NodalyncSettlement contract tests completed"
+          echo "  - Deposits and withdrawals"
+          echo "  - Content attestation"
+          echo "  - Payment channels"
+          echo "  - Channel disputes (24h period simulation)"
+          echo "  - Batch settlement"
+          echo "==================================================="
