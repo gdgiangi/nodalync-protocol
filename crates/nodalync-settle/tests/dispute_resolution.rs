@@ -15,8 +15,8 @@
 //!
 //! Run with:
 //! ```bash
-//! HEDERA_ACCOUNT_ID=0.0.7703962 \
-//! HEDERA_PRIVATE_KEY=0xd21f3bfe69929b1d6e0f37fa9622b96f874a892f7236a7e0e3c8d7b62b422d8b \
+//! HEDERA_ACCOUNT_ID=<your-account-id> \
+//! HEDERA_PRIVATE_KEY=<your-private-key> \
 //! HEDERA_CONTRACT_ID=0.0.7729011 \
 //! cargo test -p nodalync-settle --features testnet --test dispute_resolution -- --ignored --nocapture
 //! ```

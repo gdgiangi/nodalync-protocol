@@ -32,7 +32,7 @@ async fn test_hedera_testnet_connectivity() {
             println!("Skipping test: HEDERA_ACCOUNT_ID and HEDERA_PRIVATE_KEY not set");
             println!("To run this test:");
             println!("  export HEDERA_ACCOUNT_ID=0.0.7703962");
-            println!("  export HEDERA_PRIVATE_KEY=0xd21f3bfe69929b1d6e0f37fa9622b96f874a892f7236a7e0e3c8d7b62b422d8b");
+            println!("  export HEDERA_PRIVATE_KEY=<your-private-key>");
             return;
         }
     };

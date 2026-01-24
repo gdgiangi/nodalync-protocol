@@ -72,8 +72,8 @@ async function main() {
 
 3. Run integration tests:
    cd ../crates/nodalync-settle
-   HEDERA_ACCOUNT_ID=0.0.7703962 \\
-   HEDERA_PRIVATE_KEY=0xd21f3bfe69929b1d6e0f37fa9622b96f874a892f7236a7e0e3c8d7b62b422d8b \\
+   HEDERA_ACCOUNT_ID=$HEDERA_ACCOUNT_ID \\
+   HEDERA_PRIVATE_KEY=$HEDERA_PRIVATE_KEY \\
    HEDERA_CONTRACT_ID=${contractAddress} \\
    cargo test --features testnet -- --ignored --nocapture
 `);
