@@ -10,7 +10,9 @@ use nodalync_crypto::{
     content_hash, generate_identity, peer_id_from_public_key, Hash, PeerId, Signature,
 };
 use nodalync_ops::{DefaultNodeOperations, OpsError};
-use nodalync_store::{ContentStore, ManifestStore, NodeState, NodeStateConfig, SettlementQueueStore};
+use nodalync_store::{
+    ContentStore, ManifestStore, NodeState, NodeStateConfig, SettlementQueueStore,
+};
 use nodalync_types::{ContentType, Manifest, Metadata, Provenance, ProvenanceEntry, Visibility};
 use nodalync_wire::QueryRequestPayload;
 use tempfile::TempDir;
@@ -131,7 +133,10 @@ async fn test_e2e_simple_l0_publish_query_settle() {
 
     // === VERIFY SETTLEMENT QUEUE ===
     let pending_total = alice.ops.get_pending_settlement_total().unwrap();
-    assert_eq!(pending_total, 100, "Settlement queue should have 100 pending");
+    assert_eq!(
+        pending_total, 100,
+        "Settlement queue should have 100 pending"
+    );
 
     // Get pending distributions
     let pending = alice.ops.state.settlement.get_pending().unwrap();
@@ -152,7 +157,10 @@ async fn test_e2e_simple_l0_publish_query_settle() {
 
     // Verify queue is now empty
     let pending_after = alice.ops.get_pending_settlement_total().unwrap();
-    assert_eq!(pending_after, 0, "Settlement queue should be empty after settle");
+    assert_eq!(
+        pending_after, 0,
+        "Settlement queue should be empty after settle"
+    );
 
     println!("✅ E2E Simple L0: Publish → Query → Pay → Settle completed successfully");
 }
@@ -195,7 +203,11 @@ async fn test_e2e_multihop_provenance_distribution() {
     // === BOB: Create L3 synthesis from Alice's L0 ===
     // Bob has Alice's content (simulated by storing it locally)
     // In a real scenario, Bob would have queried and paid for this content
-    bob.ops.state.content.store_verified(&l0_hash, l0_content).unwrap();
+    bob.ops
+        .state
+        .content
+        .store_verified(&l0_hash, l0_content)
+        .unwrap();
     bob.ops.state.manifests.store(&l0_manifest).unwrap();
 
     // Bob creates L3 insight synthesizing Alice's knowledge

@@ -115,7 +115,8 @@ enum SwarmCommand {
 }
 
 /// Type alias for pending request map to reduce type complexity.
-type PendingRequests = Arc<RwLock<HashMap<OutboundRequestId, oneshot::Sender<NetworkResult<Vec<u8>>>>>>;
+type PendingRequests =
+    Arc<RwLock<HashMap<OutboundRequestId, oneshot::Sender<NetworkResult<Vec<u8>>>>>>;
 
 /// A P2P network node.
 ///

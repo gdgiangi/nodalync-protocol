@@ -1,0 +1,11 @@
+# Cargo audit configuration
+# See: https://rustsec.org/
+
+[advisories]
+# Advisories to ignore (transitive dependencies we can't easily update)
+ignore = [
+    # ring 0.16.20 - AES panic issue. Transitive dep from libp2p via rcgen.
+    # Upgrade blocked by libp2p-tls depending on rcgen 0.11 which uses ring 0.16.
+    # Track: https://github.com/libp2p/rust-libp2p/issues
+    "RUSTSEC-2025-0009",
+]
