@@ -66,69 +66,6 @@ This document defines the module structure, dependencies, and implementation ord
 | `nodalync-settle` | Blockchain settlement | §12 | econ, types |
 | `nodalync-cli` | Command-line interface | — | all |
 
-## Implementation Order
-
-Implement in this order to minimize blocked dependencies:
-
-### Phase 1: Foundation (No external dependencies)
-1. **`nodalync-crypto`** — Pure functions, no I/O
-   - Content hashing (SHA-256)
-   - Ed25519 keypair generation
-   - PeerId derivation
-   - Message signing/verification
-
-2. **`nodalync-types`** — Data structures only
-   - All enums (ContentType, Visibility, etc.)
-   - All structs (Manifest, Provenance, etc.)
-   - No logic, just definitions
-
-### Phase 2: Core Logic (Internal only)
-3. **`nodalync-wire`** — Serialization
-   - CBOR encoding/decoding
-   - Message envelope format
-   - Deterministic serialization
-
-4. **`nodalync-store`** — Persistence
-   - Content storage (filesystem)
-   - Manifest storage (SQLite or similar)
-   - Cache management
-
-5. **`nodalync-valid`** — Validation rules
-   - Content validation
-   - Provenance validation
-   - Payment validation
-   - Message validation
-
-6. **`nodalync-econ`** — Economics
-   - Revenue distribution calculation
-   - Weight handling
-   - Settlement batching logic
-
-### Phase 3: Operations (Combines everything)
-7. **`nodalync-ops`** — Protocol operations
-   - CREATE, PUBLISH, UPDATE
-   - QUERY, PREVIEW
-   - DERIVE, REFERENCE_L3_AS_L0
-   - Channel operations
-
-### Phase 4: External Integration
-8. **`nodalync-net`** — Networking
-   - libp2p integration
-   - DHT (Kademlia)
-   - Message routing
-   - Peer discovery
-
-9. **`nodalync-settle`** — Settlement
-   - Hedera SDK integration
-   - Batch settlement
-   - Channel dispute resolution
-
-### Phase 5: User Interface
-10. **`nodalync-cli`** — CLI application
-    - Command parsing
-    - User interaction
-    - Configuration management
-
 ## Key Interfaces (Traits)
 
 Each crate exposes traits that define its contract. Implementations can vary (e.g., in-memory vs SQLite storage) but must satisfy the trait.
@@ -306,16 +243,6 @@ account_id = "0.0.12345"
 [economics]
 default_price = 100000  # 0.001 NDL in smallest units
 ```
-
-## Development Workflow
-
-1. **Pick a module** from the implementation order
-2. **Read the module spec** in `docs/modules/XX-{module}.md`
-3. **Write tests first** from spec validation rules
-4. **Implement** until tests pass
-5. **Check off** items in `CHECKLIST.md`
-6. **PR review** — verify spec compliance
-7. **Move to next module**
 
 ## File Naming Conventions
 
