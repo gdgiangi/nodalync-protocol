@@ -1,0 +1,12 @@
+[package]
+name = "nodalync"
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+description = "Nodalync protocol - decentralized node coordination (placeholder, full implementation coming soon)"
+repository = "https://github.com/nodalync/nodalync"
+authors = ["Gabriel Giangi <gabegiangi@gmail.com>"]
+keywords = ["distributed", "protocol", "networking"]
+categories = ["network-programming"]
+
+[dependencies]

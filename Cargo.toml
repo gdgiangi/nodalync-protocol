@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/nodalync",
     "crates/nodalync-crypto",
     "crates/nodalync-types",
     "crates/nodalync-wire",
@@ -17,7 +18,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/yourusername/nodalync"
+repository = "https://github.com/nodalync/nodalync"
 authors = ["Gabriel Giangi <gabegiangi@gmail.com>"]
 
 [workspace.dependencies]
