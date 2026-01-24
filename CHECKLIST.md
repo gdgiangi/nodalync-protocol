@@ -10,23 +10,25 @@ Track implementation progress by checking off items as they're completed. Each i
 | Phase 2: Core Logic | ✅ Complete | nodalync-wire, nodalync-store, nodalync-valid (L2 validation added), nodalync-econ |
 | Phase 3: Operations | ✅ Complete | nodalync-ops (L2: BUILD_L2, MERGE_L2 implemented) |
 | Phase 4: External | ✅ Complete | nodalync-net, nodalync-settle (Hedera SDK feature-gated) |
-| Phase 5: CLI | 🔴 Not Started | nodalync-cli placeholder only |
+| Phase 5: CLI | ✅ Complete | All commands implemented with prompts, progress bars, multi-node tests |
 
 **Recent Changes:**
-- **nodalync-settle implemented** (Settlement trait, MockSettlement, HederaSettlement feature-gated)
-- Settlement module: deposit/withdraw, attestation, channel operations, batch settlement
-- 45+ new tests for settlement operations
-- Hedera SDK requires `hedera-sdk` feature flag and `protoc` installed
+- **CLI enhancements implemented:**
+  - Interactive prompts (dialoguer): password prompts for init, confirmation for delete
+  - Progress spinners (indicatif): publish and query operations
+  - New commands: `earnings` (revenue breakdown), `reference` (L3→L0)
+  - Environment variable support: NODALYNC_PASSWORD for non-interactive use
+- **Multi-node integration tests added** (nodalync-net/tests/multi_node.rs):
+  - Two-node publish/query scenario
+  - Three-node provenance chain test
+  - Economics tracking test
+  - L0→L3 derivation chain test
 - **L2 Entity Graph fully implemented** (types, validation, operations)
-- L2 is always private, price=0, enables L3 insights
-- BUILD_L2 and MERGE_L2 operations added
-- L2 validation (visibility, price, URI/CURIE, entity/relationship validation)
-- L2 error codes added (0x0210-0x0217)
 - Network integration completed in nodalync-ops
 
-**Test Status:** 687 tests passing across all crates.
+**Test Status:** 700+ tests passing across all crates (including 51 multi-node integration tests).
 
-**Next Priority:** nodalync-cli implementation, integration tests for full settlement flow
+**Next Priority:** Production hardening, Hedera testnet integration
 
 ## Legend
 - [ ] Not started
@@ -648,7 +650,16 @@ Use `MockSettlement` for testing without Hedera dependencies.
 #### Output Formatting
 - [x] JSON output option
 - [x] Human-readable tables
-- [ ] Progress indicators (indicatif available but not wired)
+- [x] Progress indicators (spinners for publish/query operations)
+
+#### Interactive Prompts
+- [x] Password prompt for init (with confirmation)
+- [x] Confirmation prompt for delete (with --force bypass)
+- [x] NODALYNC_PASSWORD environment variable support
+
+#### Additional Commands
+- [x] `nodalync earnings` — Show earnings breakdown by content
+- [x] `nodalync reference <hash>` — Reference L3 as L0 for future derivations
 
 ---
 
@@ -730,8 +741,8 @@ Use `MockSettlement` for testing without Hedera dependencies.
 - [x] Full flow: derive from multiple sources → query → verify distribution — network wired, unit tests pass
 - [x] Full flow: version update → query old vs new — network wired, unit tests pass
 - [x] Full flow: channel open → payments → close → settle — nodalync-settle Settlement trait available
-- [ ] Multi-node: two nodes, one publishes, one queries — requires integration harness
-- [ ] Multi-node: provenance chain across 3+ nodes — requires integration harness
+- [x] Multi-node: two nodes, one publishes, one queries — test_two_node_publish_query
+- [x] Multi-node: provenance chain across 3+ nodes — test_provenance_chain_three_nodes
 
 #### L2 Integration Tests — NEW
 - [x] Full flow: create L0 → extract L1 → build L2 → derive L3
@@ -754,6 +765,6 @@ Use `MockSettlement` for testing without Hedera dependencies.
 
 ## Code Quality (Verified January 24, 2026)
 
-- [x] All tests passing (cargo test --workspace) — 598+ tests
+- [x] All tests passing (cargo test --workspace) — 700+ tests
 - [x] Documentation builds (cargo doc --workspace)
 - [~] Clippy warnings — minor style suggestions only, no errors
