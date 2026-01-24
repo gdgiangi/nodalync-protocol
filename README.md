@@ -27,7 +27,7 @@ creates perpetual economic participation in all derivative work.
 
 ### Read the Paper
 
-📄 **[Nodalync Protocol v0.7 (PDF)](./Nodalync_Protocol.pdf)** — Draft, January 2026
+📄 **[Nodalync Protocol v0.8 (PDF)](./docs/whitepaper.pdf)** — Draft, January 2026
 
 ---
 
@@ -35,25 +35,18 @@ creates perpetual economic participation in all derivative work.
 
 **v0.1.0 — Feature Complete**
 
-All five implementation phases complete with 738+ tests passing.
-
-| Phase | Crate | Status | Description |
-|-------|-------|--------|-------------|
-| 1 | `nodalync-crypto` | ✅ | Hashing (SHA-256), Ed25519 signing, PeerId derivation |
-| 1 | `nodalync-types` | ✅ | All data structures including L2 Entity Graph |
-| 2 | `nodalync-wire` | ✅ | Deterministic CBOR serialization, 17 message types |
-| 2 | `nodalync-store` | ✅ | SQLite manifests, filesystem content, settlement queue |
-| 2 | `nodalync-valid` | ✅ | Content, provenance, payment, L2 validation |
-| 2 | `nodalync-econ` | ✅ | 95/5 revenue distribution, Merkle batching |
-| 3 | `nodalync-ops` | ✅ | CREATE, DERIVE, BUILD_L2, MERGE_L2, QUERY |
-| 4 | `nodalync-net` | ✅ | libp2p (TCP/Noise/yamux), Kademlia DHT |
-| 4 | `nodalync-settle` | ✅ | Hedera SDK (feature-gated), MockSettlement for testing |
-| 5 | `nodalync-cli` | ✅ | Full CLI with interactive prompts, progress indicators |
-
-**Recent additions:**
-- L2 Entity Graph with URI-based ontology (RDF interop)
-- Multi-node integration tests (51 scenarios)
-- Interactive CLI prompts and progress spinners
+| Phase | Crate | Description |
+|-------|-------|-------------|
+| 1 | `nodalync-crypto`  | Hashing (SHA-256), Ed25519 signing, PeerId derivation |
+| 1 | `nodalync-types` | All data structures including L2 Entity Graph |
+| 2 | `nodalync-wire` | Deterministic CBOR serialization, 17 message types |
+| 2 | `nodalync-store` | SQLite manifests, filesystem content, settlement queue |
+| 2 | `nodalync-valid` | Content, provenance, payment, L2 validation |
+| 2 | `nodalync-econ` | 95/5 revenue distribution, Merkle batching |
+| 3 | `nodalync-ops` | CREATE, DERIVE, BUILD_L2, MERGE_L2, QUERY |
+| 4 | `nodalync-net` | libp2p (TCP/Noise/yamux), Kademlia DHT |
+| 4 | `nodalync-settle` | Hedera SDK (feature-gated), MockSettlement for testing |
+| 5 | `nodalync-cli` | Full CLI with interactive prompts, progress indicators |
 
 ---
 
