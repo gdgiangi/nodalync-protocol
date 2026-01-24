@@ -46,3 +46,10 @@ tarpaulin-report.html
 
 # Documentation build
 /doc/
+
+# Development/planning files (not part of release)
+CLAUDE.md
+CHECKLIST.md
+L2_IMPLEMENTATION_PLAN.md
+DESIGN_DECISIONS.md
+.claude/
