@@ -50,7 +50,11 @@ pub async fn publish(
         .unwrap_or_else(|| config.economics.default_price_units());
 
     // Initialize context with network
+    spinner.set_message("Connecting to network...");
     let mut ctx = NodeContext::with_network(config).await?;
+
+    // Bootstrap the network to find peers
+    ctx.bootstrap().await?;
 
     // Create metadata
     let mut metadata = Metadata::new(&title, content.len() as u64);

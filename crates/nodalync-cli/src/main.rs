@@ -12,11 +12,26 @@ use nodalync_cli::{
     output::OutputFormat,
 };
 
-#[tokio::main]
-async fn main() {
-    // Parse CLI arguments
+fn main() {
+    // Parse CLI arguments BEFORE creating tokio runtime
     let cli = Cli::parse();
 
+    // Check if this is a daemon start - must be handled before tokio runtime
+    if let Commands::Start { daemon: true } = &cli.command {
+        // Handle daemon mode synchronously before any async runtime exists
+        if let Err(e) = handle_daemon_start(&cli) {
+            eprintln!("{}: {}", "Error".red().bold(), e);
+            std::process::exit(e.exit_code());
+        }
+        return;
+    }
+
+    // For all other commands, use the normal async runtime
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    rt.block_on(async_main(cli));
+}
+
+async fn async_main(cli: Cli) {
     // Initialize logging
     if cli.verbose {
         tracing_subscriber::registry()
@@ -30,6 +45,34 @@ async fn main() {
         eprintln!("{}: {}", "Error".red().bold(), e);
         std::process::exit(e.exit_code());
     }
+}
+
+/// Handle daemon start before tokio runtime is created.
+/// This avoids the "cannot start runtime from within runtime" panic.
+fn handle_daemon_start(cli: &Cli) -> CliResult<()> {
+    use nodalync_cli::commands::start_daemon_sync;
+
+    // Initialize logging if verbose
+    if cli.verbose {
+        tracing_subscriber::registry()
+            .with(fmt::layer())
+            .with(EnvFilter::from_default_env().add_directive("nodalync=debug".parse().unwrap()))
+            .init();
+    }
+
+    // Load configuration
+    let config_path = cli.config.clone().unwrap_or_else(default_config_path);
+    let config = CliConfig::load(&config_path)?;
+    let format: OutputFormat = cli.format.into();
+
+    // Call the synchronous daemon start function
+    // Note: On success, the parent process exits inside this call after forking.
+    // The child process runs the daemon and never returns here.
+    // Only on error does this function return.
+    start_daemon_sync(config, format)?;
+
+    // If we get here, something unexpected happened
+    Ok(())
 }
 
 async fn run(cli: Cli) -> CliResult<()> {

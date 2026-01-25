@@ -37,7 +37,7 @@ pub use publish::publish;
 pub use query::query;
 pub use reference::reference;
 pub use settle::settle;
-pub use start::start;
+pub use start::{start, start_daemon_sync};
 pub use status::status;
 pub use stop::stop;
 pub use synthesize::synthesize;

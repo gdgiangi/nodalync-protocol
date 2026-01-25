@@ -31,7 +31,7 @@ use nodalync_wire::{
     SettleConfirmPayload,
 };
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tracing::{debug, info, warn};
 
@@ -135,6 +135,9 @@ pub struct NetworkNode {
     /// Peer ID mapper for libp2p <-> nodalync conversion.
     peer_mapper: PeerIdMapper,
 
+    /// Set of currently connected libp2p peers.
+    connected_peers_set: Arc<StdRwLock<std::collections::HashSet<PeerId>>>,
+
     /// Channel for sending commands to the swarm task.
     command_tx: mpsc::Sender<SwarmCommand>,
 
@@ -200,6 +203,8 @@ impl NetworkNode {
         let pending_requests_clone = pending_requests.clone();
         let peer_mapper_clone = peer_mapper.clone();
         let gossip_topic = config.gossipsub_topic.clone();
+        let connected_peers_set = Arc::new(StdRwLock::new(std::collections::HashSet::new()));
+        let connected_peers_clone = connected_peers_set.clone();
 
         // Subscribe to the announcement topic
         let announce_topic = IdentTopic::new(&config.gossipsub_topic);
@@ -212,6 +217,7 @@ impl NetworkNode {
                 event_tx,
                 pending_requests_clone,
                 peer_mapper_clone,
+                connected_peers_clone,
                 gossip_topic,
             )
             .await;
@@ -222,6 +228,7 @@ impl NetworkNode {
             nodalync_peer_id,
             private_key,
             peer_mapper,
+            connected_peers_set,
             command_tx,
             event_rx: Arc::new(Mutex::new(event_rx)),
             pending_requests,
@@ -274,6 +281,8 @@ impl NetworkNode {
         let pending_requests_clone = pending_requests.clone();
         let peer_mapper_clone = peer_mapper.clone();
         let gossip_topic = config.gossipsub_topic.clone();
+        let connected_peers_set = Arc::new(StdRwLock::new(std::collections::HashSet::new()));
+        let connected_peers_clone = connected_peers_set.clone();
 
         let announce_topic = IdentTopic::new(&config.gossipsub_topic);
 
@@ -285,6 +294,7 @@ impl NetworkNode {
                 event_tx,
                 pending_requests_clone,
                 peer_mapper_clone,
+                connected_peers_clone,
                 gossip_topic,
             )
             .await;
@@ -295,6 +305,7 @@ impl NetworkNode {
             nodalync_peer_id,
             private_key,
             peer_mapper,
+            connected_peers_set,
             command_tx,
             event_rx: Arc::new(Mutex::new(event_rx)),
             pending_requests,
@@ -312,8 +323,16 @@ impl NetworkNode {
             return Ok(());
         }
 
-        // Add bootstrap nodes to the routing table
+        tracing::info!(
+            "Bootstrapping with {} node(s)",
+            self.config.bootstrap_nodes.len()
+        );
+
+        // Add bootstrap nodes to the routing table AND dial them
         for (peer_id, addr) in &self.config.bootstrap_nodes {
+            tracing::info!("Adding bootstrap node {} at {}", peer_id, addr);
+
+            // Add address to Kademlia routing table
             self.command_tx
                 .send(SwarmCommand::AddAddress {
                     peer: *peer_id,
@@ -321,16 +340,53 @@ impl NetworkNode {
                 })
                 .await
                 .map_err(|_| NetworkError::ChannelClosed)?;
+
+            // Actually dial the bootstrap node
+            let (tx, rx) = oneshot::channel();
+            self.command_tx
+                .send(SwarmCommand::Dial {
+                    addr: addr.clone(),
+                    response: tx,
+                })
+                .await
+                .map_err(|_| NetworkError::ChannelClosed)?;
+
+            // Wait for dial to complete (or fail)
+            match rx.await {
+                Ok(Ok(())) => {
+                    tracing::info!("Successfully dialed bootstrap node {}", peer_id);
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!("Failed to dial bootstrap node {}: {}", peer_id, e);
+                }
+                Err(_) => {
+                    tracing::warn!("Dial channel closed for bootstrap node {}", peer_id);
+                }
+            }
         }
 
-        // Trigger Kademlia bootstrap
+        // Wait for connections to establish and routing table to populate
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+        // Trigger Kademlia bootstrap to find closest peers
         let (tx, rx) = oneshot::channel();
         self.command_tx
             .send(SwarmCommand::Bootstrap { response: tx })
             .await
             .map_err(|_| NetworkError::ChannelClosed)?;
 
-        rx.await.map_err(|_| NetworkError::ChannelClosed)?
+        // Wait for bootstrap query to complete
+        let bootstrap_result = rx.await.map_err(|_| NetworkError::ChannelClosed)?;
+
+        // Give more time for routing table to populate after bootstrap
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+        tracing::info!(
+            "Bootstrap complete, connected peers: {}",
+            self.connected_peers().len()
+        );
+
+        bootstrap_result
     }
 
     /// Subscribe to the announcement topic.
@@ -553,9 +609,10 @@ impl Network for NetworkNode {
     }
 
     fn connected_peers(&self) -> Vec<PeerId> {
-        // This needs to be async in practice, but the trait requires sync
-        // We'll return cached peers from the mapper for now
-        self.peer_mapper.libp2p_peers()
+        self.connected_peers_set
+            .read()
+            .map(|set| set.iter().copied().collect())
+            .unwrap_or_default()
     }
 
     fn listen_addresses(&self) -> Vec<Multiaddr> {
@@ -619,6 +676,7 @@ async fn run_swarm(
     event_tx: mpsc::Sender<NetworkEvent>,
     pending_requests: PendingRequests,
     peer_mapper: PeerIdMapper,
+    connected_peers: Arc<StdRwLock<std::collections::HashSet<PeerId>>>,
     gossip_topic: String,
 ) {
     // Subscribe to the announcement topic
@@ -671,15 +729,31 @@ async fn run_swarm(
                         handle_identify_event(id_event, &mut swarm, &peer_mapper);
                     }
 
-                    SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                        debug!("Connection established with {}", peer_id);
-                        let _ = event_tx.send(NetworkEvent::PeerConnected { peer: peer_id }).await;
+                    SwarmEvent::ConnectionEstablished { peer_id, num_established, .. } => {
+                        debug!("Connection established with {} (total: {})", peer_id, num_established);
+                        // Track connected peer
+                        if let Ok(mut peers) = connected_peers.write() {
+                            peers.insert(peer_id);
+                        }
+                        // Only send event on first connection
+                        if num_established.get() == 1 {
+                            let _ = event_tx.send(NetworkEvent::PeerConnected { peer: peer_id }).await;
+                        }
                     }
 
-                    SwarmEvent::ConnectionClosed { peer_id, .. } => {
-                        debug!("Connection closed with {}", peer_id);
-                        peer_mapper.unregister(&peer_id);
-                        let _ = event_tx.send(NetworkEvent::PeerDisconnected { peer: peer_id }).await;
+                    SwarmEvent::ConnectionClosed { peer_id, num_established, cause, .. } => {
+                        debug!(
+                            "Connection closed with {} (remaining: {}, cause: {:?})",
+                            peer_id, num_established, cause
+                        );
+                        // Only unregister if no connections remain
+                        if num_established == 0 {
+                            if let Ok(mut peers) = connected_peers.write() {
+                                peers.remove(&peer_id);
+                            }
+                            peer_mapper.unregister(&peer_id);
+                            let _ = event_tx.send(NetworkEvent::PeerDisconnected { peer: peer_id }).await;
+                        }
                     }
 
                     SwarmEvent::NewListenAddr { address, .. } => {

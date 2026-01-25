@@ -27,6 +27,10 @@ pub async fn query(
 
     // Initialize context with network
     let mut ctx = NodeContext::with_network(config.clone()).await?;
+
+    // Bootstrap to find peers
+    ctx.bootstrap().await?;
+
     spinner.set_message("Fetching content metadata...");
 
     // Get manifest first to know price

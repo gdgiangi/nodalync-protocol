@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use nodalync_crypto::PeerId;
+use nodalync_crypto::{PeerId, PrivateKey, PublicKey};
 use nodalync_net::{Network, NetworkConfig, NetworkNode};
 use nodalync_ops::{DefaultNodeOperations, OpsConfig};
 use nodalync_settle::{AccountId, MockSettlement, Settlement};
@@ -10,6 +10,30 @@ use nodalync_store::{NodeState, NodeStateConfig};
 
 use crate::config::CliConfig;
 use crate::error::{CliError, CliResult};
+
+/// Get password from environment variable or interactive prompt.
+fn get_password() -> CliResult<String> {
+    if let Ok(pwd) = std::env::var("NODALYNC_PASSWORD") {
+        Ok(pwd)
+    } else if crate::prompt::is_interactive() {
+        crate::prompt::password("Enter password to unlock identity")
+            .map_err(|e| CliError::User(format!("Failed to read password: {}", e)))
+    } else {
+        Err(CliError::User(
+            "Set NODALYNC_PASSWORD or run interactively".into(),
+        ))
+    }
+}
+
+/// Convert a nodalync private key to a libp2p keypair.
+///
+/// Both use Ed25519, so the 32-byte seed can be used directly.
+fn to_libp2p_keypair(private_key: &PrivateKey) -> CliResult<libp2p::identity::Keypair> {
+    let secret = libp2p::identity::ed25519::SecretKey::try_from_bytes(*private_key.as_bytes())
+        .map_err(|e| CliError::User(format!("Invalid Ed25519 key: {}", e)))?;
+    let ed_keypair = libp2p::identity::ed25519::Keypair::from(secret);
+    Ok(libp2p::identity::Keypair::from(ed_keypair))
+}
 
 /// Node context containing all initialized components.
 pub struct NodeContext {
@@ -71,6 +95,15 @@ impl NodeContext {
         }
         let peer_id = state.identity.peer_id()?;
 
+        // Load identity for network operations (requires password)
+        let (private_key, public_key) = if config.network.enabled {
+            let password = get_password()?;
+            state.identity.load(&password)?
+        } else {
+            // For local-only, we don't need the private key
+            (PrivateKey::from_bytes([0u8; 32]), PublicKey::from_bytes([0u8; 32]))
+        };
+
         // Create network node
         let network = if config.network.enabled {
             let mut net_config = NetworkConfig::default();
@@ -82,7 +115,28 @@ impl NodeContext {
                 }
             }
 
-            let node = NetworkNode::new(net_config).await?;
+            // Parse bootstrap nodes
+            // Format: /ip4/x.x.x.x/tcp/port/p2p/PeerId
+            for bootstrap_str in &config.network.bootstrap_nodes {
+                // Extract peer ID from the end of the multiaddr string
+                if let Some(p2p_idx) = bootstrap_str.rfind("/p2p/") {
+                    let peer_id_str = &bootstrap_str[p2p_idx + 5..];
+                    let addr_str = &bootstrap_str[..p2p_idx];
+
+                    // Parse peer ID
+                    if let Ok(peer_id) = peer_id_str.parse::<nodalync_net::PeerId>() {
+                        // Parse address
+                        if let Ok(addr) = addr_str.parse::<nodalync_net::Multiaddr>() {
+                            net_config.bootstrap_nodes.push((peer_id, addr.clone()));
+                            tracing::info!("Added bootstrap node: {} at {}", peer_id, addr);
+                        }
+                    }
+                }
+            }
+
+            // Convert nodalync keypair to libp2p keypair for consistent peer ID
+            let libp2p_keypair = to_libp2p_keypair(&private_key)?;
+            let node = NetworkNode::with_keypair(private_key.clone(), public_key, libp2p_keypair, net_config).await?;
             Some(Arc::new(node))
         } else {
             None

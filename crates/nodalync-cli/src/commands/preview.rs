@@ -13,6 +13,9 @@ pub async fn preview(config: CliConfig, format: OutputFormat, hash_str: &str) ->
     // Initialize context (try network first for remote content)
     let mut ctx = NodeContext::with_network(config).await?;
 
+    // Bootstrap to find peers
+    ctx.bootstrap().await?;
+
     // Try to preview
     let preview_response = ctx
         .ops

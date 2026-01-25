@@ -12,7 +12,10 @@ use crate::signals::shutdown_signal;
 
 use tracing::info;
 
-/// Execute the start command.
+/// Execute the start command (foreground mode only).
+///
+/// For daemon mode, use `start_daemon_sync` which must be called
+/// before any tokio runtime is created.
 pub async fn start(config: CliConfig, format: OutputFormat, daemon: bool) -> CliResult<String> {
     let base_dir = config.base_dir();
 
@@ -22,18 +25,11 @@ pub async fn start(config: CliConfig, format: OutputFormat, daemon: bool) -> Cli
     }
 
     if daemon {
-        // Daemon mode: fork first, then create context
-        #[cfg(unix)]
-        {
-            return start_daemon(config, format, &base_dir).await;
-        }
-
-        #[cfg(not(unix))]
-        {
-            return Err(CliError::user(
-                "Daemon mode is only supported on Unix systems",
-            ));
-        }
+        // Daemon mode should be handled by start_daemon_sync before the runtime starts.
+        // If we get here, something is wrong.
+        return Err(CliError::user(
+            "Daemon mode must be handled before async runtime. Use start_daemon_sync instead.",
+        ));
     }
 
     // Foreground mode: create context and run
@@ -83,27 +79,31 @@ pub async fn start(config: CliConfig, format: OutputFormat, daemon: bool) -> Cli
     Ok("Node stopped gracefully.".to_string())
 }
 
-/// Start the node in daemon mode (Unix only).
+/// Start the node in daemon mode (synchronous, Unix only).
 ///
-/// IMPORTANT: We fork FIRST, then create the context in the child process.
-/// This avoids the issue of inheriting a partial Tokio runtime state from the parent.
+/// IMPORTANT: This function MUST be called BEFORE any tokio runtime is created.
+/// It forks the process first, then creates a fresh tokio runtime in the child.
+/// This avoids the "cannot start runtime from within runtime" panic.
 #[cfg(unix)]
-async fn start_daemon(
-    config: CliConfig,
-    _format: OutputFormat,
-    base_dir: &std::path::Path,
-) -> CliResult<String> {
+pub fn start_daemon_sync(config: CliConfig, _format: OutputFormat) -> CliResult<String> {
     use daemonize::Daemonize;
     use std::fs::File;
 
-    let pid_path = pid_file_path(base_dir);
+    let base_dir = config.base_dir();
+
+    // Check for existing running node
+    if check_existing_node(&base_dir).is_some() {
+        return Err(CliError::NodeAlreadyRunning);
+    }
+
+    let pid_path = pid_file_path(&base_dir);
 
     // Create log files for stdout/stderr
     let stdout_path = base_dir.join("node.stdout.log");
     let stderr_path = base_dir.join("node.stderr.log");
 
     // Ensure base directory exists
-    std::fs::create_dir_all(base_dir)?;
+    std::fs::create_dir_all(&base_dir)?;
 
     let stdout = File::create(&stdout_path)?;
     let stderr = File::create(&stderr_path)?;
@@ -111,20 +111,25 @@ async fn start_daemon(
     // Configure daemonize - note: we don't use pid_file here because we want
     // to write it ourselves with the start time
     let daemonize = Daemonize::new()
-        .working_directory(base_dir)
+        .working_directory(&base_dir)
         .stdout(stdout)
         .stderr(stderr);
 
-    // Fork to background
+    // Print status BEFORE forking (parent will exit after fork)
+    println!("Starting Nodalync node in background...");
+    println!("Logs: {}", stderr_path.display());
+
+    // Fork to background BEFORE any tokio runtime exists
+    // Note: On success, the parent exits and only the child continues
     match daemonize.start() {
         Ok(()) => {
             // We are now in the child process (daemon)
-            // Create a new Tokio runtime for the child process
+            // Create a fresh Tokio runtime - this is safe because no runtime existed before fork
             let rt = tokio::runtime::Runtime::new()
                 .map_err(|e| CliError::config(format!("Failed to create runtime: {}", e)))?;
 
             rt.block_on(async {
-                // Now create the context AFTER the fork, in a fresh runtime
+                // Now create the context in the fresh runtime
                 let mut ctx = match NodeContext::with_network(config.clone()).await {
                     Ok(ctx) => ctx,
                     Err(e) => {
@@ -153,6 +158,11 @@ async fn start_daemon(
                     std::process::exit(1);
                 }
 
+                // Log startup info
+                let peer_id = ctx.peer_id().to_string();
+                eprintln!("Nodalync daemon started (PID: {})", std::process::id());
+                eprintln!("PeerId: {}", peer_id);
+
                 // Set up shutdown signal handler
                 let shutdown_rx = shutdown_signal();
 
@@ -179,11 +189,7 @@ async fn start_daemon(
 
 /// Start the node in daemon mode (non-Unix stub).
 #[cfg(not(unix))]
-async fn start_daemon(
-    _config: CliConfig,
-    _format: OutputFormat,
-    _base_dir: &std::path::Path,
-) -> CliResult<String> {
+pub fn start_daemon_sync(_config: CliConfig, _format: OutputFormat) -> CliResult<String> {
     Err(CliError::user(
         "Daemon mode is only supported on Unix systems",
     ))
