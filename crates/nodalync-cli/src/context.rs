@@ -101,7 +101,10 @@ impl NodeContext {
             state.identity.load(&password)?
         } else {
             // For local-only, we don't need the private key
-            (PrivateKey::from_bytes([0u8; 32]), PublicKey::from_bytes([0u8; 32]))
+            (
+                PrivateKey::from_bytes([0u8; 32]),
+                PublicKey::from_bytes([0u8; 32]),
+            )
         };
 
         // Create network node
@@ -136,7 +139,13 @@ impl NodeContext {
 
             // Convert nodalync keypair to libp2p keypair for consistent peer ID
             let libp2p_keypair = to_libp2p_keypair(&private_key)?;
-            let node = NetworkNode::with_keypair(private_key.clone(), public_key, libp2p_keypair, net_config).await?;
+            let node = NetworkNode::with_keypair(
+                private_key.clone(),
+                public_key,
+                libp2p_keypair,
+                net_config,
+            )
+            .await?;
             Some(Arc::new(node))
         } else {
             None
