@@ -304,7 +304,14 @@ impl NetworkNode {
     }
 
     /// Bootstrap the node by connecting to bootstrap peers.
+    /// If no bootstrap nodes are configured, this succeeds immediately (first node in network).
     pub async fn bootstrap(&self) -> NetworkResult<()> {
+        // If no bootstrap nodes, we're the first node - nothing to do
+        if self.config.bootstrap_nodes.is_empty() {
+            tracing::info!("No bootstrap nodes configured - starting as first node in network");
+            return Ok(());
+        }
+
         // Add bootstrap nodes to the routing table
         for (peer_id, addr) in &self.config.bootstrap_nodes {
             self.command_tx
@@ -579,6 +586,17 @@ impl Network for NetworkNode {
     async fn next_event(&self) -> NetworkResult<NetworkEvent> {
         let mut event_rx = self.event_rx.lock().await;
         event_rx.recv().await.ok_or(NetworkError::ChannelClosed)
+    }
+
+    async fn send_response(
+        &self,
+        request_id: libp2p::request_response::InboundRequestId,
+        data: Vec<u8>,
+    ) -> NetworkResult<()> {
+        self.command_tx
+            .send(SwarmCommand::SendResponse { request_id, data })
+            .await
+            .map_err(|_| NetworkError::ChannelClosed)
     }
 
     fn local_peer_id(&self) -> PeerId {

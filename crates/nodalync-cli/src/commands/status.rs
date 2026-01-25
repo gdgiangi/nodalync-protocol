@@ -6,19 +6,78 @@ use nodalync_types::Visibility;
 use crate::config::CliConfig;
 use crate::context::NodeContext;
 use crate::error::CliResult;
+use crate::node_runner::{calculate_uptime, check_existing_node, pid_file_path, read_start_time};
 use crate::output::{OutputFormat, Render, StatusOutput};
 
 /// Execute the status command.
 pub async fn status(config: CliConfig, format: OutputFormat) -> CliResult<String> {
-    // Try to initialize context
-    let ctx = match NodeContext::with_network(config).await {
-        Ok(ctx) => ctx,
-        Err(_) => {
-            // Node not running or can't initialize
+    let base_dir = config.base_dir();
+
+    // Check if a node is running via PID file
+    let running_pid = check_existing_node(&base_dir);
+
+    // Try to initialize local context (for content stats)
+    let ctx = NodeContext::local(config.clone()).ok();
+
+    // If no node is running, show stopped status with local stats
+    if running_pid.is_none() {
+        let (shared, private, pending_payments, pending_amount, peer_id) =
+            if let Some(ref ctx) = ctx {
+                let shared = ctx
+                    .ops
+                    .state
+                    .manifests
+                    .list(ManifestFilter::default().with_visibility(Visibility::Shared))
+                    .map(|v| v.len() as u32)
+                    .unwrap_or(0);
+
+                let private = ctx
+                    .ops
+                    .state
+                    .manifests
+                    .list(ManifestFilter::default().with_visibility(Visibility::Private))
+                    .map(|v| v.len() as u32)
+                    .unwrap_or(0);
+
+                let pending = ctx.ops.state.settlement.get_pending().unwrap_or_default();
+                let pending_amount = ctx.ops.state.settlement.get_pending_total().unwrap_or(0);
+
+                (
+                    shared,
+                    private,
+                    pending.len() as u32,
+                    pending_amount,
+                    ctx.peer_id().to_string(),
+                )
+            } else {
+                (0, 0, 0, 0, "N/A".to_string())
+            };
+
+        let output = StatusOutput {
+            running: false,
+            peer_id,
+            uptime_secs: None,
+            connected_peers: 0,
+            shared_content: shared,
+            private_content: private,
+            pending_payments,
+            pending_amount,
+        };
+        return Ok(output.render(format));
+    }
+
+    // Calculate uptime from PID file start time
+    let uptime_secs = read_start_time(&pid_file_path(&base_dir)).map(calculate_uptime);
+
+    // Node is running, get full status
+    let ctx = match ctx {
+        Some(c) => c,
+        None => {
+            // Can't get local context, show minimal running status
             let output = StatusOutput {
-                running: false,
-                peer_id: "N/A".to_string(),
-                uptime_secs: None,
+                running: true,
+                peer_id: format!("PID {}", running_pid.unwrap()),
+                uptime_secs,
                 connected_peers: 0,
                 shared_content: 0,
                 private_content: 0,
@@ -54,7 +113,7 @@ pub async fn status(config: CliConfig, format: OutputFormat) -> CliResult<String
     let output = StatusOutput {
         running: true,
         peer_id: ctx.peer_id().to_string(),
-        uptime_secs: None, // Would need to track start time
+        uptime_secs,
         connected_peers,
         shared_content: shared_count,
         private_content: private_count,

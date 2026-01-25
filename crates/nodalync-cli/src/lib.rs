@@ -42,9 +42,11 @@ pub mod commands;
 pub mod config;
 pub mod context;
 pub mod error;
+pub mod node_runner;
 pub mod output;
 pub mod progress;
 pub mod prompt;
+pub mod signals;
 
 // Re-export main types
 pub use cli::{Cli, Commands, OutputFormatArg, VisibilityArg};

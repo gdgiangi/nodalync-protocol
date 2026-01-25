@@ -132,6 +132,7 @@ pub use peer_id::PeerIdMapper;
 pub use traits::Network;
 
 // Re-export libp2p types commonly needed
+pub use libp2p::request_response::InboundRequestId;
 pub use libp2p::{Multiaddr, PeerId};
 
 #[cfg(test)]

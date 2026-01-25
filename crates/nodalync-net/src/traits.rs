@@ -124,6 +124,20 @@ pub trait Network: Send + Sync {
     /// incoming events.
     async fn next_event(&self) -> NetworkResult<NetworkEvent>;
 
+    /// Send a response to an inbound request.
+    ///
+    /// This should be called after receiving an `InboundRequest` event
+    /// to send the response back to the requesting peer.
+    ///
+    /// # Arguments
+    /// * `request_id` - The request ID from the `InboundRequest` event
+    /// * `data` - The response data to send
+    async fn send_response(
+        &self,
+        request_id: libp2p::request_response::InboundRequestId,
+        data: Vec<u8>,
+    ) -> NetworkResult<()>;
+
     // =========================================================================
     // Utility
     // =========================================================================
