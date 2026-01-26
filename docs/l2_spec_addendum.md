@@ -670,37 +670,37 @@ Extended scenario with L2:
     Carol builds L2 entity graph from Bob's L1
     Dave creates L3 insight from Carol's L2
     
-    Eve queries Dave's L3 for 100 NDL
+    Eve queries Dave's L3 for 100 HBAR
 
 Provenance chain:
     L0 (Alice) → L1 (Bob, depth=1) → L2 (Carol, depth=2) → L3 (Dave, depth=3)
-    
+
     Dave's L3 provenance:
         root_L0L1 = [{ hash: alice_l0, owner: Alice, weight: 1 }]
         derived_from = [carol_l2]
         depth = 3
 
-Distribution of 100 NDL payment:
-    Dave (L3 owner, synthesis fee): 5 NDL
-    Root pool: 95 NDL
-    
+Distribution of 100 HBAR payment:
+    Dave (L3 owner, synthesis fee): 5 HBAR
+    Root pool: 95 HBAR
+
     Only root_L0L1 entries share the pool:
-        Alice (L0 owner): 95 NDL
-    
+        Alice (L0 owner): 95 HBAR
+
     Carol receives nothing from THIS query.
     Carol earns when someone queries HER L2 directly.
-    
+
 What if Carol also contributed an L0?
     If Carol had created L0_carol that Bob also used:
         root_L0L1 = [
             { hash: alice_l0, owner: Alice, weight: 1 },
             { hash: carol_l0, owner: Carol, weight: 1 }
         ]
-        
+
     Then distribution would be:
-        Dave (synthesis): 5 NDL
-        Alice (1/2 root pool): 47.5 NDL
-        Carol (1/2 root pool): 47.5 NDL
+        Dave (synthesis): 5 HBAR
+        Alice (1/2 root pool): 47.5 HBAR
+        Carol (1/2 root pool): 47.5 HBAR
 ```
 
 ---

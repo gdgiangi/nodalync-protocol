@@ -106,14 +106,14 @@ pub enum Confidence {
 
 /// Currency type for payments.
 ///
-/// Spec §4.7: Currently only NDL (Nodalync native token) is supported.
+/// Spec §4.7: The protocol uses HBAR (Hedera native token) for all payments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[repr(u8)]
 #[non_exhaustive]
 pub enum Currency {
-    /// Native Nodalync token
+    /// Hedera native token (1 HBAR = 10^8 tinybars)
     #[default]
-    NDL = 0x00,
+    HBAR = 0x00,
 }
 
 /// State of a payment channel.
@@ -208,7 +208,7 @@ mod tests {
 
     #[test]
     fn test_currency_values() {
-        assert_eq!(Currency::NDL as u8, 0x00);
+        assert_eq!(Currency::HBAR as u8, 0x00);
     }
 
     #[test]
@@ -254,7 +254,7 @@ mod tests {
         assert_eq!(LocationType::default(), LocationType::Paragraph);
         assert_eq!(Classification::default(), Classification::Claim);
         assert_eq!(Confidence::default(), Confidence::Explicit);
-        assert_eq!(Currency::default(), Currency::NDL);
+        assert_eq!(Currency::default(), Currency::HBAR);
         assert_eq!(ChannelState::default(), ChannelState::Opening);
         assert_eq!(ResolutionMethod::default(), ResolutionMethod::ExactMatch);
     }

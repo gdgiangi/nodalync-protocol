@@ -189,9 +189,9 @@ impl Default for SettlementConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EconomicsConfig {
-    /// Default price for published content (in NDL).
+    /// Default price for published content (in HBAR).
     pub default_price: f64,
-    /// Threshold for automatic settlement (in NDL).
+    /// Threshold for automatic settlement (in HBAR).
     pub auto_settle_threshold: f64,
 }
 
@@ -205,12 +205,12 @@ impl Default for EconomicsConfig {
 }
 
 impl EconomicsConfig {
-    /// Convert NDL to smallest unit (10^-8 NDL).
+    /// Convert HBAR to tinybars (10^-8 HBAR).
     pub fn default_price_units(&self) -> u64 {
-        ndl_to_units(self.default_price)
+        hbar_to_tinybars(self.default_price)
     }
 
-    /// Convert NDL to smallest unit (10^-8 NDL).
+    /// Convert HBAR to tinybars (10^-8 HBAR).
     pub fn auto_settle_threshold_units(&self) -> u64 {
         ndl_to_units(self.auto_settle_threshold)
     }
@@ -256,28 +256,44 @@ pub fn default_config_path() -> PathBuf {
     default_base_dir().join("config.toml")
 }
 
-/// Convert NDL to smallest unit (10^-8 NDL).
-pub fn ndl_to_units(ndl: f64) -> u64 {
-    (ndl * 100_000_000.0) as u64
+/// Convert HBAR to tinybars (10^-8 HBAR).
+pub fn hbar_to_tinybars(hbar: f64) -> u64 {
+    (hbar * 100_000_000.0) as u64
 }
 
-/// Convert smallest unit to NDL.
-pub fn units_to_ndl(units: u64) -> f64 {
-    units as f64 / 100_000_000.0
+/// Convert tinybars to HBAR.
+pub fn tinybars_to_hbar(tinybars: u64) -> f64 {
+    tinybars as f64 / 100_000_000.0
 }
 
-/// Format an amount in NDL with proper precision.
-pub fn format_ndl(units: u64) -> String {
-    let ndl = units_to_ndl(units);
-    if ndl == 0.0 {
-        "0 NDL".to_string()
-    } else if ndl < 0.01 {
-        format!("{:.8} NDL", ndl)
-    } else if ndl < 1.0 {
-        format!("{:.4} NDL", ndl)
+/// Format an amount in HBAR with proper precision.
+pub fn format_hbar(tinybars: u64) -> String {
+    let hbar = tinybars_to_hbar(tinybars);
+    if hbar == 0.0 {
+        "0 HBAR".to_string()
+    } else if hbar < 0.01 {
+        format!("{:.8} HBAR", hbar)
+    } else if hbar < 1.0 {
+        format!("{:.4} HBAR", hbar)
     } else {
-        format!("{:.2} NDL", ndl)
+        format!("{:.2} HBAR", hbar)
     }
+}
+
+// Legacy aliases for backward compatibility during transition
+#[doc(hidden)]
+pub fn ndl_to_units(ndl: f64) -> u64 {
+    hbar_to_tinybars(ndl)
+}
+
+#[doc(hidden)]
+pub fn units_to_ndl(units: u64) -> f64 {
+    tinybars_to_hbar(units)
+}
+
+#[doc(hidden)]
+pub fn format_ndl(units: u64) -> String {
+    format_hbar(units).replace("HBAR", "HBAR")
 }
 
 #[cfg(test)]
@@ -293,19 +309,19 @@ mod tests {
     }
 
     #[test]
-    fn test_ndl_conversion() {
-        assert_eq!(ndl_to_units(1.0), 100_000_000);
-        assert_eq!(ndl_to_units(0.10), 10_000_000);
-        assert_eq!(units_to_ndl(100_000_000), 1.0);
-        assert_eq!(units_to_ndl(10_000_000), 0.10);
+    fn test_hbar_conversion() {
+        assert_eq!(hbar_to_tinybars(1.0), 100_000_000);
+        assert_eq!(hbar_to_tinybars(0.10), 10_000_000);
+        assert_eq!(tinybars_to_hbar(100_000_000), 1.0);
+        assert_eq!(tinybars_to_hbar(10_000_000), 0.10);
     }
 
     #[test]
-    fn test_format_ndl() {
-        assert_eq!(format_ndl(0), "0 NDL");
-        assert_eq!(format_ndl(100_000_000), "1.00 NDL");
-        assert_eq!(format_ndl(10_000_000), "0.1000 NDL");
-        assert_eq!(format_ndl(1000), "0.00001000 NDL");
+    fn test_format_hbar() {
+        assert_eq!(format_hbar(0), "0 HBAR");
+        assert_eq!(format_hbar(100_000_000), "1.00 HBAR");
+        assert_eq!(format_hbar(10_000_000), "0.1000 HBAR");
+        assert_eq!(format_hbar(1000), "0.00001000 HBAR");
     }
 
     #[test]

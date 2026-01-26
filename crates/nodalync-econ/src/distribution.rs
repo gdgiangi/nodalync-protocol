@@ -18,7 +18,7 @@ use nodalync_types::{
 /// - Any rounding remainder goes to the owner
 ///
 /// # Arguments
-/// * `payment_amount` - Total payment received (in smallest unit, 10^-8 NDL)
+/// * `payment_amount` - Total payment received (in tinybars, 10^-8 HBAR)
 /// * `owner` - Content owner (receives synthesis fee)
 /// * `provenance` - All root L0+L1 sources with weights
 ///
@@ -201,7 +201,7 @@ mod tests {
         // - Carol's L0 (weight: 1)
         // - Bob's L0 (weight: 2)
         // Total weight: 5
-        // Payment: 100 NDL
+        // Payment: 100 HBAR
 
         let bob = test_peer_id();
         let alice = test_peer_id();
@@ -215,9 +215,9 @@ mod tests {
 
         let distributions = distribute_revenue(100, &bob, &[entry_alice, entry_carol, entry_bob]);
 
-        // owner_share = 100 * 5/100 = 5 NDL
-        // root_pool = 95 NDL
-        // per_weight = 95 / 5 = 19 NDL
+        // owner_share = 100 * 5/100 = 5 HBAR
+        // root_pool = 95 HBAR
+        // per_weight = 95 / 5 = 19 HBAR
 
         let alice_dist = distributions.iter().find(|d| d.recipient == alice);
         let carol_dist = distributions.iter().find(|d| d.recipient == carol);
@@ -227,13 +227,13 @@ mod tests {
         assert!(carol_dist.is_some());
         assert!(bob_dist.is_some());
 
-        // Alice: 2 * 19 = 38 NDL
+        // Alice: 2 * 19 = 38 HBAR
         assert_eq!(alice_dist.unwrap().amount, 38);
 
-        // Carol: 1 * 19 = 19 NDL
+        // Carol: 1 * 19 = 19 HBAR
         assert_eq!(carol_dist.unwrap().amount, 19);
 
-        // Bob: 2 * 19 (roots) + 5 (synthesis) = 43 NDL
+        // Bob: 2 * 19 (roots) + 5 (synthesis) = 43 HBAR
         assert_eq!(bob_dist.unwrap().amount, 43);
 
         // Verify total adds up

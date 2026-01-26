@@ -38,23 +38,23 @@ fn test_signature() -> Signature {
 ///         - Bob's L0 (weight: 2)
 ///     Total weight: 5
 ///
-///     Query payment: 100 NDL
+///     Query payment: 100 HBAR
 ///
 /// Distribution:
-///     owner_share = 100 * 5/100 = 5 NDL (Bob's synthesis fee)
-///     root_pool = 100 * 95/100 = 95 NDL
-///     per_weight = 95 / 5 = 19 NDL
+///     owner_share = 100 * 5/100 = 5 HBAR (Bob's synthesis fee)
+///     root_pool = 100 * 95/100 = 95 HBAR
+///     per_weight = 95 / 5 = 19 HBAR
 ///
-///     Alice: 2 * 19 = 38 NDL
-///     Carol: 1 * 19 = 19 NDL
-///     Bob (roots): 2 * 19 = 38 NDL
-///     Bob (synthesis): 5 NDL
-///     Bob total: 43 NDL
+///     Alice: 2 * 19 = 38 HBAR
+///     Carol: 1 * 19 = 19 HBAR
+///     Bob (roots): 2 * 19 = 38 HBAR
+///     Bob (synthesis): 5 HBAR
+///     Bob total: 43 HBAR
 ///
 /// Final:
-///     Alice: 38 NDL (38%)
-///     Carol: 19 NDL (19%)
-///     Bob: 43 NDL (43%)
+///     Alice: 38 HBAR (38%)
+///     Carol: 19 HBAR (19%)
+///     Bob: 43 HBAR (43%)
 /// ```
 #[test]
 fn test_spec_example_bob_alice_carol() {
@@ -77,7 +77,7 @@ fn test_spec_example_bob_alice_carol() {
         .sum();
     assert_eq!(total_weight, 5);
 
-    // Payment: 100 NDL
+    // Payment: 100 HBAR
     let payment_amount: Amount = 100;
 
     // Distribute revenue
@@ -106,15 +106,15 @@ fn test_spec_example_bob_alice_carol() {
     // root_pool = 95
     // per_weight = 95 / 5 = 19
     // Alice: 2 * 19 = 38
-    assert_eq!(alice_amount, 38, "Alice should receive 38 NDL");
+    assert_eq!(alice_amount, 38, "Alice should receive 38 HBAR");
 
     // Carol: 1 * 19 = 19
-    assert_eq!(carol_amount, 19, "Carol should receive 19 NDL");
+    assert_eq!(carol_amount, 19, "Carol should receive 19 HBAR");
 
     // Bob: 2 * 19 + 5 = 43
     assert_eq!(
         bob_amount, 43,
-        "Bob should receive 43 NDL (38 roots + 5 synthesis)"
+        "Bob should receive 43 HBAR (38 roots + 5 synthesis)"
     );
 
     // Verify total equals payment
@@ -169,7 +169,7 @@ fn test_price_validation_constraints() {
 /// §10.4 Settlement batch threshold
 #[test]
 fn test_settlement_batch_threshold() {
-    // 100 NDL = 100 * 10^8 smallest units
+    // 100 HBAR = 100 * 10^8 tinybars
     assert_eq!(SETTLEMENT_BATCH_THRESHOLD, 10_000_000_000);
 
     // Threshold triggers settlement

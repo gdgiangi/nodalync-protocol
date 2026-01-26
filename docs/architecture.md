@@ -241,7 +241,7 @@ chain = "hedera-testnet"
 account_id = "0.0.12345"
 
 [economics]
-default_price = 100000  # 0.001 NDL in smallest units
+default_price = 100000  # 0.001 HBAR in tinybars
 ```
 
 ## File Naming Conventions

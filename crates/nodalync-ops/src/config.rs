@@ -17,9 +17,9 @@ pub struct ChannelConfig {
 impl Default for ChannelConfig {
     fn default() -> Self {
         Self {
-            // 100 NDL in smallest units
+            // 100 HBAR in tinybars
             min_deposit: 100_0000_0000,
-            // 1000 NDL in smallest units
+            // 1000 HBAR in tinybars
             default_deposit: 1000_0000_0000,
         }
     }

@@ -16,7 +16,7 @@ use crate::merkle::{compute_batch_id, compute_merkle_root};
 /// Check if settlement should be triggered.
 ///
 /// Settlement is triggered when either:
-/// 1. The pending total meets or exceeds the batch threshold (100 NDL)
+/// 1. The pending total meets or exceeds the batch threshold (100 HBAR)
 /// 2. The interval since last settlement has elapsed (1 hour)
 ///
 /// # Arguments

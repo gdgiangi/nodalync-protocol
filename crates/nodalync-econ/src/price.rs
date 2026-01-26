@@ -9,7 +9,7 @@ use crate::error::{EconError, EconResult};
 /// Validate that a price is within protocol constraints.
 ///
 /// # Arguments
-/// * `price` - The price to validate (in smallest unit, 10^-8 NDL)
+/// * `price` - The price to validate (in tinybars, 10^-8 HBAR)
 ///
 /// # Returns
 /// * `Ok(())` if the price is valid
@@ -60,7 +60,7 @@ mod tests {
         assert!(validate_price(1).is_ok());
         assert!(validate_price(100).is_ok());
         assert!(validate_price(1_000_000).is_ok());
-        assert!(validate_price(100_000_000).is_ok()); // 1 NDL
+        assert!(validate_price(100_000_000).is_ok()); // 1 HBAR
     }
 
     #[test]

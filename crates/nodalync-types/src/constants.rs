@@ -69,10 +69,10 @@ pub const MAX_PRIMARY_TOPICS: usize = 5;
 // Economics
 // =============================================================================
 
-/// Minimum price per query (in smallest unit, 10^-8 NDL)
+/// Minimum price per query (in tinybars, 10^-8 HBAR)
 pub const MIN_PRICE: Amount = 1;
 
-/// Maximum price per query (10^16 smallest units)
+/// Maximum price per query (10^16 tinybars)
 pub const MAX_PRICE: Amount = 10_000_000_000_000_000;
 
 /// Synthesis fee numerator (5%)
@@ -81,7 +81,7 @@ pub const SYNTHESIS_FEE_NUMERATOR: u64 = 5;
 /// Synthesis fee denominator (100)
 pub const SYNTHESIS_FEE_DENOMINATOR: u64 = 100;
 
-/// Settlement batch threshold: 100 NDL (in smallest units)
+/// Settlement batch threshold: 100 HBAR (in tinybars)
 pub const SETTLEMENT_BATCH_THRESHOLD: Amount = 10_000_000_000;
 
 /// Settlement batch interval: 1 hour (in milliseconds)
@@ -185,7 +185,7 @@ mod tests {
         assert!(MIN_PRICE > 0);
         // Max price is greater than min
         assert!(MAX_PRICE > MIN_PRICE);
-        // Batch threshold is 100 NDL (100 * 10^8 smallest units)
+        // Batch threshold is 100 HBAR (100 * 10^8 tinybars)
         assert_eq!(SETTLEMENT_BATCH_THRESHOLD, 100 * 100_000_000);
     }
 

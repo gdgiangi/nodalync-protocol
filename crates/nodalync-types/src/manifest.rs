@@ -201,7 +201,7 @@ impl AccessControl {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct Economics {
-    /// Price per query (in smallest unit, 10^-8 NDL)
+    /// Price per query (in tinybars, 10^-8 HBAR)
     pub price: Amount,
     /// Currency identifier
     pub currency: Currency,
@@ -215,7 +215,7 @@ impl Default for Economics {
     fn default() -> Self {
         Self {
             price: 0,
-            currency: Currency::NDL,
+            currency: Currency::HBAR,
             total_queries: 0,
             total_revenue: 0,
         }
@@ -227,7 +227,7 @@ impl Economics {
     pub fn with_price(price: Amount) -> Self {
         Self {
             price,
-            currency: Currency::NDL,
+            currency: Currency::HBAR,
             total_queries: 0,
             total_revenue: 0,
         }

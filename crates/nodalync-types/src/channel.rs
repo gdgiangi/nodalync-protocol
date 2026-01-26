@@ -21,7 +21,7 @@ pub struct Payment {
     pub id: Hash,
     /// Channel this payment belongs to
     pub channel_id: Hash,
-    /// Payment amount (in smallest unit, 10^-8 NDL)
+    /// Payment amount (in tinybars, 10^-8 HBAR)
     pub amount: Amount,
     /// Content owner receiving the payment
     pub recipient: PeerId,

@@ -191,7 +191,7 @@ mod tests {
     fn test_price_validation_integration() {
         // Valid prices
         assert!(validate_price(1).is_ok());
-        assert!(validate_price(1_000_000_000).is_ok()); // 10 NDL
+        assert!(validate_price(1_000_000_000).is_ok()); // 10 HBAR
 
         // Invalid prices
         assert!(validate_price(0).is_err());

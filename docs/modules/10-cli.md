@@ -40,14 +40,14 @@ nodalync publish <file> [--price <amount>] [--visibility <private|unlisted|share
 > Hashing content...
 > Extracting L1 mentions... (23 found)
 > Published: QmXyz...
-> Price: 0.10 NDL
+> Price: 0.10 HBAR
 > Visibility: shared
 
 # List local content
 nodalync list [--visibility <filter>]
 > SHARED (3)
->   QmXyz... "Research Paper" v3, 0.10 NDL, 847 queries
->   QmAbc... "Analysis" v1, 0.05 NDL, 234 queries
+>   QmXyz... "Research Paper" v3, 0.10 HBAR, 847 queries
+>   QmAbc... "Analysis" v1, 0.05 HBAR, 234 queries
 >
 > PRIVATE (2)
 >   QmJkl... "Draft Ideas" v4
@@ -89,7 +89,7 @@ nodalync search "climate change mitigation" [--max-price <amount>] [--limit <n>]
 nodalync preview <hash>
 > Title: "IPCC Report Summary"
 > Owner: ndl1def...
-> Price: 0.05 NDL
+> Price: 0.05 HBAR
 > Queries: 847
 > 
 > L1 Mentions (5 of 23):
@@ -100,7 +100,7 @@ nodalync preview <hash>
 # Query content (paid)
 nodalync query <hash>
 > Querying QmAbc...
-> Payment: 0.05 NDL
+> Payment: 0.05 HBAR
 > Content saved to ./cache/QmAbc...
 ```
 
@@ -114,7 +114,7 @@ nodalync synthesize --sources <hash1>,<hash2>,... --output <file>
 > L3 hash: QmNew...
 > 
 > Publish now? [y/n/set price]: 0.15
-> Published: QmNew... (0.15 NDL, shared)
+> Published: QmNew... (0.15 HBAR, shared)
 
 # Reference external L3 as L0
 nodalync reference <l3-hash>
@@ -126,38 +126,38 @@ nodalync reference <l3-hash>
 ```bash
 # Check balance
 nodalync balance
-> Protocol Balance: 127.50 NDL
-> Pending Earnings: 4.23 NDL
+> Protocol Balance: 127.50 HBAR
+> Pending Earnings: 4.23 HBAR
 > Pending Settlement: 12 payments
 >
 > Breakdown:
->   Direct queries: 89.20 NDL
->   Root contributions: 38.30 NDL
+>   Direct queries: 89.20 HBAR
+>   Root contributions: 38.30 HBAR
 
 # Earnings by content
 nodalync earnings [--content <hash>]
 > Top earning content:
->   QmXyz... "Research Paper": 45.30 NDL (234 queries)
->   QmAbc... "Analysis": 23.10 NDL (462 queries, as root)
+>   QmXyz... "Research Paper": 45.30 HBAR (234 queries)
+>   QmAbc... "Analysis": 23.10 HBAR (462 queries, as root)
 
 # Deposit tokens
 nodalync deposit <amount>
-> Depositing 50.00 NDL...
+> Depositing 50.00 HBAR...
 > Transaction: 0x...
-> New balance: 177.50 NDL
+> New balance: 177.50 HBAR
 
 # Withdraw tokens
 nodalync withdraw <amount>
-> Withdrawing 100.00 NDL...
+> Withdrawing 100.00 HBAR...
 > Transaction: 0x...
-> New balance: 77.50 NDL
+> New balance: 77.50 HBAR
 
 # Force settlement
 nodalync settle
 > Settling 12 pending payments...
 > Batch ID: QmBatch...
 > Transaction: 0x...
-> Settled: 4.23 NDL to 5 recipients
+> Settled: 4.23 HBAR to 5 recipients
 ```
 
 ### Node Management
@@ -177,7 +177,7 @@ nodalync status
 > Uptime: 4h 23m
 > Peers: 12 connected
 > Content: 5 shared, 2 private
-> Pending: 12 payments (4.23 NDL)
+> Pending: 12 payments (4.23 HBAR)
 
 # Stop node
 nodalync stop
@@ -363,8 +363,8 @@ network = "hedera-testnet"
 account_id = "0.0.12345"
 
 [economics]
-default_price = 0.10  # In NDL
-auto_settle_threshold = 100.0  # In NDL
+default_price = 0.10  # In HBAR
+auto_settle_threshold = 100.0  # In HBAR
 
 [display]
 default_format = "human"

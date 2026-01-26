@@ -242,7 +242,7 @@ async fn test_e2e_multihop_provenance_distribution() {
         metadata: l3_metadata,
         economics: nodalync_types::Economics {
             price: 100,
-            currency: nodalync_types::Currency::NDL,
+            currency: nodalync_types::Currency::HBAR,
             total_queries: 0,
             total_revenue: 0,
         },
@@ -294,8 +294,8 @@ async fn test_e2e_multihop_provenance_distribution() {
     assert!(batch_id.is_some());
 
     println!("✅ E2E Multi-hop: L0→L3→Query with 95/5 split completed successfully");
-    println!("   Alice (root L0): {} NDL", alice_total);
-    println!("   Bob (L3 synth):  {} NDL", bob_total);
+    println!("   Alice (root L0): {} HBAR", alice_total);
+    println!("   Bob (L3 synth):  {} HBAR", bob_total);
 }
 
 /// Test 3: Multiple queries accumulate and batch settle

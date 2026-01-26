@@ -1,8 +1,8 @@
 # Nodalync Protocol Specification
 
-**Version:** 0.2.0-draft  
-**Author:** Gabriel Giangi  
-**Date:** January 2026  
+**Version:** 0.2.1-draft
+**Author:** Gabriel Giangi
+**Date:** January 2026
 **Status:** Draft
 
 ---
@@ -46,15 +46,88 @@ The Nodalync Protocol enables decentralized knowledge exchange with cryptographi
 │          Application Layer              │  (Out of scope)
 ├─────────────────────────────────────────┤
 │          Protocol Layer                 │  ← This specification
-│  ┌─────────────────────────────────┐   │
-│  │  Content    Provenance  Payment │   │
-│  └─────────────────────────────────┘   │
+│  ┌─────────────────────────────────┐    │
+│  │  Content    Provenance  Payment │    │
+│  └─────────────────────────────────┘    │
 ├─────────────────────────────────────────┤
 │          Network Layer (libp2p)         │  (Referenced)
 ├─────────────────────────────────────────┤
 │          Settlement Layer (Hedera)      │  (Referenced)
 └─────────────────────────────────────────┘
 ```
+
+### 1.4 Scope
+
+Nodalync is **infrastructure**, not an application. Like Bitcoin provides trustless value transfer without building wallets, Nodalync provides trustless knowledge exchange without building search engines.
+
+**In Scope (this protocol specifies):**
+
+| Concern | What the protocol provides |
+|---------|---------------------------|
+| Content addressing | Deterministic hashing, content types (L0-L3) |
+| Provenance | Cryptographic chains linking derivatives to sources |
+| Payment | Automatic 95/5 distribution through provenance chains |
+| Transport | Message types, encoding, peer-to-peer delivery |
+| Settlement | Payment channel state, batch settlement interface |
+| Visibility | Private/unlisted/shared access control primitives |
+
+**Out of Scope (application layer):**
+
+| Concern | Why it's out of scope |
+|---------|----------------------|
+| Content discovery/search | Applications index L1 previews and build search UX |
+| Pricing recommendations | Market dynamics emerge from application-layer analytics |
+| Content moderation | Policy decisions for specific communities/jurisdictions |
+| User interfaces | Wallets, explorers, dashboards are applications |
+| AI extraction quality | Pluggable extractors; quality is a market signal |
+| Takedown mechanisms | Legal/policy layer above protocol |
+
+### 1.5 Building on Nodalync
+
+The protocol exposes primitives that enable rich applications:
+
+```
+Application developers can:
+
+┌─────────────────────────────────────────────────────────────┐
+│  SEARCH ENGINES                                             │
+│  - Subscribe to ANNOUNCE broadcasts on DHT                  │
+│  - Fetch free PREVIEW for all shared content                │
+│  - Index L1 summaries, tags, content types                  │
+│  - Build relevance ranking from total_queries, reputation   │
+│  - Return content hashes → users query through protocol     │
+├─────────────────────────────────────────────────────────────┤
+│  KNOWLEDGE BROWSERS                                         │
+│  - Visualize provenance chains (who contributed what)       │
+│  - Show payment flows and creator earnings                  │
+│  - Navigate L0→L1→L2→L3 relationships                       │
+├─────────────────────────────────────────────────────────────┤
+│  AI AGENTS (via MCP)                                        │
+│  - Query knowledge programmatically                         │
+│  - Pay-per-query with automatic source attribution          │
+│  - Build L3 synthesis with cryptographic provenance         │
+├─────────────────────────────────────────────────────────────┤
+│  SPECIALIZED EXTRACTORS                                     │
+│  - Implement L1Extractor trait for domain-specific parsing  │
+│  - Compete on extraction quality (market selects winners)   │
+│  - Offer extraction-as-a-service to non-technical creators  │
+├─────────────────────────────────────────────────────────────┤
+│  CURATED DIRECTORIES                                        │
+│  - Maintain topic-specific indexes                          │
+│  - Provide reputation/quality signals                       │
+│  - Charge for curation (built on protocol payments)         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key insight:** The protocol doesn't need full-text search because:
+1. L1 previews are free and public (for shared content)
+2. Anyone can build an index by listening to ANNOUNCE messages
+3. Search is a service that can itself be monetized on the protocol
+
+This mirrors successful infrastructure protocols:
+- Bitcoin → wallets, exchanges, explorers
+- IPFS → Pinata, Filecoin, web3.storage
+- Nodalync → search engines, data browsers, AI agents
 
 ---
 
@@ -76,7 +149,7 @@ Signature   64 bytes (Ed25519 signature)
 PublicKey   32 bytes (Ed25519 public key)
 PeerId      Derived from PublicKey (see 3.2)
 Timestamp   uint64 (milliseconds since Unix epoch)
-Amount      uint64 (smallest token unit, 10^-8 NDL)
+Amount      uint64 (tinybars, 10^-8 HBAR)
 ```
 
 ### 2.2 Encoding
@@ -521,7 +594,7 @@ struct Economics {
 }
 
 enum Currency : uint8 {
-    NDL = 0x00                  # Native Nodalync token
+    HBAR = 0x00                 # Hedera native token
 }
 ```
 
@@ -1037,7 +1110,7 @@ Procedure:
            visibility: Private,
            access: default_access(),
            metadata: metadata,
-           economics: Economics { price: 0, currency: NDL, ... },
+           economics: Economics { price: 0, currency: HBAR, ... },
            provenance: provenance,
            created_at: now(),
            updated_at: now()
@@ -1870,7 +1943,7 @@ Scenario:
         - Carol's L0 (1 document)
         - Bob's L0 (2 documents)
     
-    Query payment: 100 NDL
+    Query payment: 100 HBAR
 
 Provenance:
     root_L0L1 = [
@@ -1883,27 +1956,27 @@ Provenance:
     total_weight = 5
 
 Distribution:
-    owner_share = 100 * 0.05 = 5 NDL (Bob's synthesis fee)
-    root_pool = 100 * 0.95 = 95 NDL
-    per_weight = 95 / 5 = 19 NDL
+    owner_share = 100 * 0.05 = 5 HBAR (Bob's synthesis fee)
+    root_pool = 100 * 0.95 = 95 HBAR
+    per_weight = 95 / 5 = 19 HBAR
 
-    Alice: 2 * 19 = 38 NDL
-    Carol: 1 * 19 = 19 NDL
-    Bob (roots): 2 * 19 = 38 NDL
-    Bob (synthesis): 5 NDL
-    Bob total: 43 NDL (5 + 38)
-    
+    Alice: 2 * 19 = 38 HBAR
+    Carol: 1 * 19 = 19 HBAR
+    Bob (roots): 2 * 19 = 38 HBAR
+    Bob (synthesis): 5 HBAR
+    Bob total: 43 HBAR (5 + 38)
+
 Final:
-    Alice: 38 NDL (38%)
-    Carol: 19 NDL (19%)
-    Bob: 43 NDL (43%)
+    Alice: 38 HBAR (38%)
+    Carol: 19 HBAR (19%)
+    Bob: 43 HBAR (43%)
 ```
 
 ### 10.3 Price Setting
 
 ```
 Constraints:
-    MIN_PRICE = 1  # 1 smallest unit (10^-8 NDL)
+    MIN_PRICE = 1  # 1 tinybar (10^-8 HBAR)
     MAX_PRICE = 10^16  # Practical maximum
     
 Rules:
@@ -1916,7 +1989,7 @@ Rules:
 ### 10.4 Settlement Batching
 
 ```
-BATCH_THRESHOLD = 100 NDL  # Minimum to trigger auto-settlement
+BATCH_THRESHOLD = 100 HBAR  # Minimum to trigger auto-settlement
 BATCH_INTERVAL = 3600      # Maximum seconds between settlements
 
 Rules:
@@ -2096,20 +2169,19 @@ settleBatch(entries: SettlementEntry[], merkleProofs: MerkleProof[])
     Effects: Transfer amounts to recipients
 ```
 
-### 12.4 Token Economics
+### 12.4 Currency
 
 ```
-Token: NDL (Nodalync Token)
-    Decimals: 8
-    Total supply: Fixed at genesis (TBD)
-    
-Initial distribution:
-    - Protocol development: X%
-    - Early contributors: Y%
-    - Network incentives: Z%
-    - Reserve: W%
-    
-No inflation. Fees are redistributed, not burned.
+Currency: HBAR (Hedera native token)
+    Decimals: 8 (1 HBAR = 10^8 tinybars)
+
+The protocol uses HBAR directly for all payments. This decision:
+    - Eliminates token bootstrapping complexity
+    - Leverages existing HBAR liquidity and exchanges
+    - Avoids securities/regulatory concerns
+    - Allows focus on proving the knowledge economics model
+
+All amounts in the protocol are denominated in tinybars (10^-8 HBAR).
 ```
 
 ---
@@ -2289,7 +2361,7 @@ MAX_SOURCE_L2S_PER_MERGE = 20
 MIN_PRICE = 1  # Smallest unit
 SYNTHESIS_FEE_NUMERATOR = 5
 SYNTHESIS_FEE_DENOMINATOR = 100  # 5%
-SETTLEMENT_BATCH_THRESHOLD = 10000000000  # 100 NDL (10^8 units)
+SETTLEMENT_BATCH_THRESHOLD = 10000000000  # 100 HBAR (10^8 tinybars)
 SETTLEMENT_BATCH_INTERVAL_MS = 3600000  # 1 hour
 
 # DHT
@@ -2380,5 +2452,6 @@ nodalync/
 *End of Protocol Specification*
 
 **Version History:**
+- 0.2.1-draft (January 2026): Changed currency from NDL token to HBAR (Hedera native)
 - 0.2.0-draft (January 2026): Added L2 Entity Graph as protocol-level content type
 - 0.1.0-draft (January 2025): Initial draft

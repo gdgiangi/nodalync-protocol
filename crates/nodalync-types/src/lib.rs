@@ -93,10 +93,10 @@ pub use l2::{
     LiteralValue, MentionRef, PrefixEntry, PrefixMap, Relationship, RelationshipObject, Uri,
 };
 
-/// Amount in smallest unit (10^-8 NDL).
+/// Amount in tinybars (10^-8 HBAR).
 ///
 /// This is the standard type for all monetary values in the protocol.
-/// One NDL equals 100,000,000 (10^8) of the smallest unit.
+/// One HBAR equals 100,000,000 (10^8) tinybars.
 pub type Amount = u64;
 
 // Re-export crypto types that are commonly used with types
@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn test_amount_type() {
-        let amount: Amount = 100_000_000; // 1 NDL
+        let amount: Amount = 100_000_000; // 1 HBAR
         assert_eq!(amount, 100_000_000u64);
 
         // Test with economics

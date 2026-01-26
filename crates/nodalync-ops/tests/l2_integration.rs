@@ -378,7 +378,7 @@ fn test_l2_creator_economics_own_content() {
 
     let l3_manifest = ops.state.manifests.load(&l3_hash).unwrap().unwrap();
 
-    // Simulate: Someone queries Bob's L3 for 100 NDL
+    // Simulate: Someone queries Bob's L3 for 100 HBAR
     let payment_amount = 100u64;
 
     // Distribute revenue using L3's provenance
@@ -389,9 +389,9 @@ fn test_l2_creator_economics_own_content() {
     );
 
     // Bob should get everything:
-    // - 5 NDL synthesis fee (5%)
-    // - 95 NDL root pool (he's the only root creator)
-    // Total: 100 NDL
+    // - 5 HBAR synthesis fee (5%)
+    // - 95 HBAR root pool (he's the only root creator)
+    // Total: 100 HBAR
     let bob_amount: u64 = distributions
         .iter()
         .filter(|d| d.recipient == bob)
@@ -528,7 +528,7 @@ fn test_l2_creator_economics_mixed_sources() {
         "L3 provenance should include Bob's L0/L1"
     );
 
-    // Simulate: Someone queries Bob's L3 for 100 NDL
+    // Simulate: Someone queries Bob's L3 for 100 HBAR
     let payment_amount = 100u64;
 
     // Distribute revenue using L3's provenance
@@ -539,9 +539,9 @@ fn test_l2_creator_economics_mixed_sources() {
     );
 
     // Calculate expected distribution:
-    // - Bob gets 5 NDL synthesis fee (5%)
-    // - Root pool (95 NDL) split between Alice and Bob based on weights
-    // - With 2 sources of equal weight (1 each), each gets 95/2 = 47 NDL
+    // - Bob gets 5 HBAR synthesis fee (5%)
+    // - Root pool (95 HBAR) split between Alice and Bob based on weights
+    // - With 2 sources of equal weight (1 each), each gets 95/2 = 47 HBAR
     // - Remainder (1) goes to owner (Bob)
     // Expected: Bob = 5 + 47 + 1 = 53, Alice = 47
 

@@ -185,7 +185,7 @@ async fn create(
         metadata,
         economics: Economics {
             price: 0,
-            currency: Currency::NDL,
+            currency: Currency::HBAR,
             total_queries: 0,
             total_revenue: 0,
         },
@@ -491,7 +491,7 @@ async fn build_l2(
         },
         economics: Economics {
             price: 0,  // L2 is ALWAYS free (never queried)
-            currency: Currency::NDL,
+            currency: Currency::HBAR,
             total_queries: 0,
             total_revenue: 0,
         },
@@ -675,7 +675,7 @@ async fn merge_l2(
         },
         economics: Economics {
             price: 0,
-            currency: Currency::NDL,
+            currency: Currency::HBAR,
             total_queries: 0,
             total_revenue: 0,
         },
@@ -866,8 +866,8 @@ pub struct ChannelConfig {
 impl Default for ChannelConfig {
     fn default() -> Self {
         Self {
-            min_deposit: 10_000_000_000,  // 100 NDL minimum
-            default_deposit: 100_000_000_000,  // 1000 NDL default
+            min_deposit: 10_000_000_000,  // 100 HBAR minimum
+            default_deposit: 100_000_000_000,  // 1000 HBAR default
         }
     }
 }
@@ -886,7 +886,7 @@ async fn query(&mut self, hash: &Hash, payment: Payment) -> Result<QueryResponse
         if balance < self.config.channel.min_deposit {
             return Err(Error::PaymentRequired {
                 message: format!(
-                    "No channel with {} and insufficient balance to auto-open. Need {} NDL minimum.",
+                    "No channel with {} and insufficient balance to auto-open. Need {} HBAR minimum.",
                     owner, self.config.channel.min_deposit
                 ),
             });

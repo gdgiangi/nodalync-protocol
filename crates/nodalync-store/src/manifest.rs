@@ -174,7 +174,7 @@ impl SqliteManifestStore {
             },
             economics: Economics {
                 price,
-                currency: Currency::NDL,
+                currency: Currency::HBAR,
                 total_queries,
                 total_revenue,
             },

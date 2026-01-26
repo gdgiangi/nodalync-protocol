@@ -32,7 +32,7 @@ pub const SYNTHESIS_FEE_DENOMINATOR: u64 = 100;
 pub const ROOT_POOL_NUMERATOR: u64 = 95;
 pub const ROOT_POOL_DENOMINATOR: u64 = 100;
 
-/// Settlement threshold: 100 NDL (in smallest units)
+/// Settlement threshold: 100 HBAR (in tinybars)
 pub const SETTLEMENT_BATCH_THRESHOLD: Amount = 10_000_000_000;
 
 /// Settlement interval: 1 hour
@@ -118,23 +118,23 @@ Scenario:
         - Bob's L0 (weight: 2)
     Total weight: 5
     
-    Query payment: 100 NDL
+    Query payment: 100 HBAR
 
 Distribution:
-    owner_share = 100 * 5/100 = 5 NDL (Bob's synthesis fee)
-    root_pool = 100 * 95/100 = 95 NDL
-    per_weight = 95 / 5 = 19 NDL
+    owner_share = 100 * 5/100 = 5 HBAR (Bob's synthesis fee)
+    root_pool = 100 * 95/100 = 95 HBAR
+    per_weight = 95 / 5 = 19 HBAR
 
-    Alice: 2 * 19 = 38 NDL
-    Carol: 1 * 19 = 19 NDL
-    Bob (roots): 2 * 19 = 38 NDL
-    Bob (synthesis): 5 NDL
-    Bob total: 43 NDL
-    
+    Alice: 2 * 19 = 38 HBAR
+    Carol: 1 * 19 = 19 HBAR
+    Bob (roots): 2 * 19 = 38 HBAR
+    Bob (synthesis): 5 HBAR
+    Bob total: 43 HBAR
+
 Final:
-    Alice: 38 NDL (38%)
-    Carol: 19 NDL (19%)
-    Bob: 43 NDL (43%)
+    Alice: 38 HBAR (38%)
+    Carol: 19 HBAR (19%)
+    Bob: 43 HBAR (43%)
 ```
 
 ---

@@ -78,7 +78,7 @@ pub enum Commands {
         /// Path to the file to publish.
         file: PathBuf,
 
-        /// Price per query in NDL (default from config).
+        /// Price per query in HBAR (default from config).
         #[arg(short, long)]
         price: Option<f64>,
 
@@ -265,13 +265,13 @@ pub enum Commands {
 
     /// Deposit tokens to protocol balance.
     Deposit {
-        /// Amount in NDL to deposit.
+        /// Amount in HBAR to deposit.
         amount: f64,
     },
 
     /// Withdraw tokens from protocol balance.
     Withdraw {
-        /// Amount in NDL to withdraw.
+        /// Amount in HBAR to withdraw.
         amount: f64,
     },
 

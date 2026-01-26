@@ -293,7 +293,7 @@ fn spec_4_6_access_control_logic() {
 
 #[test]
 fn spec_4_7_currency_values() {
-    assert_eq!(Currency::NDL as u8, 0x00);
+    assert_eq!(Currency::HBAR as u8, 0x00);
 }
 
 #[test]
@@ -429,7 +429,7 @@ fn appendix_b_economics_constants() {
     assert_eq!(MAX_PRICE, 10_000_000_000_000_000);
     assert_eq!(SYNTHESIS_FEE_NUMERATOR, 5);
     assert_eq!(SYNTHESIS_FEE_DENOMINATOR, 100);
-    assert_eq!(SETTLEMENT_BATCH_THRESHOLD, 10_000_000_000); // 100 NDL
+    assert_eq!(SETTLEMENT_BATCH_THRESHOLD, 10_000_000_000); // 100 HBAR
     assert_eq!(SETTLEMENT_BATCH_INTERVAL_MS, 3_600_000); // 1 hour
 }
 

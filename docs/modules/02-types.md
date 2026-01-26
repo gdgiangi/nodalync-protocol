@@ -434,7 +434,7 @@ Access granted if:
 
 ```rust
 pub struct Economics {
-    /// Price per query (in smallest unit, 10^-8 NDL)
+    /// Price per query (in tinybars, 10^-8 HBAR)
     pub price: Amount,
     /// Currency identifier
     pub currency: Currency,
@@ -446,11 +446,11 @@ pub struct Economics {
 
 #[repr(u8)]
 pub enum Currency {
-    /// Native Nodalync token
-    NDL = 0x00,
+    /// Hedera native token (1 HBAR = 10^8 tinybars)
+    HBAR = 0x00,
 }
 
-/// Amount in smallest unit (10^-8 NDL)
+/// Amount in tinybars (10^-8 HBAR)
 pub type Amount = u64;
 ```
 
@@ -639,7 +639,7 @@ pub mod constants {
     pub const MAX_PRICE: Amount = 10_000_000_000_000_000;  // 10^16
     pub const SYNTHESIS_FEE_NUMERATOR: u64 = 5;
     pub const SYNTHESIS_FEE_DENOMINATOR: u64 = 100;  // 5%
-    pub const SETTLEMENT_BATCH_THRESHOLD: Amount = 10_000_000_000;  // 100 NDL
+    pub const SETTLEMENT_BATCH_THRESHOLD: Amount = 10_000_000_000;  // 100 HBAR
     pub const SETTLEMENT_BATCH_INTERVAL_MS: u64 = 3_600_000;  // 1 hour
     
     // Timing
