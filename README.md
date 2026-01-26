@@ -149,6 +149,10 @@ DMs open on X: @GabrielGia29751
 
 ---
 
+### Contributors
+
+Gabriel Giangi, Thomas Blanc Bolelli
+
 ### License
 
 The protocol specification is released under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
