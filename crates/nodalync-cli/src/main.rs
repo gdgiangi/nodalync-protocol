@@ -175,6 +175,12 @@ async fn run(cli: Cli) -> CliResult<()> {
         Commands::Status => commands::status(config, format).await?,
 
         Commands::Stop => commands::stop(config, format).await?,
+
+        // MCP server command
+        Commands::McpServer {
+            budget,
+            auto_approve,
+        } => commands::mcp_server(config, budget, auto_approve).await?,
     };
 
     // Print output

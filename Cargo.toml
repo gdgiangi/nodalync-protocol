@@ -12,6 +12,7 @@ members = [
     "crates/nodalync-net",
     "crates/nodalync-settle",
     "crates/nodalync-cli",
+    "crates/nodalync-mcp",
 ]
 
 [workspace.package]
@@ -61,6 +62,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Testing
 tempfile = "3.10"
 
+# MCP
+rmcp = { version = "0.8", features = ["server", "transport-io"] }
+serde_json = "1.0"
+
 # Internal crates (use path for local development)
 nodalync-crypto = { path = "crates/nodalync-crypto" }
 nodalync-types = { path = "crates/nodalync-types" }
@@ -71,6 +76,7 @@ nodalync-econ = { path = "crates/nodalync-econ" }
 nodalync-ops = { path = "crates/nodalync-ops" }
 nodalync-net = { path = "crates/nodalync-net" }
 nodalync-settle = { path = "crates/nodalync-settle" }
+nodalync-mcp = { path = "crates/nodalync-mcp" }
 
 [profile.release]
 lto = true

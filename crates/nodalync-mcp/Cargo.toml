@@ -1,0 +1,43 @@
+[package]
+name = "nodalync-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "MCP server for Nodalync knowledge protocol"
+
+[dependencies]
+# MCP protocol
+rmcp.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Encoding
+bs58.workspace = true
+
+# Platform dirs
+directories.workspace = true
+
+# Async
+tokio.workspace = true
+futures.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Crypto
+nodalync-crypto.workspace = true
+
+# Internal crates
+nodalync-types.workspace = true
+nodalync-store.workspace = true
+nodalync-ops.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

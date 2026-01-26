@@ -301,6 +301,24 @@ pub enum Commands {
     ///
     /// Gracefully shuts down the node.
     Stop,
+
+    // =========================================================================
+    // MCP Server Commands
+    // =========================================================================
+    /// Start the MCP server for AI assistant integration.
+    ///
+    /// Runs an MCP server on stdio that allows AI assistants like Claude
+    /// to query knowledge from your local node.
+    McpServer {
+        /// Session budget in HBAR (default: 1.0).
+        #[arg(short, long, default_value = "1.0")]
+        budget: f64,
+
+        /// Auto-approve threshold in HBAR (default: 0.01).
+        /// Queries below this amount are approved automatically.
+        #[arg(short, long, default_value = "0.01")]
+        auto_approve: f64,
+    },
 }
 
 /// Visibility level argument for clap.

@@ -17,6 +17,7 @@ nodalync-econ.workspace = true
 nodalync-ops.workspace = true
 nodalync-net.workspace = true
 nodalync-settle.workspace = true
+nodalync-mcp.workspace = true
 
 # CLI
 clap.workspace = true

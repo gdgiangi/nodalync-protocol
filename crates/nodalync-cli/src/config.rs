@@ -293,7 +293,7 @@ pub fn units_to_ndl(units: u64) -> f64 {
 
 #[doc(hidden)]
 pub fn format_ndl(units: u64) -> String {
-    format_hbar(units).replace("HBAR", "HBAR")
+    format_hbar(units)
 }
 
 #[cfg(test)]
