@@ -35,6 +35,17 @@ use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tracing::{debug, info, warn};
 
+/// Shared state passed to the swarm event loop.
+///
+/// Groups related parameters to avoid too many function arguments.
+struct SwarmContext {
+    pending_requests: PendingRequests,
+    peer_mapper: PeerIdMapper,
+    connected_peers: Arc<StdRwLock<std::collections::HashSet<PeerId>>>,
+    listen_addrs: Arc<StdRwLock<Vec<Multiaddr>>>,
+    gossip_topic: String,
+}
+
 /// Commands sent to the swarm task.
 #[allow(dead_code)]
 enum SwarmCommand {
@@ -215,18 +226,15 @@ impl NetworkNode {
         let announce_topic = IdentTopic::new(&config.gossipsub_topic);
 
         // Spawn the swarm task
+        let swarm_ctx = SwarmContext {
+            pending_requests: pending_requests_clone,
+            peer_mapper: peer_mapper_clone,
+            connected_peers: connected_peers_clone,
+            listen_addrs: listen_addrs_clone,
+            gossip_topic,
+        };
         tokio::spawn(async move {
-            run_swarm(
-                swarm,
-                command_rx,
-                event_tx,
-                pending_requests_clone,
-                peer_mapper_clone,
-                connected_peers_clone,
-                listen_addrs_clone,
-                gossip_topic,
-            )
-            .await;
+            run_swarm(swarm, command_rx, event_tx, swarm_ctx).await;
         });
 
         Ok(Self {
@@ -296,18 +304,15 @@ impl NetworkNode {
         let announce_topic = IdentTopic::new(&config.gossipsub_topic);
 
         // Spawn the swarm task
+        let swarm_ctx = SwarmContext {
+            pending_requests: pending_requests_clone,
+            peer_mapper: peer_mapper_clone,
+            connected_peers: connected_peers_clone,
+            listen_addrs: listen_addrs_clone,
+            gossip_topic,
+        };
         tokio::spawn(async move {
-            run_swarm(
-                swarm,
-                command_rx,
-                event_tx,
-                pending_requests_clone,
-                peer_mapper_clone,
-                connected_peers_clone,
-                listen_addrs_clone,
-                gossip_topic,
-            )
-            .await;
+            run_swarm(swarm, command_rx, event_tx, swarm_ctx).await;
         });
 
         Ok(Self {
@@ -708,14 +713,10 @@ async fn run_swarm(
     mut swarm: Swarm<NodalyncBehaviour>,
     mut command_rx: mpsc::Receiver<SwarmCommand>,
     event_tx: mpsc::Sender<NetworkEvent>,
-    pending_requests: PendingRequests,
-    peer_mapper: PeerIdMapper,
-    connected_peers: Arc<StdRwLock<std::collections::HashSet<PeerId>>>,
-    listen_addrs: Arc<StdRwLock<Vec<Multiaddr>>>,
-    gossip_topic: String,
+    ctx: SwarmContext,
 ) {
     // Subscribe to the announcement topic
-    let topic = IdentTopic::new(&gossip_topic);
+    let topic = IdentTopic::new(&ctx.gossip_topic);
     if let Err(e) = swarm.behaviour_mut().gossipsub.subscribe(&topic) {
         warn!("Failed to subscribe to gossipsub topic: {}", e);
     }
@@ -750,7 +751,7 @@ async fn run_swarm(
                     SwarmEvent::Behaviour(NodalyncBehaviourEvent::RequestResponse(rr_event)) => {
                         handle_request_response_event(
                             rr_event,
-                            &pending_requests,
+                            &ctx.pending_requests,
                             &mut pending_responses,
                             &event_tx,
                         ).await;
@@ -761,13 +762,13 @@ async fn run_swarm(
                     }
 
                     SwarmEvent::Behaviour(NodalyncBehaviourEvent::Identify(id_event)) => {
-                        handle_identify_event(id_event, &mut swarm, &peer_mapper);
+                        handle_identify_event(id_event, &mut swarm, &ctx.peer_mapper);
                     }
 
                     SwarmEvent::ConnectionEstablished { peer_id, num_established, .. } => {
                         debug!("Connection established with {} (total: {})", peer_id, num_established);
                         // Track connected peer
-                        if let Ok(mut peers) = connected_peers.write() {
+                        if let Ok(mut peers) = ctx.connected_peers.write() {
                             peers.insert(peer_id);
                         }
                         // Only send event on first connection
@@ -783,10 +784,10 @@ async fn run_swarm(
                         );
                         // Only unregister if no connections remain
                         if num_established == 0 {
-                            if let Ok(mut peers) = connected_peers.write() {
+                            if let Ok(mut peers) = ctx.connected_peers.write() {
                                 peers.remove(&peer_id);
                             }
-                            peer_mapper.unregister(&peer_id);
+                            ctx.peer_mapper.unregister(&peer_id);
                             let _ = event_tx.send(NetworkEvent::PeerDisconnected { peer: peer_id }).await;
                         }
                     }
@@ -794,7 +795,7 @@ async fn run_swarm(
                     SwarmEvent::NewListenAddr { address, .. } => {
                         info!("Listening on {}", address);
                         // Track the listen address
-                        if let Ok(mut addrs) = listen_addrs.write() {
+                        if let Ok(mut addrs) = ctx.listen_addrs.write() {
                             addrs.push(address.clone());
                         }
                         let _ = event_tx.send(NetworkEvent::NewListenAddr { address }).await;
@@ -825,7 +826,7 @@ async fn run_swarm(
                             .behaviour_mut()
                             .request_response
                             .send_request(&peer, NodalyncRequest(data));
-                        pending_requests.write().await.insert(request_id, response);
+                        ctx.pending_requests.write().await.insert(request_id, response);
                     }
 
                     SwarmCommand::DhtPut { key, value, response } => {
