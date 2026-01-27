@@ -78,7 +78,10 @@ where
                 Self::create_announce_payload(&manifest, l1_summary, network.listen_addresses());
             // DHT announce is best-effort - don't fail publish if DHT unavailable
             if let Err(e) = network.dht_announce(*hash, payload).await {
-                tracing::warn!("DHT announce failed (content still published locally): {}", e);
+                tracing::warn!(
+                    "DHT announce failed (content still published locally): {}",
+                    e
+                );
             }
         }
 
@@ -132,7 +135,10 @@ where
         // DHT remove (if network available) - best-effort
         if let Some(network) = self.network() {
             if let Err(e) = network.dht_remove(hash).await {
-                tracing::warn!("DHT remove failed (content still unpublished locally): {}", e);
+                tracing::warn!(
+                    "DHT remove failed (content still unpublished locally): {}",
+                    e
+                );
             }
         }
 
