@@ -9,8 +9,9 @@ use async_trait::async_trait;
 use libp2p::Multiaddr;
 use nodalync_crypto::{Hash, PeerId as NodalyncPeerId};
 use nodalync_wire::{
-    AnnouncePayload, ChannelClosePayload, ChannelOpenPayload, Message, PreviewRequestPayload,
-    PreviewResponsePayload, QueryRequestPayload, QueryResponsePayload, SettleConfirmPayload,
+    AnnouncePayload, ChannelClosePayload, ChannelOpenPayload, Message, MessageType,
+    PreviewRequestPayload, PreviewResponsePayload, QueryRequestPayload, QueryResponsePayload,
+    SettleConfirmPayload,
 };
 
 /// The Network trait provides the public API for P2P networking.
@@ -98,6 +99,12 @@ pub trait Network: Send + Sync {
         payload: SettleConfirmPayload,
     ) -> NetworkResult<()>;
 
+    /// Broadcast a content announcement.
+    ///
+    /// Uses GossipSub to broadcast an ANNOUNCE message to all subscribers,
+    /// allowing other nodes to discover newly published content.
+    async fn broadcast_announce(&self, payload: AnnouncePayload) -> NetworkResult<()>;
+
     // =========================================================================
     // Peer Management
     // =========================================================================
@@ -124,10 +131,11 @@ pub trait Network: Send + Sync {
     /// incoming events.
     async fn next_event(&self) -> NetworkResult<NetworkEvent>;
 
-    /// Send a response to an inbound request.
+    /// Send a response to an inbound request (raw bytes).
     ///
-    /// This should be called after receiving an `InboundRequest` event
-    /// to send the response back to the requesting peer.
+    /// This sends raw bytes directly. For proper protocol compliance,
+    /// use `send_signed_response` instead which wraps the payload in
+    /// a signed Message.
     ///
     /// # Arguments
     /// * `request_id` - The request ID from the `InboundRequest` event
@@ -136,6 +144,22 @@ pub trait Network: Send + Sync {
         &self,
         request_id: libp2p::request_response::InboundRequestId,
         data: Vec<u8>,
+    ) -> NetworkResult<()>;
+
+    /// Send a signed response to an inbound request.
+    ///
+    /// This creates a signed Message with the given type and payload,
+    /// encodes it in wire format, and sends it as the response.
+    ///
+    /// # Arguments
+    /// * `request_id` - The request ID from the `InboundRequest` event
+    /// * `message_type` - The response message type
+    /// * `payload` - The CBOR-encoded payload
+    async fn send_signed_response(
+        &self,
+        request_id: libp2p::request_response::InboundRequestId,
+        message_type: MessageType,
+        payload: Vec<u8>,
     ) -> NetworkResult<()>;
 
     // =========================================================================

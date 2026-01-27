@@ -168,6 +168,14 @@ impl AsRef<[u8]> for Signature {
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PeerId(pub [u8; 20]);
 
+/// Sentinel value representing an unknown peer.
+///
+/// Used when content is discovered via DHT announcement but the owner's
+/// Nodalync identity is not known. For example, when we receive a content
+/// announcement via GossipSub, we know the libp2p peer ID but not the
+/// Nodalync PeerId.
+pub const UNKNOWN_PEER_ID: PeerId = PeerId([0u8; 20]);
+
 impl PeerId {
     /// Create a PeerId from raw bytes.
     pub fn from_bytes(bytes: [u8; 20]) -> Self {

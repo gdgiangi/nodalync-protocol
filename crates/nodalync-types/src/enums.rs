@@ -27,6 +27,28 @@ pub enum ContentType {
     L3 = 0x03,
 }
 
+impl ContentType {
+    /// Convert a u8 value to a ContentType.
+    ///
+    /// Returns `None` if the value doesn't correspond to a valid ContentType.
+    #[must_use]
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0x00 => Some(ContentType::L0),
+            0x01 => Some(ContentType::L1),
+            0x02 => Some(ContentType::L2),
+            0x03 => Some(ContentType::L3),
+            _ => None,
+        }
+    }
+
+    /// Convert to u8 value.
+    #[must_use]
+    pub fn to_u8(self) -> u8 {
+        self as u8
+    }
+}
+
 /// Visibility level for content.
 ///
 /// Spec §4.2: Controls how content is discovered and served.
@@ -172,6 +194,36 @@ mod tests {
         assert_eq!(ContentType::L1 as u8, 0x01);
         assert_eq!(ContentType::L2 as u8, 0x02);
         assert_eq!(ContentType::L3 as u8, 0x03);
+    }
+
+    #[test]
+    fn test_content_type_from_u8() {
+        assert_eq!(ContentType::from_u8(0x00), Some(ContentType::L0));
+        assert_eq!(ContentType::from_u8(0x01), Some(ContentType::L1));
+        assert_eq!(ContentType::from_u8(0x02), Some(ContentType::L2));
+        assert_eq!(ContentType::from_u8(0x03), Some(ContentType::L3));
+        assert_eq!(ContentType::from_u8(0x04), None);
+        assert_eq!(ContentType::from_u8(0xFF), None);
+    }
+
+    #[test]
+    fn test_content_type_to_u8() {
+        assert_eq!(ContentType::L0.to_u8(), 0x00);
+        assert_eq!(ContentType::L1.to_u8(), 0x01);
+        assert_eq!(ContentType::L2.to_u8(), 0x02);
+        assert_eq!(ContentType::L3.to_u8(), 0x03);
+    }
+
+    #[test]
+    fn test_content_type_roundtrip() {
+        for &ct in &[
+            ContentType::L0,
+            ContentType::L1,
+            ContentType::L2,
+            ContentType::L3,
+        ] {
+            assert_eq!(ContentType::from_u8(ct.to_u8()), Some(ct));
+        }
     }
 
     #[test]

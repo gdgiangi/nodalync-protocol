@@ -85,6 +85,7 @@ impl Render for InitOutput {
 #[derive(Debug, Serialize)]
 pub struct WhoamiOutput {
     pub peer_id: String,
+    pub libp2p_peer_id: String,
     pub public_key: String,
     pub addresses: Vec<String>,
 }
@@ -93,6 +94,7 @@ impl Render for WhoamiOutput {
     fn render_human(&self) -> String {
         let mut lines = vec![
             format!("{} {}", "PeerId:".bold(), self.peer_id),
+            format!("{} {}", "Libp2p PeerId:".bold(), self.libp2p_peer_id),
             format!("{} {}", "Public Key:".bold(), self.public_key),
         ];
         if !self.addresses.is_empty() {

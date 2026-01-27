@@ -264,6 +264,43 @@ fn create_tables(conn: &Connection) -> Result<()> {
         [],
     )?;
 
+    // Announcements table (content discovered from network)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS announcements (
+            hash BLOB PRIMARY KEY,
+            content_type INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            l1_summary TEXT NOT NULL,
+            price INTEGER NOT NULL,
+            addresses TEXT NOT NULL,
+            received_at INTEGER NOT NULL,
+            publisher_peer_id TEXT
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_announcements_received ON announcements(received_at)",
+        [],
+    )?;
+
+    // Migration: Add publisher_peer_id column if it doesn't exist (for existing DBs)
+    // SQLite doesn't have IF NOT EXISTS for ALTER TABLE, so we check first
+    let has_publisher_peer_id: bool = conn
+        .prepare("SELECT publisher_peer_id FROM announcements LIMIT 1")
+        .is_ok();
+    if !has_publisher_peer_id {
+        if let Err(e) = conn.execute(
+            "ALTER TABLE announcements ADD COLUMN publisher_peer_id TEXT",
+            [],
+        ) {
+            // Column may already exist from a concurrent migration - only warn for unexpected errors
+            if !e.to_string().contains("duplicate column") {
+                tracing::warn!(error = %e, "Failed to add publisher_peer_id column to announcements");
+            }
+        }
+    }
+
     Ok(())
 }
 

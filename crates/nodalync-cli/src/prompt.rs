@@ -3,6 +3,8 @@
 use dialoguer::{theme::ColorfulTheme, Confirm, Password};
 use std::io::{self, IsTerminal};
 
+use crate::error::{CliError, CliResult};
+
 /// Check if we're running in an interactive terminal.
 pub fn is_interactive() -> bool {
     std::io::stdin().is_terminal()
@@ -36,6 +38,23 @@ pub fn password_with_confirm(prompt: &str) -> io::Result<String> {
         .with_confirmation("Confirm password", "Passwords do not match")
         .interact()
         .map_err(|e| io::Error::other(e.to_string()))
+}
+
+/// Get password from environment variable or interactive prompt.
+///
+/// Checks `NODALYNC_PASSWORD` environment variable first, then falls back
+/// to interactive prompt if running in a terminal.
+pub fn get_identity_password() -> CliResult<String> {
+    if let Ok(pwd) = std::env::var("NODALYNC_PASSWORD") {
+        return Ok(pwd);
+    }
+    if !is_interactive() {
+        return Err(CliError::User(
+            "Set NODALYNC_PASSWORD or run interactively".into(),
+        ));
+    }
+    password("Enter password to unlock identity")
+        .map_err(|e| CliError::User(format!("Failed to read password: {}", e)))
 }
 
 #[cfg(test)]

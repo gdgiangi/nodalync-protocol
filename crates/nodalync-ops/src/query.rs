@@ -3,7 +3,7 @@
 //! This module implements preview, query, get_versions, and extract_l1 operations
 //! as specified in Protocol Specification §7.2 and §7.4.
 
-use nodalync_crypto::{content_hash, Hash, PeerId, Signature};
+use nodalync_crypto::{content_hash, Hash, PeerId, Signature, UNKNOWN_PEER_ID};
 use nodalync_store::{CacheStore, CachedContent, ContentStore, ManifestStore};
 use nodalync_types::{Amount, L1Summary, Manifest, Payment, Visibility};
 use nodalync_valid::Validator;
@@ -81,33 +81,75 @@ where
     /// Preview content metadata and L1 summary.
     ///
     /// Spec §7.2.2:
-    /// 1. Loads manifest
-    /// 2. Checks visibility (Private returns NotFound for external)
-    /// 3. Checks access control
-    /// 4. Gets or extracts L1Summary
-    /// 5. Returns (Manifest, L1Summary)
-    pub fn preview_content(&mut self, hash: &Hash) -> OpsResult<PreviewResponse> {
-        // 1. Load manifest
-        let manifest = self
-            .state
-            .manifests
-            .load(hash)?
-            .ok_or(OpsError::ManifestNotFound(*hash))?;
+    /// 1. Loads manifest (or announcement if not local)
+    /// 2. If not found locally, try DHT lookup
+    /// 3. Checks visibility (Private returns NotFound for external)
+    /// 4. Checks access control
+    /// 5. Gets or extracts L1Summary
+    /// 6. Returns (Manifest, L1Summary)
+    pub async fn preview_content(&mut self, hash: &Hash) -> OpsResult<PreviewResponse> {
+        // 1. Try to load local manifest first
+        if let Some(manifest) = self.state.manifests.load(hash)? {
+            // 2-3. Check visibility and access
+            // For MVP, we only serve our own content or shared content
+            if manifest.visibility == Visibility::Private && manifest.owner != self.peer_id() {
+                return Err(OpsError::AccessDenied);
+            }
 
-        // 2-3. Check visibility and access
-        // For MVP, we only serve our own content or shared content
-        if manifest.visibility == Visibility::Private && manifest.owner != self.peer_id() {
-            return Err(OpsError::AccessDenied);
+            // 4. Get or extract L1Summary
+            let l1_summary = self.extract_l1_summary(hash)?;
+
+            // 5. Return response
+            return Ok(PreviewResponse {
+                manifest,
+                l1_summary,
+            });
         }
 
-        // 4. Get or extract L1Summary
-        let l1_summary = self.extract_l1_summary(hash)?;
+        // If not local, check if we have an announcement from a remote node
+        if let Some(announcement) = self.state.get_announcement(hash) {
+            return Ok(Self::announcement_to_preview(announcement));
+        }
 
-        // 5. Return response
-        Ok(PreviewResponse {
+        // If not in local announcements, try DHT lookup
+        if let Some(network) = self.network().cloned() {
+            if let Ok(Some(announcement)) = network.dht_get(hash).await {
+                // Store the announcement for future lookups
+                self.state.store_announcement(announcement.clone());
+                return Ok(Self::announcement_to_preview(announcement));
+            }
+        }
+
+        Err(OpsError::ManifestNotFound(*hash))
+    }
+
+    /// Convert an AnnouncePayload to a PreviewResponse.
+    fn announcement_to_preview(announcement: nodalync_wire::AnnouncePayload) -> PreviewResponse {
+        use nodalync_types::{AccessControl, Currency, Economics, Metadata, Provenance, Version};
+
+        let manifest = Manifest {
+            hash: announcement.hash,
+            content_type: announcement.content_type,
+            owner: UNKNOWN_PEER_ID, // Unknown owner
+            version: Version::new_v1(announcement.hash, 0),
+            visibility: Visibility::Shared,
+            access: AccessControl::default(),
+            metadata: Metadata::new(&announcement.title, 0),
+            economics: Economics {
+                price: announcement.price,
+                currency: Currency::HBAR,
+                total_queries: 0,
+                total_revenue: 0,
+            },
+            provenance: Provenance::new_l0(announcement.hash, UNKNOWN_PEER_ID),
+            created_at: 0,
+            updated_at: 0,
+        };
+
+        PreviewResponse {
             manifest,
-            l1_summary,
-        })
+            l1_summary: announcement.l1_summary,
+        }
     }
 
     /// Query and retrieve full content.
@@ -127,7 +169,7 @@ where
         let timestamp = current_timestamp();
 
         // First, try to get content locally (from preview which loads manifest)
-        match self.preview_content(hash) {
+        match self.preview_content(hash).await {
             Ok(preview) => {
                 let manifest = &preview.manifest;
 
@@ -190,6 +232,34 @@ where
 
                 // Content manifest exists but content not local - try network
                 if let Some(network) = self.network().cloned() {
+                    // If owner is unknown (all zeros), the preview came from a DHT announcement
+                    // In that case, look up the announcement and use fetch_content_from_dht_announce
+                    if manifest.owner == UNKNOWN_PEER_ID {
+                        // Get the announcement from DHT or local cache
+                        if let Some(announce) = self.state.get_announcement(hash) {
+                            return self
+                                .fetch_content_from_dht_announce(
+                                    hash,
+                                    &announce,
+                                    payment_amount,
+                                    &network,
+                                )
+                                .await;
+                        }
+                        // Try DHT lookup
+                        if let Some(announce) = network.dht_get(hash).await? {
+                            return self
+                                .fetch_content_from_dht_announce(
+                                    hash,
+                                    &announce,
+                                    payment_amount,
+                                    &network,
+                                )
+                                .await;
+                        }
+                    }
+
+                    // Known owner - try direct network fetch
                     return self
                         .fetch_content_from_network(hash, &manifest.owner, payment_amount, &network)
                         .await;
@@ -301,64 +371,41 @@ where
             return Err(OpsError::PaymentInsufficient);
         }
 
-        // Try to connect to one of the announced addresses
-        for addr_str in &announce.addresses {
-            if let Ok(addr) = addr_str.parse::<nodalync_net::Multiaddr>() {
-                // Try to dial the address
-                if network.dial(addr.clone()).await.is_ok() {
-                    // Extract peer ID from the address if possible
-                    // For simplicity, we try all connected peers that might serve this content
-                    for libp2p_peer in network.connected_peers() {
-                        // Try querying this peer
-                        let timestamp = current_timestamp();
-                        let payment_id =
-                            content_hash(&[hash.0.as_slice(), &timestamp.to_be_bytes()].concat());
+        tracing::debug!(
+            "fetch_content_from_dht_announce: hash={}, publisher_peer_id={:?}, addresses={:?}",
+            hash,
+            announce.publisher_peer_id,
+            announce.addresses
+        );
 
-                        // We don't have the Nodalync peer ID, so we create a placeholder recipient
-                        // In a real implementation, we'd exchange peer info first
-                        let recipient = network
-                            .nodalync_peer_id(&libp2p_peer)
-                            .unwrap_or(PeerId([0u8; 20]));
+        // If the announcement includes the publisher's libp2p peer ID, use it directly
+        if let Some(ref peer_id_str) = announce.publisher_peer_id {
+            if let Ok(libp2p_peer) = peer_id_str.parse::<nodalync_net::PeerId>() {
+                tracing::debug!("Using publisher peer ID from announcement: {}", libp2p_peer);
 
-                        let payment = Payment::new(
-                            payment_id,
-                            Hash([0u8; 32]),
-                            payment_amount,
-                            recipient,
-                            *hash,
-                            vec![],
-                            timestamp,
-                            Signature::from_bytes([0u8; 64]),
-                        );
+                // Try to dial the peer directly
+                if network.dial_peer(libp2p_peer).await.is_ok()
+                    || network.connected_peers().contains(&libp2p_peer)
+                {
+                    // Query the specific publisher
+                    if let Some(response) = self
+                        .try_query_peer(hash, libp2p_peer, payment_amount, network)
+                        .await?
+                    {
+                        return Ok(response);
+                    }
+                }
 
-                        let request = QueryRequestPayload {
-                            hash: *hash,
-                            query: None,
-                            payment,
-                            version_spec: None,
-                        };
-
-                        if let Ok(response) = network.send_query(libp2p_peer, request).await {
-                            // Verify content hash
-                            if verify_content_hash(&response.content, hash) {
-                                // Cache the content
-                                let cached = CachedContent::new(
-                                    response.hash,
-                                    response.content.clone(),
-                                    response.manifest.owner,
-                                    timestamp,
-                                    response.payment_receipt.clone(),
-                                );
-                                self.state.cache.cache(cached)?;
-
-                                // Store manifest
-                                self.state.manifests.store(&response.manifest)?;
-
-                                return Ok(QueryResponse {
-                                    content: response.content,
-                                    manifest: response.manifest,
-                                    receipt: response.payment_receipt,
-                                });
+                // If dial_peer fails, try the addresses
+                for addr_str in &announce.addresses {
+                    if let Ok(addr) = addr_str.parse::<nodalync_net::Multiaddr>() {
+                        if network.dial(addr).await.is_ok() {
+                            // Now try querying the publisher
+                            if let Some(response) = self
+                                .try_query_peer(hash, libp2p_peer, payment_amount, network)
+                                .await?
+                            {
+                                return Ok(response);
                             }
                         }
                     }
@@ -366,7 +413,91 @@ where
             }
         }
 
+        // Fallback: Try to connect via addresses and query any connected peer
+        // This is less efficient but works when publisher_peer_id is not available
+        for addr_str in &announce.addresses {
+            if let Ok(addr) = addr_str.parse::<nodalync_net::Multiaddr>() {
+                if network.dial(addr.clone()).await.is_ok() {
+                    // Try all connected peers
+                    for libp2p_peer in network.connected_peers() {
+                        if let Some(response) = self
+                            .try_query_peer(hash, libp2p_peer, payment_amount, network)
+                            .await?
+                        {
+                            return Ok(response);
+                        }
+                    }
+                }
+            }
+        }
+
         Err(OpsError::NotFound(*hash))
+    }
+
+    /// Helper to try querying a specific peer for content.
+    async fn try_query_peer(
+        &mut self,
+        hash: &Hash,
+        libp2p_peer: nodalync_net::PeerId,
+        payment_amount: Amount,
+        network: &std::sync::Arc<dyn nodalync_net::Network>,
+    ) -> OpsResult<Option<QueryResponse>> {
+        let timestamp = current_timestamp();
+        let payment_id = content_hash(&[hash.0.as_slice(), &timestamp.to_be_bytes()].concat());
+
+        // Get Nodalync peer ID if we have a mapping, otherwise use placeholder
+        let recipient = network
+            .nodalync_peer_id(&libp2p_peer)
+            .unwrap_or(UNKNOWN_PEER_ID);
+
+        let payment = Payment::new(
+            payment_id,
+            Hash([0u8; 32]),
+            payment_amount,
+            recipient,
+            *hash,
+            vec![],
+            timestamp,
+            Signature::from_bytes([0u8; 64]),
+        );
+
+        let request = QueryRequestPayload {
+            hash: *hash,
+            query: None,
+            payment,
+            version_spec: None,
+        };
+
+        match network.send_query(libp2p_peer, request).await {
+            Ok(response) => {
+                // Verify content hash
+                if verify_content_hash(&response.content, hash) {
+                    // Cache the content
+                    let cached = CachedContent::new(
+                        response.hash,
+                        response.content.clone(),
+                        response.manifest.owner,
+                        timestamp,
+                        response.payment_receipt.clone(),
+                    );
+                    self.state.cache.cache(cached)?;
+
+                    // Store manifest
+                    self.state.manifests.store(&response.manifest)?;
+
+                    return Ok(Some(QueryResponse {
+                        content: response.content,
+                        manifest: response.manifest,
+                        receipt: response.payment_receipt,
+                    }));
+                }
+            }
+            Err(e) => {
+                tracing::debug!("Failed to query peer {}: {}", libp2p_peer, e);
+            }
+        }
+
+        Ok(None)
     }
 
     /// Get all versions of content.
@@ -459,15 +590,15 @@ mod tests {
         assert!(!summary.preview_mentions.is_empty());
     }
 
-    #[test]
-    fn test_preview_content() {
+    #[tokio::test]
+    async fn test_preview_content() {
         let (mut ops, _temp) = create_test_ops();
 
         let content = b"Test content for preview";
         let meta = Metadata::new("Preview Test", content.len() as u64);
         let hash = ops.create_content(content, meta).unwrap();
 
-        let preview = ops.preview_content(&hash).unwrap();
+        let preview = ops.preview_content(&hash).await.unwrap();
 
         assert_eq!(preview.manifest.hash, hash);
         assert_eq!(preview.l1_summary.l0_hash, hash);

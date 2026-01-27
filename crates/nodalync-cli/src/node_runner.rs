@@ -255,13 +255,12 @@ where
 async fn send_response(
     network: &NetworkNode,
     request_id: InboundRequestId,
-    _msg_type: MessageType,
+    msg_type: MessageType,
     payload: Vec<u8>,
 ) -> CliResult<()> {
-    // Send the response payload directly
-    // The network layer handles the framing
+    // Create a signed message and send as response
     network
-        .send_response(request_id, payload)
+        .send_signed_response(request_id, msg_type, payload)
         .await
         .map_err(CliError::Network)?;
 

@@ -72,14 +72,36 @@ where
         // 5. Save manifest
         self.state.manifests.update(&manifest)?;
 
-        // 6. DHT announce (if network available)
+        // 6. Network announce (if network available)
         if let Some(network) = self.network().cloned() {
-            let payload =
-                Self::create_announce_payload(&manifest, l1_summary, network.listen_addresses());
-            // DHT announce is best-effort - don't fail publish if DHT unavailable
-            if let Err(e) = network.dht_announce(*hash, payload).await {
+            // Include our libp2p peer ID so other nodes can dial us directly
+            let publisher_peer_id = Some(network.local_peer_id().to_string());
+            let listen_addrs = network.listen_addresses();
+            tracing::debug!(
+                "Publishing content: hash={}, publisher_peer_id={:?}, listen_addresses={:?}",
+                hash,
+                publisher_peer_id,
+                listen_addrs
+            );
+            let payload = Self::create_announce_payload(
+                &manifest,
+                l1_summary,
+                listen_addrs,
+                publisher_peer_id,
+            );
+
+            // DHT announce for persistence - best-effort
+            if let Err(e) = network.dht_announce(*hash, payload.clone()).await {
                 tracing::warn!(
                     "DHT announce failed (content still published locally): {}",
+                    e
+                );
+            }
+
+            // GossipSub broadcast for immediate discovery - best-effort
+            if let Err(e) = network.broadcast_announce(payload).await {
+                tracing::warn!(
+                    "GossipSub broadcast failed (content still published locally): {}",
                     e
                 );
             }
@@ -93,6 +115,7 @@ where
         manifest: &Manifest,
         l1_summary: nodalync_types::L1Summary,
         listen_addrs: Vec<Multiaddr>,
+        publisher_peer_id: Option<String>,
     ) -> AnnouncePayload {
         AnnouncePayload {
             hash: manifest.hash,
@@ -104,6 +127,7 @@ where
                 .iter()
                 .map(|addr: &Multiaddr| addr.to_string())
                 .collect(),
+            publisher_peer_id,
         }
     }
 

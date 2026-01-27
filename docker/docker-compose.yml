@@ -1,0 +1,105 @@
+version: "3.8"
+
+networks:
+  nodalync-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:
+
+# The default data directory inside the nodalync container
+x-data-dir: &data-dir /home/nodalync/.nodalync
+
+services:
+  node1:
+    image: nodalync:latest
+    container_name: nodalync-node1
+    hostname: node1
+    networks:
+      nodalync-net:
+        ipv4_address: 172.28.0.10
+    ports:
+      - "9001:9000"
+    volumes:
+      - ./data/node1:/home/nodalync/.nodalync
+      - ./config/node1-config.toml:/home/nodalync/.nodalync/config.toml:ro
+    environment:
+      - NODALYNC_PASSWORD=testpassword
+      - RUST_LOG=nodalync=info
+      # Hedera credentials (optional, for settlement)
+      - HEDERA_ACCOUNT_ID=${HEDERA_ACCOUNT_ID:-}
+      - HEDERA_PRIVATE_KEY=${HEDERA_PRIVATE_KEY:-}
+      - HEDERA_CONTRACT_ID=${HEDERA_CONTRACT_ID:-0.0.7729011}
+    command: ["start"]
+    healthcheck:
+      test: ["CMD", "nodalync", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  node2:
+    image: nodalync:latest
+    container_name: nodalync-node2
+    hostname: node2
+    networks:
+      nodalync-net:
+        ipv4_address: 172.28.0.11
+    ports:
+      - "9002:9000"
+    volumes:
+      - ./data/node2:/home/nodalync/.nodalync
+      - ./config/node2-config.toml:/home/nodalync/.nodalync/config.toml:ro
+    environment:
+      - NODALYNC_PASSWORD=testpassword
+      - RUST_LOG=nodalync=info
+      - HEDERA_ACCOUNT_ID=${HEDERA_ACCOUNT_ID:-}
+      - HEDERA_PRIVATE_KEY=${HEDERA_PRIVATE_KEY:-}
+      - HEDERA_CONTRACT_ID=${HEDERA_CONTRACT_ID:-0.0.7729011}
+    command: ["start"]
+    healthcheck:
+      test: ["CMD", "nodalync", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      node1:
+        condition: service_healthy
+    restart: unless-stopped
+
+  node3:
+    image: nodalync:latest
+    container_name: nodalync-node3
+    hostname: node3
+    networks:
+      nodalync-net:
+        ipv4_address: 172.28.0.12
+    ports:
+      - "9003:9000"
+    volumes:
+      - ./data/node3:/home/nodalync/.nodalync
+      - ./config/node3-config.toml:/home/nodalync/.nodalync/config.toml:ro
+    environment:
+      - NODALYNC_PASSWORD=testpassword
+      - RUST_LOG=nodalync=info
+      - HEDERA_ACCOUNT_ID=${HEDERA_ACCOUNT_ID:-}
+      - HEDERA_PRIVATE_KEY=${HEDERA_PRIVATE_KEY:-}
+      - HEDERA_CONTRACT_ID=${HEDERA_CONTRACT_ID:-0.0.7729011}
+    command: ["start"]
+    healthcheck:
+      test: ["CMD", "nodalync", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      node1:
+        condition: service_healthy
+    restart: unless-stopped

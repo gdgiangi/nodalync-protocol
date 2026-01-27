@@ -32,11 +32,17 @@ fn main() {
 }
 
 async fn async_main(cli: Cli) {
-    // Initialize logging
-    if cli.verbose {
+    // Initialize logging based on --verbose flag or RUST_LOG env var
+    let has_rust_log = std::env::var("RUST_LOG").is_ok();
+    if cli.verbose || has_rust_log {
+        let filter = if cli.verbose {
+            EnvFilter::from_default_env().add_directive("nodalync=debug".parse().unwrap())
+        } else {
+            EnvFilter::from_default_env()
+        };
         tracing_subscriber::registry()
             .with(fmt::layer())
-            .with(EnvFilter::from_default_env().add_directive("nodalync=debug".parse().unwrap()))
+            .with(filter)
             .init();
     }
 
@@ -52,11 +58,17 @@ async fn async_main(cli: Cli) {
 fn handle_daemon_start(cli: &Cli) -> CliResult<()> {
     use nodalync_cli::commands::start_daemon_sync;
 
-    // Initialize logging if verbose
-    if cli.verbose {
+    // Initialize logging based on --verbose flag or RUST_LOG env var
+    let has_rust_log = std::env::var("RUST_LOG").is_ok();
+    if cli.verbose || has_rust_log {
+        let filter = if cli.verbose {
+            EnvFilter::from_default_env().add_directive("nodalync=debug".parse().unwrap())
+        } else {
+            EnvFilter::from_default_env()
+        };
         tracing_subscriber::registry()
             .with(fmt::layer())
-            .with(EnvFilter::from_default_env().add_directive("nodalync=debug".parse().unwrap()))
+            .with(filter)
             .init();
     }
 

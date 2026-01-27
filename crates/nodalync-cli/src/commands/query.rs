@@ -34,14 +34,17 @@ pub async fn query(
     spinner.set_message("Fetching content metadata...");
 
     // Get manifest first to know price
-    let manifest = ctx
-        .ops
-        .get_content_manifest(&hash)?
-        .or_else(|| {
-            // Try preview for remote content
-            ctx.ops.preview_content(&hash).ok().map(|p| p.manifest)
-        })
-        .ok_or_else(|| CliError::NotFound(hash_str.to_string()))?;
+    let manifest = match ctx.ops.get_content_manifest(&hash)? {
+        Some(m) => m,
+        None => {
+            // Try preview for remote content (does DHT lookup)
+            ctx.ops
+                .preview_content(&hash)
+                .await
+                .map(|p| p.manifest)
+                .map_err(|_| CliError::NotFound(hash_str.to_string()))?
+        }
+    };
 
     let price = manifest.economics.price;
     let title = manifest.metadata.title.clone();

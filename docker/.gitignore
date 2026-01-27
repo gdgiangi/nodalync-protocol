@@ -1,0 +1,10 @@
+# Persistent data (generated at runtime)
+data/
+
+# Generated configuration files
+config/*.toml
+config/peer-ids.env
+
+# Local overrides
+.env.local
+docker-compose.override.yml

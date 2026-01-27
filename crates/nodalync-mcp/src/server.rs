@@ -120,7 +120,7 @@ impl NodalyncMcpServer {
 
         // Get preview to check price
         let mut ops = self.ops.lock().await;
-        let preview = match ops.preview_content(&hash) {
+        let preview = match ops.preview_content(&hash).await {
             Ok(p) => p,
             Err(e) => {
                 warn!(hash = %hash_to_string(&hash), error = %e, "Content not found");
@@ -404,6 +404,7 @@ impl rmcp::ServerHandler for NodalyncMcpServer {
             let mut ops = self.ops.lock().await;
             let preview = ops
                 .preview_content(&hash)
+                .await
                 .map_err(|e| McpError::invalid_params(format!("Content not found: {}", e), None))?;
 
             let price = preview.manifest.economics.price;

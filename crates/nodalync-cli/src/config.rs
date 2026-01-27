@@ -151,6 +151,13 @@ pub struct NetworkConfigSection {
     pub listen_addresses: Vec<String>,
     /// Bootstrap nodes to connect to.
     pub bootstrap_nodes: Vec<String>,
+    /// Time to wait for GossipSub propagation (seconds).
+    #[serde(default = "default_gossipsub_propagation_wait")]
+    pub gossipsub_propagation_wait: u64,
+}
+
+fn default_gossipsub_propagation_wait() -> u64 {
+    5
 }
 
 impl Default for NetworkConfigSection {
@@ -159,6 +166,7 @@ impl Default for NetworkConfigSection {
             enabled: true,
             listen_addresses: vec!["/ip4/0.0.0.0/tcp/9000".to_string()],
             bootstrap_nodes: vec![],
+            gossipsub_propagation_wait: default_gossipsub_propagation_wait(),
         }
     }
 }
@@ -173,6 +181,8 @@ pub struct SettlementConfig {
     pub account_id: Option<String>,
     /// Path to Hedera private key.
     pub key_path: Option<PathBuf>,
+    /// Settlement contract ID for Hedera.
+    pub contract_id: Option<String>,
 }
 
 impl Default for SettlementConfig {
@@ -181,6 +191,7 @@ impl Default for SettlementConfig {
             network: "mock".to_string(),
             account_id: None,
             key_path: None,
+            contract_id: None,
         }
     }
 }
@@ -239,7 +250,18 @@ impl Default for DisplayConfig {
 }
 
 /// Get the default base directory for nodalync data.
+///
+/// Priority:
+/// 1. `NODALYNC_DATA_DIR` environment variable (if set)
+/// 2. Platform-specific data directory (e.g., `~/.local/share/nodalync` on Linux)
+/// 3. Fallback to `~/.nodalync`
 pub fn default_base_dir() -> PathBuf {
+    // Check environment variable first
+    if let Ok(dir) = std::env::var("NODALYNC_DATA_DIR") {
+        return PathBuf::from(dir);
+    }
+
+    // Use platform-specific data directory
     directories::ProjectDirs::from("io", "nodalync", "nodalync")
         .map(|dirs| dirs.data_dir().to_path_buf())
         .unwrap_or_else(|| {

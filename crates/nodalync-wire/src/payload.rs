@@ -29,6 +29,10 @@ pub struct AnnouncePayload {
     pub price: Amount,
     /// Multiaddrs where content can be retrieved
     pub addresses: Vec<String>,
+    /// The libp2p peer ID of the publisher (base58 encoded)
+    /// Used to dial the publisher directly when retrieving content
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publisher_peer_id: Option<String>,
 }
 
 /// Payload for ANNOUNCE_UPDATE messages.
@@ -510,12 +514,65 @@ mod tests {
             l1_summary: test_l1_summary(),
             price: 100,
             addresses: vec!["/ip4/127.0.0.1/tcp/9000".to_string()],
+            publisher_peer_id: None,
         };
 
         let json = serde_json::to_string(&payload).unwrap();
         let deserialized: AnnouncePayload = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.title, payload.title);
         assert_eq!(deserialized.price, payload.price);
+    }
+
+    #[test]
+    fn test_announce_payload_with_publisher_peer_id_cbor() {
+        // Test CBOR roundtrip with publisher_peer_id set to Some
+        let payload = AnnouncePayload {
+            hash: test_hash(b"content"),
+            content_type: ContentType::L0,
+            title: "Test Content".to_string(),
+            l1_summary: test_l1_summary(),
+            price: 100,
+            addresses: vec!["/ip4/127.0.0.1/tcp/9000".to_string()],
+            publisher_peer_id: Some(
+                "12D3KooWLvP5fP18r2B1xLV21eq9JyMzkySxvdTdWvuaxzVcs289".to_string(),
+            ),
+        };
+
+        // Test CBOR encoding/decoding (what the wire uses)
+        let mut cbor_buf = Vec::new();
+        ciborium::into_writer(&payload, &mut cbor_buf).unwrap();
+        let decoded: AnnouncePayload = ciborium::from_reader(&cbor_buf[..]).unwrap();
+
+        assert_eq!(decoded.title, payload.title);
+        assert_eq!(decoded.price, payload.price);
+        assert_eq!(decoded.publisher_peer_id, payload.publisher_peer_id);
+        assert_eq!(
+            decoded.publisher_peer_id,
+            Some("12D3KooWLvP5fP18r2B1xLV21eq9JyMzkySxvdTdWvuaxzVcs289".to_string())
+        );
+    }
+
+    #[test]
+    fn test_announce_payload_backwards_compatible() {
+        // Test that decoding an old CBOR payload (without publisher_peer_id) works
+        // by encoding a payload with None and verifying it decodes correctly
+        let payload = AnnouncePayload {
+            hash: test_hash(b"content"),
+            content_type: ContentType::L0,
+            title: "Test".to_string(),
+            l1_summary: test_l1_summary(),
+            price: 0,
+            addresses: vec![],
+            publisher_peer_id: None,
+        };
+
+        // Encode without publisher_peer_id
+        let mut cbor_buf = Vec::new();
+        ciborium::into_writer(&payload, &mut cbor_buf).unwrap();
+
+        // Decode should work and have None for publisher_peer_id
+        let decoded: AnnouncePayload = ciborium::from_reader(&cbor_buf[..]).unwrap();
+        assert_eq!(decoded.publisher_peer_id, None);
     }
 
     #[test]

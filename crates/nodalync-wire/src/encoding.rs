@@ -574,6 +574,7 @@ mod tests {
             l1_summary: L1Summary::empty(hash),
             price: 100,
             addresses: vec!["/ip4/127.0.0.1/tcp/9000".to_string()],
+            publisher_peer_id: None,
         };
 
         // Encode multiple times - should be identical

@@ -188,7 +188,7 @@ mod tests {
         let hash1 = ops.create_content(content, metadata).unwrap();
 
         // Preview (before publish - should work for owner)
-        let preview = ops.preview_content(&hash1).unwrap();
+        let preview = ops.preview_content(&hash1).await.unwrap();
         assert_eq!(preview.manifest.hash, hash1);
 
         // Publish

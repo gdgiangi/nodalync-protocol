@@ -101,6 +101,7 @@ async fn test_two_node_publish_query() {
         l1_summary: L1Summary::empty(hash),
         price: 100,
         addresses: vec![addr1.to_string()],
+        publisher_peer_id: Some(node1.local_peer_id().to_string()),
     };
 
     // Node 1 announces content to DHT

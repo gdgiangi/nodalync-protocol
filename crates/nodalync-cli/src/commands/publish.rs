@@ -56,6 +56,11 @@ pub async fn publish(
     // Bootstrap the network to find peers
     ctx.bootstrap().await?;
 
+    // Subscribe to announcements (required for GossipSub mesh formation)
+    if let Some(ref network) = ctx.network {
+        network.subscribe_announcements().await?;
+    }
+
     // Create metadata
     let mut metadata = Metadata::new(&title, content.len() as u64);
     if let Some(desc) = description {
@@ -92,6 +97,11 @@ pub async fn publish(
     ctx.ops
         .publish_content(&hash, visibility, price_units)
         .await?;
+
+    // Wait for GossipSub propagation (needs time for mesh to form)
+    spinner.set_message("Propagating to network...");
+    let wait_secs = ctx.config.network.gossipsub_propagation_wait;
+    tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
     spinner.finish_and_clear();
 
     // Create output

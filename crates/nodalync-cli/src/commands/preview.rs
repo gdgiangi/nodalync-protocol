@@ -20,6 +20,7 @@ pub async fn preview(config: CliConfig, format: OutputFormat, hash_str: &str) ->
     let preview_response = ctx
         .ops
         .preview_content(&hash)
+        .await
         .map_err(|_| CliError::NotFound(hash_str.to_string()))?;
 
     let manifest = &preview_response.manifest;

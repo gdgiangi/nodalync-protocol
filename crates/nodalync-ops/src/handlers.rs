@@ -12,10 +12,12 @@ use nodalync_store::{
 use nodalync_types::{Channel, Payment, Visibility};
 use nodalync_valid::Validator;
 use nodalync_wire::{
-    ChannelAcceptPayload, ChannelClosePayload, ChannelOpenPayload, MessageType, PaymentReceipt,
-    PreviewRequestPayload, PreviewResponsePayload, QueryRequestPayload, QueryResponsePayload,
-    VersionInfo, VersionRequestPayload, VersionResponsePayload,
+    decode_message, decode_payload, AnnouncePayload, ChannelAcceptPayload, ChannelClosePayload,
+    ChannelOpenPayload, MessageType, PaymentReceipt, PreviewRequestPayload, PreviewResponsePayload,
+    QueryRequestPayload, QueryResponsePayload, VersionInfo, VersionRequestPayload,
+    VersionResponsePayload,
 };
+use tracing::{debug, info};
 
 use crate::error::{OpsError, OpsResult};
 use crate::extraction::L1Extractor;
@@ -302,6 +304,61 @@ where
         Ok(())
     }
 
+    /// Handle a broadcast announcement from GossipSub.
+    ///
+    /// When we receive an announcement, we:
+    /// 1. Decode the AnnouncePayload
+    /// 2. Log the announcement for debugging
+    /// 3. Store it in the announcements cache for later lookup
+    ///
+    /// This allows preview/query to discover content from remote nodes.
+    fn handle_broadcast_announcement(&mut self, topic: &str, data: &[u8]) -> OpsResult<()> {
+        // Only process announcements on the announce topic
+        if !topic.contains("/nodalync/announce") {
+            return Ok(());
+        }
+
+        // Try to decode the wire protocol message
+        match decode_message(data) {
+            Ok(message) => {
+                // Check if this is an ANNOUNCE message
+                if message.message_type != MessageType::Announce {
+                    debug!(
+                        "Ignoring non-announce broadcast message: {:?}",
+                        message.message_type
+                    );
+                    return Ok(());
+                }
+
+                // Decode the AnnouncePayload from the message payload
+                match decode_payload::<AnnouncePayload>(&message.payload) {
+                    Ok(payload) => {
+                        info!(
+                            hash = %payload.hash,
+                            title = %payload.title,
+                            price = payload.price,
+                            addresses = ?payload.addresses,
+                            "Received content announcement"
+                        );
+
+                        // Store the announcement in our cache for later lookup
+                        // This allows preview/query to find content from remote nodes
+                        self.state.store_announcement(payload);
+                        Ok(())
+                    }
+                    Err(e) => {
+                        debug!("Failed to decode announcement payload: {}", e);
+                        Ok(()) // Don't fail on decode errors
+                    }
+                }
+            }
+            Err(e) => {
+                debug!("Failed to decode broadcast message: {}", e);
+                Ok(()) // Don't fail on decode errors
+            }
+        }
+    }
+
     /// Handle an incoming network event.
     ///
     /// This is the main entry point for processing network events and
@@ -316,11 +373,25 @@ where
     ) -> OpsResult<Option<(MessageType, Vec<u8>)>> {
         match event {
             NetworkEvent::InboundRequest { peer, data, .. } => {
-                // Decode the message type from the raw data
-                // The first 2 bytes after the header typically contain the message type
-                if data.len() < 2 {
-                    return Ok(None);
-                }
+                // First decode the full wire message (header + payload + signature)
+                let message = match decode_message(&data) {
+                    Ok(msg) => msg,
+                    Err(e) => {
+                        debug!(
+                            "Failed to decode message: {}, data length: {}",
+                            e,
+                            data.len()
+                        );
+                        return Ok(None);
+                    }
+                };
+
+                debug!(
+                    "Received message type {:?} from peer {}, payload length: {}",
+                    message.message_type,
+                    peer,
+                    message.payload.len()
+                );
 
                 // Get the Nodalync peer ID if we have a mapping
                 let nodalync_peer = if let Some(network) = self.network() {
@@ -329,39 +400,77 @@ where
                     PeerId([0u8; 20])
                 };
 
-                // Try to decode as JSON for MVP (the data is already decoded by network layer)
-                // In a real implementation, we'd have proper message framing
-                if let Ok(request) = serde_json::from_slice::<PreviewRequestPayload>(&data) {
-                    let response = self.handle_preview_request(&nodalync_peer, &request)?;
-                    let response_bytes = serde_json::to_vec(&response).unwrap_or_default();
-                    return Ok(Some((MessageType::PreviewResponse, response_bytes)));
+                // Handle the request based on message type
+                match message.message_type {
+                    MessageType::PreviewRequest => {
+                        let request: PreviewRequestPayload = decode_payload(&message.payload)
+                            .map_err(|e| {
+                                OpsError::invalid_operation(format!("decode error: {}", e))
+                            })?;
+                        debug!("Received preview request for hash: {}", request.hash);
+                        let response = self.handle_preview_request(&nodalync_peer, &request)?;
+                        let response_bytes =
+                            nodalync_wire::encode_payload(&response).map_err(|e| {
+                                OpsError::invalid_operation(format!("encoding error: {}", e))
+                            })?;
+                        Ok(Some((MessageType::PreviewResponse, response_bytes)))
+                    }
+                    MessageType::QueryRequest => {
+                        let request: QueryRequestPayload = decode_payload(&message.payload)
+                            .map_err(|e| {
+                                OpsError::invalid_operation(format!("decode error: {}", e))
+                            })?;
+                        debug!("Received query request for hash: {}", request.hash);
+                        let response = self.handle_query_request(&nodalync_peer, &request).await?;
+                        let response_bytes =
+                            nodalync_wire::encode_payload(&response).map_err(|e| {
+                                OpsError::invalid_operation(format!("encoding error: {}", e))
+                            })?;
+                        Ok(Some((MessageType::QueryResponse, response_bytes)))
+                    }
+                    MessageType::VersionRequest => {
+                        let request: VersionRequestPayload = decode_payload(&message.payload)
+                            .map_err(|e| {
+                                OpsError::invalid_operation(format!("decode error: {}", e))
+                            })?;
+                        debug!(
+                            "Received version request for root: {}",
+                            request.version_root
+                        );
+                        let response = self.handle_version_request(&nodalync_peer, &request)?;
+                        let response_bytes =
+                            nodalync_wire::encode_payload(&response).map_err(|e| {
+                                OpsError::invalid_operation(format!("encoding error: {}", e))
+                            })?;
+                        Ok(Some((MessageType::VersionResponse, response_bytes)))
+                    }
+                    MessageType::ChannelOpen => {
+                        let request: ChannelOpenPayload = decode_payload(&message.payload)
+                            .map_err(|e| {
+                                OpsError::invalid_operation(format!("decode error: {}", e))
+                            })?;
+                        debug!("Received channel open request");
+                        let response = self.handle_channel_open(&nodalync_peer, &request)?;
+                        let response_bytes =
+                            nodalync_wire::encode_payload(&response).map_err(|e| {
+                                OpsError::invalid_operation(format!("encoding error: {}", e))
+                            })?;
+                        Ok(Some((MessageType::ChannelAccept, response_bytes)))
+                    }
+                    MessageType::ChannelClose => {
+                        let request: ChannelClosePayload = decode_payload(&message.payload)
+                            .map_err(|e| {
+                                OpsError::invalid_operation(format!("decode error: {}", e))
+                            })?;
+                        debug!("Received channel close request");
+                        self.handle_channel_close(&nodalync_peer, &request)?;
+                        Ok(None) // No response needed for close
+                    }
+                    _ => {
+                        debug!("Unhandled message type: {:?}", message.message_type);
+                        Ok(None)
+                    }
                 }
-
-                if let Ok(request) = serde_json::from_slice::<QueryRequestPayload>(&data) {
-                    let response = self.handle_query_request(&nodalync_peer, &request).await?;
-                    let response_bytes = serde_json::to_vec(&response).unwrap_or_default();
-                    return Ok(Some((MessageType::QueryResponse, response_bytes)));
-                }
-
-                if let Ok(request) = serde_json::from_slice::<VersionRequestPayload>(&data) {
-                    let response = self.handle_version_request(&nodalync_peer, &request)?;
-                    let response_bytes = serde_json::to_vec(&response).unwrap_or_default();
-                    return Ok(Some((MessageType::VersionResponse, response_bytes)));
-                }
-
-                if let Ok(request) = serde_json::from_slice::<ChannelOpenPayload>(&data) {
-                    let response = self.handle_channel_open(&nodalync_peer, &request)?;
-                    let response_bytes = serde_json::to_vec(&response).unwrap_or_default();
-                    return Ok(Some((MessageType::ChannelAccept, response_bytes)));
-                }
-
-                if let Ok(request) = serde_json::from_slice::<ChannelClosePayload>(&data) {
-                    self.handle_channel_close(&nodalync_peer, &request)?;
-                    return Ok(None); // No response needed for close
-                }
-
-                // Unknown message type
-                Ok(None)
             }
             NetworkEvent::PeerConnected { peer } => {
                 // Log peer connection (could track connected peers in state)
@@ -371,6 +480,11 @@ where
             NetworkEvent::PeerDisconnected { peer } => {
                 // Log peer disconnection
                 let _ = peer;
+                Ok(None)
+            }
+            NetworkEvent::BroadcastReceived { topic, data } => {
+                // Handle content announcements from GossipSub
+                self.handle_broadcast_announcement(&topic, &data)?;
                 Ok(None)
             }
             _ => {

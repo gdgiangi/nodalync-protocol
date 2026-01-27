@@ -24,6 +24,9 @@ serde_json = "1.0"
 # Error handling
 thiserror = { workspace = true }
 
+# Logging
+tracing = { workspace = true }
+
 # Identity encryption
 aes-gcm = "0.10"
 argon2 = "0.5"

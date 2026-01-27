@@ -1,19 +1,26 @@
 //! Show identity information command.
 
 use crate::config::CliConfig;
-use crate::context::NodeContext;
+use crate::context::{get_libp2p_peer_id, NodeContext};
 use crate::error::CliResult;
 use crate::output::{OutputFormat, Render, WhoamiOutput};
+use crate::prompt::get_identity_password;
 
 /// Execute the whoami command.
 pub fn whoami(config: CliConfig, format: OutputFormat) -> CliResult<String> {
-    let ctx = NodeContext::local(config)?;
+    let ctx = NodeContext::local(config.clone())?;
 
     // Get public key
     let public_key = ctx.ops.state.identity.public_key()?;
 
+    // Get libp2p peer ID (requires decrypting the private key)
+    let password = get_identity_password()?;
+    let (private_key, _) = ctx.ops.state.identity.load(&password)?;
+    let libp2p_peer_id = get_libp2p_peer_id(&private_key)?;
+
     let output = WhoamiOutput {
         peer_id: ctx.peer_id().to_string(),
+        libp2p_peer_id: libp2p_peer_id.to_string(),
         public_key: format!("0x{}", hex::encode(public_key.0)),
         addresses: vec![], // Addresses populated when network is running
     };

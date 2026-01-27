@@ -138,6 +138,9 @@ pub struct NetworkNode {
     /// Set of currently connected libp2p peers.
     connected_peers_set: Arc<StdRwLock<std::collections::HashSet<PeerId>>>,
 
+    /// Set of listen addresses (updated when swarm reports new listen addrs).
+    listen_addrs: Arc<StdRwLock<Vec<Multiaddr>>>,
+
     /// Channel for sending commands to the swarm task.
     command_tx: mpsc::Sender<SwarmCommand>,
 
@@ -205,6 +208,8 @@ impl NetworkNode {
         let gossip_topic = config.gossipsub_topic.clone();
         let connected_peers_set = Arc::new(StdRwLock::new(std::collections::HashSet::new()));
         let connected_peers_clone = connected_peers_set.clone();
+        let listen_addrs = Arc::new(StdRwLock::new(Vec::new()));
+        let listen_addrs_clone = listen_addrs.clone();
 
         // Subscribe to the announcement topic
         let announce_topic = IdentTopic::new(&config.gossipsub_topic);
@@ -218,6 +223,7 @@ impl NetworkNode {
                 pending_requests_clone,
                 peer_mapper_clone,
                 connected_peers_clone,
+                listen_addrs_clone,
                 gossip_topic,
             )
             .await;
@@ -229,6 +235,7 @@ impl NetworkNode {
             private_key,
             peer_mapper,
             connected_peers_set,
+            listen_addrs,
             command_tx,
             event_rx: Arc::new(Mutex::new(event_rx)),
             pending_requests,
@@ -283,6 +290,8 @@ impl NetworkNode {
         let gossip_topic = config.gossipsub_topic.clone();
         let connected_peers_set = Arc::new(StdRwLock::new(std::collections::HashSet::new()));
         let connected_peers_clone = connected_peers_set.clone();
+        let listen_addrs = Arc::new(StdRwLock::new(Vec::new()));
+        let listen_addrs_clone = listen_addrs.clone();
 
         let announce_topic = IdentTopic::new(&config.gossipsub_topic);
 
@@ -295,6 +304,7 @@ impl NetworkNode {
                 pending_requests_clone,
                 peer_mapper_clone,
                 connected_peers_clone,
+                listen_addrs_clone,
                 gossip_topic,
             )
             .await;
@@ -306,6 +316,7 @@ impl NetworkNode {
             private_key,
             peer_mapper,
             connected_peers_set,
+            listen_addrs,
             command_tx,
             event_rx: Arc::new(Mutex::new(event_rx)),
             pending_requests,
@@ -608,6 +619,13 @@ impl Network for NetworkNode {
         self.broadcast(message).await
     }
 
+    async fn broadcast_announce(&self, payload: AnnouncePayload) -> NetworkResult<()> {
+        let payload_bytes =
+            encode_payload(&payload).map_err(|e| NetworkError::Encoding(e.to_string()))?;
+        let message = self.create_signed_message(MessageType::Announce, payload_bytes);
+        self.broadcast(message).await
+    }
+
     fn connected_peers(&self) -> Vec<PeerId> {
         self.connected_peers_set
             .read()
@@ -616,8 +634,10 @@ impl Network for NetworkNode {
     }
 
     fn listen_addresses(&self) -> Vec<Multiaddr> {
-        // This is synchronous - we'd need to track this in the node
-        Vec::new()
+        self.listen_addrs
+            .read()
+            .map(|addrs| addrs.clone())
+            .unwrap_or_default()
     }
 
     async fn dial(&self, addr: Multiaddr) -> NetworkResult<()> {
@@ -656,6 +676,20 @@ impl Network for NetworkNode {
             .map_err(|_| NetworkError::ChannelClosed)
     }
 
+    async fn send_signed_response(
+        &self,
+        request_id: libp2p::request_response::InboundRequestId,
+        message_type: MessageType,
+        payload: Vec<u8>,
+    ) -> NetworkResult<()> {
+        // Create a signed message
+        let message = self.create_signed_message(message_type, payload);
+        // Encode to wire format
+        let data = encode_message(&message).map_err(|e| NetworkError::Encoding(e.to_string()))?;
+        // Send via existing send_response
+        self.send_response(request_id, data).await
+    }
+
     fn local_peer_id(&self) -> PeerId {
         self.local_peer_id
     }
@@ -677,6 +711,7 @@ async fn run_swarm(
     pending_requests: PendingRequests,
     peer_mapper: PeerIdMapper,
     connected_peers: Arc<StdRwLock<std::collections::HashSet<PeerId>>>,
+    listen_addrs: Arc<StdRwLock<Vec<Multiaddr>>>,
     gossip_topic: String,
 ) {
     // Subscribe to the announcement topic
@@ -758,6 +793,10 @@ async fn run_swarm(
 
                     SwarmEvent::NewListenAddr { address, .. } => {
                         info!("Listening on {}", address);
+                        // Track the listen address
+                        if let Ok(mut addrs) = listen_addrs.write() {
+                            addrs.push(address.clone());
+                        }
                         let _ = event_tx.send(NetworkEvent::NewListenAddr { address }).await;
                     }
 

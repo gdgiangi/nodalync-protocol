@@ -92,6 +92,8 @@ pub use settlement::SqliteSettlementQueue;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use nodalync_crypto::Hash;
+use nodalync_wire::AnnouncePayload;
 use rusqlite::Connection;
 
 /// Configuration for NodeState.
@@ -300,6 +302,128 @@ impl NodeState {
     /// Get a reference to the shared database connection.
     pub fn connection(&self) -> Arc<Mutex<Connection>> {
         Arc::clone(&self.conn)
+    }
+
+    /// Store a content announcement from a remote node.
+    ///
+    /// This persists the announcement to SQLite so that preview/query can discover
+    /// content from the network even after restart.
+    pub fn store_announcement(&self, payload: AnnouncePayload) {
+        let conn = self.conn.lock().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let l1_summary_json = serde_json::to_string(&payload.l1_summary).unwrap_or_default();
+        let addresses_json = serde_json::to_string(&payload.addresses).unwrap_or_default();
+
+        // Use INSERT OR REPLACE to update existing announcements
+        if let Err(e) = conn.execute(
+            "INSERT OR REPLACE INTO announcements (hash, content_type, title, l1_summary, price, addresses, received_at, publisher_peer_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                payload.hash.0.as_slice(),
+                payload.content_type as u8,
+                payload.title,
+                l1_summary_json,
+                payload.price as i64,
+                addresses_json,
+                now,
+                payload.publisher_peer_id,
+            ],
+        ) {
+            tracing::warn!(
+                hash = %payload.hash,
+                error = %e,
+                "Failed to store announcement"
+            );
+        }
+    }
+
+    /// Get a stored announcement by hash.
+    ///
+    /// Returns None if no announcement for this hash has been received.
+    pub fn get_announcement(&self, hash: &Hash) -> Option<AnnouncePayload> {
+        use nodalync_types::{ContentType, L1Summary};
+
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT content_type, title, l1_summary, price, addresses, publisher_peer_id FROM announcements WHERE hash = ?1",
+            [hash.0.as_slice()],
+            |row| {
+                let content_type_u8: u8 = row.get(0)?;
+                let title: String = row.get(1)?;
+                let l1_summary_json: String = row.get(2)?;
+                let price: i64 = row.get(3)?;
+                let addresses_json: String = row.get(4)?;
+                let publisher_peer_id: Option<String> = row.get(5)?;
+
+                let content_type = ContentType::from_u8(content_type_u8).unwrap_or(ContentType::L0);
+                let l1_summary: L1Summary = serde_json::from_str(&l1_summary_json).unwrap_or_else(|_| L1Summary::empty(*hash));
+                let addresses: Vec<String> = serde_json::from_str(&addresses_json).unwrap_or_default();
+
+                Ok(AnnouncePayload {
+                    hash: *hash,
+                    content_type,
+                    title,
+                    l1_summary,
+                    price: price as u64,
+                    addresses,
+                    publisher_peer_id,
+                })
+            },
+        )
+        .ok()
+    }
+
+    /// List all stored announcements.
+    pub fn list_announcements(&self) -> Vec<AnnouncePayload> {
+        use nodalync_types::{ContentType, L1Summary};
+
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = match conn.prepare(
+            "SELECT hash, content_type, title, l1_summary, price, addresses, publisher_peer_id FROM announcements ORDER BY received_at DESC",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+
+        let rows = stmt.query_map([], |row| {
+            let hash_bytes: Vec<u8> = row.get(0)?;
+            let content_type_u8: u8 = row.get(1)?;
+            let title: String = row.get(2)?;
+            let l1_summary_json: String = row.get(3)?;
+            let price: i64 = row.get(4)?;
+            let addresses_json: String = row.get(5)?;
+            let publisher_peer_id: Option<String> = row.get(6)?;
+
+            let mut hash_arr = [0u8; 32];
+            if hash_bytes.len() == 32 {
+                hash_arr.copy_from_slice(&hash_bytes);
+            }
+            let hash = Hash(hash_arr);
+
+            let content_type = ContentType::from_u8(content_type_u8).unwrap_or(ContentType::L0);
+            let l1_summary: L1Summary =
+                serde_json::from_str(&l1_summary_json).unwrap_or_else(|_| L1Summary::empty(hash));
+            let addresses: Vec<String> = serde_json::from_str(&addresses_json).unwrap_or_default();
+
+            Ok(AnnouncePayload {
+                hash,
+                content_type,
+                title,
+                l1_summary,
+                price: price as u64,
+                addresses,
+                publisher_peer_id,
+            })
+        });
+
+        match rows {
+            Ok(iter) => iter.filter_map(|r| r.ok()).collect(),
+            Err(_) => Vec::new(),
+        }
     }
 }
 

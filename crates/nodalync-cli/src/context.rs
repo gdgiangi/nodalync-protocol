@@ -8,21 +8,110 @@ use nodalync_ops::{DefaultNodeOperations, OpsConfig};
 use nodalync_settle::{AccountId, MockSettlement, Settlement};
 use nodalync_store::{NodeState, NodeStateConfig};
 
+#[cfg(feature = "hedera")]
+use nodalync_settle::{HederaConfig, HederaSettlement};
+
 use crate::config::CliConfig;
 use crate::error::{CliError, CliResult};
+use crate::prompt::get_identity_password;
 
-/// Get password from environment variable or interactive prompt.
-fn get_password() -> CliResult<String> {
-    if let Ok(pwd) = std::env::var("NODALYNC_PASSWORD") {
-        Ok(pwd)
-    } else if crate::prompt::is_interactive() {
-        crate::prompt::password("Enter password to unlock identity")
-            .map_err(|e| CliError::User(format!("Failed to read password: {}", e)))
-    } else {
-        Err(CliError::User(
-            "Set NODALYNC_PASSWORD or run interactively".into(),
-        ))
+/// Create settlement instance based on configuration.
+///
+/// Supports:
+/// - "mock" (default): In-memory mock settlement
+/// - "hedera-testnet": Hedera testnet (requires `hedera` feature)
+/// - "hedera-mainnet": Hedera mainnet (requires `hedera` feature)
+///
+/// For Hedera, credentials can come from:
+/// 1. Config file (account_id, key_path, contract_id)
+/// 2. Environment variables (HEDERA_ACCOUNT_ID, HEDERA_PRIVATE_KEY, HEDERA_CONTRACT_ID)
+#[allow(unused_variables)]
+async fn create_settlement(config: &CliConfig) -> CliResult<Arc<dyn Settlement>> {
+    let network = config.settlement.network.as_str();
+
+    match network {
+        #[cfg(feature = "hedera")]
+        "hedera-testnet" | "hedera-mainnet" => create_hedera_settlement(config, network).await,
+        #[cfg(not(feature = "hedera"))]
+        "hedera-testnet" | "hedera-mainnet" => Err(CliError::User(
+            "Hedera settlement requires the 'hedera' feature. \
+                 Rebuild with: cargo build --features hedera"
+                .into(),
+        )),
+        _ => {
+            // Default to mock settlement
+            tracing::debug!("Using mock settlement");
+            Ok(Arc::new(MockSettlement::with_balance(
+                AccountId::simple(1),
+                1_000_000_000, // 10 HBAR in tinybars
+            )))
+        }
     }
+}
+
+/// Create Hedera settlement instance.
+#[cfg(feature = "hedera")]
+async fn create_hedera_settlement(
+    config: &CliConfig,
+    network: &str,
+) -> CliResult<Arc<dyn Settlement>> {
+    // Get account ID from config or environment
+    let account_id = config
+        .settlement
+        .account_id
+        .clone()
+        .or_else(|| std::env::var("HEDERA_ACCOUNT_ID").ok())
+        .ok_or_else(|| {
+            CliError::config(
+                "Hedera account ID required. Set in config or HEDERA_ACCOUNT_ID env var",
+            )
+        })?;
+
+    // Get contract ID from config or environment
+    let contract_id = config
+        .settlement
+        .contract_id
+        .clone()
+        .or_else(|| std::env::var("HEDERA_CONTRACT_ID").ok())
+        .ok_or_else(|| {
+            CliError::config(
+                "Hedera contract ID required. Set in config or HEDERA_CONTRACT_ID env var",
+            )
+        })?;
+
+    // Get private key path from config or write env var to temp file
+    let private_key_path = if let Some(ref path) = config.settlement.key_path {
+        path.clone()
+    } else if let Ok(key) = std::env::var("HEDERA_PRIVATE_KEY") {
+        // Write private key to a temporary file
+        let key_path = config.base_dir().join("hedera.key");
+        std::fs::write(&key_path, key.trim())?;
+        key_path
+    } else {
+        return Err(CliError::config(
+            "Hedera private key required. Set key_path in config or HEDERA_PRIVATE_KEY env var",
+        ));
+    };
+
+    // Create Hedera config
+    let hedera_config = if network == "hedera-mainnet" {
+        HederaConfig::mainnet(&account_id, private_key_path, &contract_id)
+    } else {
+        HederaConfig::testnet(&account_id, private_key_path, &contract_id)
+    };
+
+    tracing::info!(
+        network = network,
+        account = %account_id,
+        contract = %contract_id,
+        "Initializing Hedera settlement"
+    );
+
+    let settlement = HederaSettlement::new(hedera_config)
+        .await
+        .map_err(|e| CliError::config(format!("Failed to initialize Hedera: {}", e)))?;
+
+    Ok(Arc::new(settlement))
 }
 
 /// Convert a nodalync private key to a libp2p keypair.
@@ -33,6 +122,14 @@ fn to_libp2p_keypair(private_key: &PrivateKey) -> CliResult<libp2p::identity::Ke
         .map_err(|e| CliError::User(format!("Invalid Ed25519 key: {}", e)))?;
     let ed_keypair = libp2p::identity::ed25519::Keypair::from(secret);
     Ok(libp2p::identity::Keypair::from(ed_keypair))
+}
+
+/// Get the libp2p PeerId from a private key.
+///
+/// This is used for bootstrap addresses in multi-node configurations.
+pub fn get_libp2p_peer_id(private_key: &PrivateKey) -> CliResult<libp2p::PeerId> {
+    let keypair = to_libp2p_keypair(private_key)?;
+    Ok(keypair.public().to_peer_id())
 }
 
 /// Node context containing all initialized components.
@@ -97,7 +194,7 @@ impl NodeContext {
 
         // Load identity for network operations (requires password)
         let (private_key, public_key) = if config.network.enabled {
-            let password = get_password()?;
+            let password = get_identity_password()?;
             state.identity.load(&password)?
         } else {
             // For local-only, we don't need the private key
@@ -151,11 +248,8 @@ impl NodeContext {
             None
         };
 
-        // Create settlement
-        let settlement: Arc<dyn Settlement> = Arc::new(MockSettlement::with_balance(
-            AccountId::simple(1),
-            1_000_000_000,
-        ));
+        // Create settlement based on config
+        let settlement = create_settlement(&config).await?;
 
         // Create operations with optional network
         let ops = if let Some(ref net) = network {
