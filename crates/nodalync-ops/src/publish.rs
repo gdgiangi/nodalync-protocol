@@ -60,21 +60,26 @@ where
             validate_price(price)?;
         }
 
-        // 3. Update visibility, price
+        // 3. Extract L1 summary to get topics
+        let l1_summary = self.extract_l1_summary(hash)?;
+
+        // 4. Update visibility, price, and tags from L1 extraction
         manifest.visibility = visibility;
         manifest.economics.price = price;
+        manifest.metadata.tags = l1_summary.primary_topics.clone();
         manifest.updated_at = current_timestamp();
 
-        // 4. Save manifest
+        // 5. Save manifest
         self.state.manifests.update(&manifest)?;
 
-        // 5. DHT announce (if network available)
-        // Extract L1 summary before borrowing network to avoid borrow checker issues
-        let l1_summary = self.extract_l1_summary(hash)?;
+        // 6. DHT announce (if network available)
         if let Some(network) = self.network().cloned() {
             let payload =
                 Self::create_announce_payload(&manifest, l1_summary, network.listen_addresses());
-            network.dht_announce(*hash, payload).await?;
+            // DHT announce is best-effort - don't fail publish if DHT unavailable
+            if let Err(e) = network.dht_announce(*hash, payload).await {
+                tracing::warn!("DHT announce failed (content still published locally): {}", e);
+            }
         }
 
         Ok(())
@@ -124,9 +129,11 @@ where
         // Save manifest
         self.state.manifests.update(&manifest)?;
 
-        // DHT remove (if network available)
+        // DHT remove (if network available) - best-effort
         if let Some(network) = self.network() {
-            network.dht_remove(hash).await?;
+            if let Err(e) = network.dht_remove(hash).await {
+                tracing::warn!("DHT remove failed (content still unpublished locally): {}", e);
+            }
         }
 
         Ok(())
