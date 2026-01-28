@@ -17,8 +17,8 @@ members = [
 
 [workspace.package]
 # Note: version is NOT workspace-inherited. See VERSIONING below.
-# Protocol crates: 0.2.x (matches spec)
-# Application crates: 0.5.x (CLI/MCP releases)
+# Protocol crates: 0.4.x (matches spec)
+# Application crates: 0.7.x (CLI/MCP releases)
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/nodalync/nodalync"
@@ -48,7 +48,7 @@ futures = "0.3"
 libp2p = { version = "0.53", features = ["tcp", "noise", "yamux", "dns", "kad", "gossipsub", "request-response", "macros"] }
 
 # CLI
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.5", features = ["derive", "env"] }
 clap_complete = "4.5"
 indicatif = "0.17"
 colored = "2.1"

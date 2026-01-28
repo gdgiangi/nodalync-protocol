@@ -108,7 +108,10 @@ pub use l2::{
     expand_curie, is_valid_uri, validate_l2_content, validate_l2_provenance, validate_l2_publish,
 };
 pub use message::{is_valid_message_type, validate_message, validate_message_basic};
-pub use payment::{validate_payment, validate_payment_basic, BondChecker, PublicKeyLookup};
+pub use payment::{
+    construct_payment_message, validate_payment, validate_payment_basic, BondChecker,
+    PublicKeyLookup,
+};
 pub use provenance::validate_provenance;
 pub use version::validate_version;
 

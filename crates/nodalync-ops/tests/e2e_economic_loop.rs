@@ -55,17 +55,39 @@ fn current_timestamp() -> u64 {
         .as_millis() as u64
 }
 
-fn create_payment(amount: u64, recipient: PeerId, query_hash: Hash) -> nodalync_types::Payment {
+fn create_payment(
+    amount: u64,
+    recipient: PeerId,
+    query_hash: Hash,
+    channel_id: Hash,
+    provenance: Vec<ProvenanceEntry>,
+) -> nodalync_types::Payment {
     nodalync_types::Payment::new(
         content_hash(&[query_hash.0.as_slice(), &amount.to_be_bytes()].concat()),
-        Hash([0u8; 32]), // No channel for this test
+        channel_id,
         amount,
         recipient,
         query_hash,
-        vec![],
+        provenance,
         current_timestamp(),
         Signature::from_bytes([0u8; 64]),
     )
+}
+
+/// Open a payment channel between two nodes.
+/// Returns the channel_id.
+fn open_channel_between(
+    owner: &mut TestNode,
+    requester_peer_id: &PeerId,
+    channel_name: &str,
+) -> Hash {
+    let channel_id = content_hash(channel_name.as_bytes());
+    // Accept the channel from the requester's perspective (they deposited funds)
+    owner
+        .ops
+        .accept_payment_channel(&channel_id, requester_peer_id, 10_000, 20_000)
+        .unwrap();
+    channel_id
 }
 
 // ============ E2E TESTS ============
@@ -112,12 +134,22 @@ async fn test_e2e_simple_l0_publish_query_settle() {
     // In a real network, Bob would discover Alice via DHT and send request
     // Here we simulate by calling Alice's handler directly
 
-    let payment = create_payment(100, manifest.owner, hash);
+    // Open a payment channel between Bob and Alice (required for paid content)
+    let channel_id = open_channel_between(&mut alice, &bob.peer_id(), "bob-alice-channel");
+
+    let payment = create_payment(
+        100,
+        manifest.owner,
+        hash,
+        channel_id,
+        manifest.provenance.root_l0l1.clone(),
+    );
     let query_request = QueryRequestPayload {
         hash,
         query: None,
         payment,
         version_spec: None,
+        payment_nonce: 1,
     };
 
     // Simulate Bob sending query to Alice
@@ -254,12 +286,22 @@ async fn test_e2e_multihop_provenance_distribution() {
     bob.ops.state.manifests.store(&l3_manifest).unwrap();
 
     // === CAROL: Query Bob's L3 ===
-    let payment = create_payment(100, bob.peer_id(), l3_hash);
+    // Open a payment channel between Carol and Bob (required for paid content)
+    let channel_id = open_channel_between(&mut bob, &carol.peer_id(), "carol-bob-channel");
+
+    let payment = create_payment(
+        100,
+        bob.peer_id(),
+        l3_hash,
+        channel_id,
+        l3_provenance.root_l0l1.clone(),
+    );
     let query_request = QueryRequestPayload {
         hash: l3_hash,
         query: None,
         payment,
         version_spec: None,
+        payment_nonce: 1,
     };
 
     let response = bob
@@ -331,14 +373,25 @@ async fn test_e2e_batch_settlement() {
 
     let manifest = alice.ops.get_content_manifest(&hash).unwrap().unwrap();
 
-    // Bob queries 3 times
-    for _ in 0..3 {
-        let payment = create_payment(10, manifest.owner, hash);
+    // Open payment channels for Bob and Carol
+    let bob_channel = open_channel_between(&mut alice, &bob.peer_id(), "bob-batch-channel");
+    let carol_channel = open_channel_between(&mut alice, &carol.peer_id(), "carol-batch-channel");
+
+    // Bob queries 3 times (with incrementing nonces)
+    for nonce in 1..=3 {
+        let payment = create_payment(
+            10,
+            manifest.owner,
+            hash,
+            bob_channel,
+            manifest.provenance.root_l0l1.clone(),
+        );
         let request = QueryRequestPayload {
             hash,
             query: None,
             payment,
             version_spec: None,
+            payment_nonce: nonce,
         };
         alice
             .ops
@@ -347,14 +400,21 @@ async fn test_e2e_batch_settlement() {
             .unwrap();
     }
 
-    // Carol queries 2 times
-    for _ in 0..2 {
-        let payment = create_payment(10, manifest.owner, hash);
+    // Carol queries 2 times (with incrementing nonces)
+    for nonce in 1..=2 {
+        let payment = create_payment(
+            10,
+            manifest.owner,
+            hash,
+            carol_channel,
+            manifest.provenance.root_l0l1.clone(),
+        );
         let request = QueryRequestPayload {
             hash,
             query: None,
             payment,
             version_spec: None,
+            payment_nonce: nonce,
         };
         alice
             .ops
@@ -405,13 +465,23 @@ async fn test_e2e_economics_tracking() {
     assert_eq!(manifest_before.economics.total_queries, 0);
     assert_eq!(manifest_before.economics.total_revenue, 0);
 
+    // Open a payment channel for Bob
+    let channel_id = open_channel_between(&mut alice, &bob.peer_id(), "bob-economics-channel");
+
     // Query content
-    let payment = create_payment(100, manifest_before.owner, hash);
+    let payment = create_payment(
+        100,
+        manifest_before.owner,
+        hash,
+        channel_id,
+        manifest_before.provenance.root_l0l1.clone(),
+    );
     let request = QueryRequestPayload {
         hash,
         query: None,
         payment,
         version_spec: None,
+        payment_nonce: 1,
     };
     alice
         .ops
@@ -439,13 +509,15 @@ async fn test_e2e_access_control() {
     let hash = alice.ops.create_content(content, metadata).unwrap();
     // Don't publish - stays private
 
-    // Bob tries to query
-    let payment = create_payment(100, alice.peer_id(), hash);
+    // Bob tries to query (no channel needed - will fail at access check first)
+    let dummy_channel = content_hash(b"dummy-channel");
+    let payment = create_payment(100, alice.peer_id(), hash, dummy_channel, vec![]);
     let request = QueryRequestPayload {
         hash,
         query: None,
         payment,
         version_spec: None,
+        payment_nonce: 1,
     };
 
     let result = alice
@@ -477,15 +549,23 @@ async fn test_e2e_payment_validation() {
         .await
         .unwrap();
 
-    // Bob tries to pay less
+    // Bob tries to pay less (will fail at payment amount check before channel check)
     let manifest = alice.ops.get_content_manifest(&hash).unwrap().unwrap();
-    let payment = create_payment(100, manifest.owner, hash); // Only 100, needs 1000
+    let dummy_channel = content_hash(b"dummy-payment-channel");
+    let payment = create_payment(
+        100, // Only 100, needs 1000
+        manifest.owner,
+        hash,
+        dummy_channel,
+        manifest.provenance.root_l0l1.clone(),
+    );
 
     let request = QueryRequestPayload {
         hash,
         query: None,
         payment,
         version_spec: None,
+        payment_nonce: 1,
     };
 
     let result = alice

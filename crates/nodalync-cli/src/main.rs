@@ -207,7 +207,19 @@ async fn run(cli: Cli) -> CliResult<()> {
             budget,
             auto_approve,
             enable_network,
-        } => commands::mcp_server(config, budget, auto_approve, enable_network).await?,
+            hedera_account_id,
+            hedera_private_key,
+            hedera_contract_id,
+            hedera_network,
+        } => {
+            let hedera_args = commands::mcp_server::HederaArgs {
+                account_id: hedera_account_id,
+                private_key: hedera_private_key,
+                contract_id: hedera_contract_id,
+                network: hedera_network,
+            };
+            commands::mcp_server(config, budget, auto_approve, enable_network, hedera_args).await?
+        }
 
         // Search command
         Commands::Search {

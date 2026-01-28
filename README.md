@@ -39,21 +39,21 @@ Get your node running in under 5 minutes: **[QUICKSTART.md](./QUICKSTART.md)**
 
 ### Status
 
-**Protocol v0.3.0** · **CLI v0.6.0**
+**Protocol v0.4.0** · **CLI v0.7.0**
 
 | Layer | Crate | Version | Description |
 |-------|-------|---------|-------------|
-| Protocol | `nodalync-crypto` | 0.3.0 | Hashing (SHA-256), Ed25519 signing, PeerId derivation |
-| Protocol | `nodalync-types` | 0.3.0 | All data structures including L2 Entity Graph |
-| Protocol | `nodalync-wire` | 0.3.0 | Deterministic CBOR serialization, 21 message types |
-| Protocol | `nodalync-store` | 0.3.0 | SQLite manifests, filesystem content, settlement queue |
-| Protocol | `nodalync-valid` | 0.3.0 | Content, provenance, payment, L2 validation |
-| Protocol | `nodalync-econ` | 0.3.0 | 95/5 revenue distribution, Merkle batching |
-| Protocol | `nodalync-ops` | 0.3.0 | CREATE, DERIVE, BUILD_L2, MERGE_L2, QUERY |
-| Protocol | `nodalync-net` | 0.3.0 | libp2p (TCP/Noise/yamux), Kademlia DHT, GossipSub |
-| Protocol | `nodalync-settle` | 0.3.0 | Hedera settlement, smart contract deployed to testnet |
-| App | `nodalync-cli` | 0.6.0 | Full CLI with daemon mode, health endpoints |
-| App | `nodalync-mcp` | 0.6.0 | MCP server for AI agent integration |
+| Protocol | `nodalync-crypto` | 0.4.0 | Hashing (SHA-256), Ed25519 signing, PeerId derivation |
+| Protocol | `nodalync-types` | 0.4.0 | All data structures including L2 Entity Graph |
+| Protocol | `nodalync-wire` | 0.4.0 | Deterministic CBOR serialization, 21 message types |
+| Protocol | `nodalync-store` | 0.4.0 | SQLite manifests, filesystem content, settlement queue |
+| Protocol | `nodalync-valid` | 0.4.0 | Content, provenance, payment, L2 validation |
+| Protocol | `nodalync-econ` | 0.4.0 | 95/5 revenue distribution, Merkle batching |
+| Protocol | `nodalync-ops` | 0.4.0 | CREATE, DERIVE, BUILD_L2, MERGE_L2, QUERY |
+| Protocol | `nodalync-net` | 0.4.0 | libp2p (TCP/Noise/yamux), Kademlia DHT, GossipSub |
+| Protocol | `nodalync-settle` | 0.4.0 | Hedera settlement, smart contract deployed to testnet |
+| App | `nodalync-cli` | 0.7.0 | Full CLI with daemon mode, health endpoints |
+| App | `nodalync-mcp` | 0.7.0 | MCP server for AI agent integration |
 
 **Hedera Testnet:**
 
@@ -83,8 +83,8 @@ cargo build --workspace
 # Run tests (776+ tests)
 cargo test --workspace
 
-# Build with Hedera support (requires protoc)
-cargo build --workspace --features hedera-sdk
+# Build CLI with Hedera settlement support (requires protoc)
+cargo build --release -p nodalync-cli --features hedera-sdk
 
 # Build documentation
 cargo doc --workspace --no-deps --open
@@ -182,23 +182,23 @@ This repository uses **split versioning** to distinguish protocol stability from
 
 | Component | Version | Stability | Tag Pattern | Release Contents |
 |-----------|---------|-----------|-------------|------------------|
-| **Protocol crates** | `0.3.x` | Stable, spec-driven | `protocol-v*` | GitHub release only |
-| **Application crates** | `0.6.x` | Feature releases | `v*` | Binaries + Docker |
+| **Protocol crates** | `0.4.x` | Stable, spec-driven | `protocol-v*` | GitHub release only |
+| **Application crates** | `0.7.x` | Feature releases | `v*` | Binaries + Docker |
 
 **Protocol crates** (`nodalync-crypto`, `nodalync-types`, `nodalync-wire`, `nodalync-store`, `nodalync-valid`, `nodalync-econ`, `nodalync-ops`, `nodalync-net`, `nodalync-settle`):
-- Version tracks the [protocol specification](./docs/spec.md) (currently v0.3.0)
+- Version tracks the [protocol specification](./docs/spec.md) (currently v0.4.0)
 - Changes are rare and require spec updates
 - Breaking changes require major version bump
-- Tag `protocol-v0.3.0` → creates GitHub release (libraries, no binaries)
+- Tag `protocol-v0.4.0` → creates GitHub release (libraries, no binaries)
 
 **Application crates** (`nodalync-cli`, `nodalync-mcp`):
 - Version tracks CLI/MCP features
 - Independent release cadence
-- Tag `v0.6.0` → builds binaries for all platforms + Docker images
+- Tag `v0.7.0` → builds binaries for all platforms + Docker images
 
-**For users:** Download releases tagged `v*` (e.g., `v0.6.0`). This is the CLI version.
+**For users:** Download releases tagged `v*` (e.g., `v0.7.0`). This is the CLI version.
 
-**For developers:** Protocol crate versions indicate wire compatibility. Same `0.3.x` = compatible.
+**For developers:** Protocol crate versions indicate wire compatibility. Same `0.4.x` = compatible.
 
 ---
 

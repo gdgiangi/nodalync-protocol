@@ -22,9 +22,10 @@ use nodalync_types::{ContentType, Visibility};
 
 use crate::budget::{hbar_to_tinybars, tinybars_to_hbar, BudgetTracker};
 use crate::tools::{
-    hash_to_string, string_to_hash, HealthStatusOutput, ListSourcesInput, ListSourcesOutput,
-    QueryKnowledgeInput, QueryKnowledgeOutput, SearchNetworkInput, SearchNetworkOutput,
-    SearchResultInfo, SourceInfo,
+    hash_to_string, string_to_hash, DepositHbarInput, DepositHbarOutput, GetChannelStatusOutput,
+    GetHederaBalanceOutput, HealthStatusOutput, ListSourcesInput, ListSourcesOutput,
+    OpenChannelInput, OpenChannelOutput, QueryKnowledgeInput, QueryKnowledgeOutput,
+    SearchNetworkInput, SearchNetworkOutput, SearchResultInfo, SourceInfo,
 };
 
 /// Configuration for the MCP server.
@@ -40,6 +41,21 @@ pub struct McpServerConfig {
     pub enable_network: bool,
     /// Bootstrap nodes to connect to (multiaddr strings).
     pub bootstrap_nodes: Vec<String>,
+    /// Optional Hedera configuration for on-chain settlement.
+    pub hedera: Option<HederaConfig>,
+}
+
+/// Configuration for Hedera settlement integration.
+#[derive(Debug, Clone)]
+pub struct HederaConfig {
+    /// Hedera account ID (e.g., "0.0.7703962").
+    pub account_id: String,
+    /// Path to Hedera private key file.
+    pub private_key_path: std::path::PathBuf,
+    /// Settlement contract ID (e.g., "0.0.7729011").
+    pub contract_id: String,
+    /// Hedera network (testnet, mainnet, previewnet).
+    pub network: String,
 }
 
 /// Default bootstrap node address.
@@ -55,6 +71,7 @@ impl Default for McpServerConfig {
                 .unwrap_or_else(|| std::path::PathBuf::from("~/.nodalync")),
             enable_network: false,
             bootstrap_nodes: vec![DEFAULT_BOOTSTRAP_NODE.to_string()],
+            hedera: None,
         }
     }
 }
@@ -73,6 +90,10 @@ pub struct NodalyncMcpServer {
     tool_router: ToolRouter<Self>,
     /// Optional network node for live peer search.
     network: Option<Arc<NetworkNode>>,
+    /// Optional Hedera settlement for on-chain operations.
+    settlement: Option<Arc<dyn nodalync_settle::Settlement>>,
+    /// Hedera configuration (if enabled).
+    hedera_config: Option<HederaConfig>,
 }
 
 #[tool_router]
@@ -133,15 +154,81 @@ impl NodalyncMcpServer {
             None
         };
 
-        // Create operations with or without network
-        let ops = if let Some(ref net) = network {
-            DefaultNodeOperations::with_defaults_and_network(
+        // Create Hedera settlement if configured
+        let settlement: Option<Arc<dyn nodalync_settle::Settlement>> =
+            if let Some(ref hedera) = config.hedera {
+                info!(
+                    account_id = %hedera.account_id,
+                    contract_id = %hedera.contract_id,
+                    network = %hedera.network,
+                    "Initializing Hedera settlement..."
+                );
+
+                #[cfg(feature = "hedera-sdk")]
+                {
+                    // Parse network
+                    let network = match hedera.network.to_lowercase().as_str() {
+                        "mainnet" => nodalync_settle::HederaNetwork::Mainnet,
+                        "previewnet" => nodalync_settle::HederaNetwork::Previewnet,
+                        _ => nodalync_settle::HederaNetwork::Testnet,
+                    };
+
+                    // Create Hedera config
+                    let hedera_config = nodalync_settle::HederaConfig {
+                        network,
+                        account_id: hedera.account_id.clone(),
+                        private_key_path: hedera.private_key_path.clone(),
+                        contract_id: hedera.contract_id.clone(),
+                        gas: nodalync_settle::GasConfig::default(),
+                        retry: nodalync_settle::RetryConfig::default(),
+                    };
+
+                    // Initialize real Hedera settlement
+                    let settlement = nodalync_settle::HederaSettlement::new(hedera_config)
+                        .await
+                        .map_err(|e| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                format!("Failed to initialize Hedera settlement: {}", e),
+                            )
+                        })?;
+
+                    info!("Hedera settlement initialized successfully");
+                    Some(Arc::new(settlement) as Arc<dyn nodalync_settle::Settlement>)
+                }
+
+                #[cfg(not(feature = "hedera-sdk"))]
+                {
+                    return Err(Box::new(std::io::Error::other(
+                        "Hedera settlement requires the 'hedera-sdk' feature. \
+                         Build with: cargo build --features hedera-sdk",
+                    )));
+                }
+            } else {
+                None
+            };
+
+        // Create operations with network and/or settlement
+        let ops = match (&network, &settlement) {
+            (Some(net), Some(settle)) => {
+                DefaultNodeOperations::with_defaults_network_and_settlement(
+                    state,
+                    peer_id,
+                    Arc::clone(net) as Arc<dyn nodalync_net::Network>,
+                    Arc::clone(settle),
+                )
+            }
+            (Some(net), None) => DefaultNodeOperations::with_defaults_and_network(
                 state,
                 peer_id,
                 Arc::clone(net) as Arc<dyn nodalync_net::Network>,
-            )
-        } else {
-            DefaultNodeOperations::with_defaults(state, peer_id)
+            ),
+            (None, Some(settle)) => DefaultNodeOperations::with_defaults_and_settlement(
+                state,
+                peer_id,
+                Arc::clone(settle),
+            ),
+            (None, None) => DefaultNodeOperations::with_defaults(state, peer_id),
         };
 
         // Create budget tracker
@@ -151,6 +238,7 @@ impl NodalyncMcpServer {
             budget_hbar = config.budget_hbar,
             auto_approve_hbar = config.auto_approve_hbar,
             network_enabled = config.enable_network,
+            hedera_enabled = config.hedera.is_some(),
             "MCP server initialized"
         );
 
@@ -159,6 +247,8 @@ impl NodalyncMcpServer {
             budget: Arc::new(budget),
             tool_router: Self::tool_router(),
             network,
+            settlement,
+            hedera_config: config.hedera.clone(),
         })
     }
 
@@ -586,6 +676,173 @@ impl NodalyncMcpServer {
 
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
+
+    /// Get the Hedera account balance.
+    ///
+    /// Returns the current balance of the Hedera account used for settlement.
+    #[tool(
+        description = "Get Hedera account balance. Returns the current balance of the Hedera account configured for payment settlement. Requires Hedera to be configured."
+    )]
+    async fn get_hedera_balance(&self) -> Result<CallToolResult, McpError> {
+        let Some(settlement) = &self.settlement else {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Hedera settlement is not configured. Start the MCP server with --hedera-account-id and --hedera-private-key options.",
+            )]));
+        };
+
+        let Some(config) = &self.hedera_config else {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Hedera configuration not found.",
+            )]));
+        };
+
+        let balance = settlement
+            .get_balance()
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let output = GetHederaBalanceOutput {
+            balance_tinybars: balance,
+            balance_hbar: tinybars_to_hbar(balance),
+            account_id: config.account_id.clone(),
+            network: config.network.clone(),
+        };
+
+        info!(
+            balance_hbar = output.balance_hbar,
+            account_id = %output.account_id,
+            "Hedera balance requested"
+        );
+
+        let json = serde_json::to_string_pretty(&output)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    /// Deposit HBAR to the settlement contract.
+    ///
+    /// Deposits funds to enable payment channel operations.
+    #[tool(
+        description = "Deposit HBAR to the Nodalync settlement contract. This funds your account for opening payment channels and settling transactions. Requires Hedera to be configured."
+    )]
+    async fn deposit_hbar(
+        &self,
+        Parameters(input): Parameters<DepositHbarInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let Some(settlement) = &self.settlement else {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Hedera settlement is not configured.",
+            )]));
+        };
+
+        let amount_tinybars = hbar_to_tinybars(input.amount_hbar);
+
+        let tx_id = settlement
+            .deposit(amount_tinybars)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let new_balance = settlement
+            .get_balance()
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let output = DepositHbarOutput {
+            transaction_id: tx_id.to_string(),
+            amount_tinybars,
+            new_balance_tinybars: new_balance,
+        };
+
+        info!(
+            amount_hbar = input.amount_hbar,
+            new_balance_hbar = tinybars_to_hbar(new_balance),
+            "Deposit completed"
+        );
+
+        let json = serde_json::to_string_pretty(&output)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    /// Open a payment channel with a peer.
+    ///
+    /// Creates a new payment channel for off-chain micropayments.
+    #[tool(
+        description = "Open a payment channel with a peer. Channels enable fast off-chain micropayments for content queries. The deposit is locked until the channel is closed."
+    )]
+    async fn open_channel(
+        &self,
+        Parameters(input): Parameters<OpenChannelInput>,
+    ) -> Result<CallToolResult, McpError> {
+        // Parse peer ID
+        let peer_bytes = bs58::decode(&input.peer_id)
+            .into_vec()
+            .map_err(|_| McpError::invalid_params("Invalid peer ID format", None))?;
+
+        if peer_bytes.len() != 20 {
+            return Err(McpError::invalid_params("Peer ID must be 20 bytes", None));
+        }
+
+        let mut peer_arr = [0u8; 20];
+        peer_arr.copy_from_slice(&peer_bytes);
+        let peer_id = nodalync_crypto::PeerId(peer_arr);
+
+        let deposit_tinybars = hbar_to_tinybars(input.deposit_hbar);
+
+        let mut ops = self.ops.lock().await;
+        let channel = ops
+            .open_payment_channel(&peer_id, deposit_tinybars)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let output = OpenChannelOutput {
+            channel_id: hash_to_string(&channel.channel_id),
+            transaction_id: None, // MVP: local only
+            balance_tinybars: channel.my_balance,
+            peer_id: input.peer_id,
+        };
+
+        info!(
+            channel_id = %output.channel_id,
+            deposit_hbar = input.deposit_hbar,
+            "Channel opened"
+        );
+
+        let json = serde_json::to_string_pretty(&output)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    /// Get the current channel and settlement status.
+    #[tool(
+        description = "Get the status of payment channels and settlement. Returns whether Hedera is configured, number of open channels, and pending settlement amounts."
+    )]
+    async fn get_channel_status(&self) -> Result<CallToolResult, McpError> {
+        let ops = self.ops.lock().await;
+
+        let pending_settlement = ops.get_pending_settlement_total().unwrap_or(0);
+
+        let output = GetChannelStatusOutput {
+            hedera_configured: self.settlement.is_some(),
+            open_channels: 0,          // TODO: Add channel listing to ops
+            total_balance_tinybars: 0, // TODO: Add balance aggregation
+            pending_settlement_tinybars: pending_settlement,
+        };
+
+        info!(
+            hedera_configured = output.hedera_configured,
+            pending_settlement_hbar = tinybars_to_hbar(pending_settlement),
+            "Channel status requested"
+        );
+
+        let json = serde_json::to_string_pretty(&output)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
 }
 
 /// Knowledge resource URI prefix.
@@ -865,6 +1122,7 @@ mod tests {
             data_dir: temp_dir.path().to_path_buf(),
             enable_network: false,
             bootstrap_nodes: vec![],
+            hedera: None,
         }
     }
 

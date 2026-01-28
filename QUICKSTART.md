@@ -38,6 +38,9 @@ cd nodalync
 # Build release binary
 cargo build --release -p nodalync-cli
 
+# Build with Hedera settlement support (requires protoc)
+cargo build --release -p nodalync-cli --features hedera-sdk
+
 # Add to PATH (or move binary to /usr/local/bin)
 export PATH="$PWD/target/release:$PATH"
 ```
@@ -180,6 +183,14 @@ Connect Claude to your Nodalync node for AI-powered knowledge queries.
 
 ### Start the MCP Server
 
+**Basic (local content only):**
+```bash
+nodalync mcp-server \
+  --budget 1.0 \
+  --auto-approve 0.01
+```
+
+**With network search:**
 ```bash
 nodalync mcp-server \
   --budget 1.0 \
@@ -187,10 +198,26 @@ nodalync mcp-server \
   --enable-network
 ```
 
+**With Hedera settlement (testnet):**
+```bash
+nodalync mcp-server \
+  --budget 1.0 \
+  --auto-approve 0.01 \
+  --enable-network \
+  --hedera-account-id 0.0.XXXXX \
+  --hedera-private-key ~/.nodalync/hedera.key \
+  --hedera-contract-id 0.0.7729011 \
+  --hedera-network testnet
+```
+
 Options:
 - `--budget` - Maximum HBAR for this session (default: 1.0)
 - `--auto-approve` - Auto-approve queries below this price (default: 0.01)
 - `--enable-network` - Search network peers, not just local content
+- `--hedera-account-id` - Your Hedera account ID for settlement
+- `--hedera-private-key` - Path to your Hedera private key file
+- `--hedera-contract-id` - Settlement contract ID (default: 0.0.7729011)
+- `--hedera-network` - Network to use: testnet, mainnet, or previewnet
 
 ### Configure Claude Desktop
 
@@ -203,7 +230,10 @@ Add to your Claude Desktop config (`~/.config/claude/mcp.json` or similar):
       "command": "nodalync",
       "args": ["mcp-server", "--budget", "1.0", "--auto-approve", "0.01", "--enable-network"],
       "env": {
-        "NODALYNC_PASSWORD": "your-secure-password"
+        "NODALYNC_PASSWORD": "your-secure-password",
+        "NODALYNC_HEDERA_ACCOUNT_ID": "0.0.XXXXX",
+        "NODALYNC_HEDERA_KEY_PATH": "/path/to/hedera.key",
+        "NODALYNC_HEDERA_NETWORK": "testnet"
       }
     }
   }
@@ -214,6 +244,7 @@ Now Claude can:
 - Search knowledge in the Nodalync network
 - Query and pay for content automatically
 - Track provenance of information
+- Settle payments on Hedera (when configured)
 
 ---
 
@@ -241,8 +272,10 @@ docker compose down
 | `NODALYNC_PASSWORD` | Identity encryption password |
 | `NODALYNC_DATA_DIR` | Data directory (default: `~/.nodalync`) |
 | `RUST_LOG` | Log level (e.g., `nodalync=debug`) |
-| `HEDERA_ACCOUNT_ID` | For mainnet settlement |
-| `HEDERA_PRIVATE_KEY` | For mainnet settlement |
+| `NODALYNC_HEDERA_ACCOUNT_ID` | Hedera account ID for MCP settlement |
+| `NODALYNC_HEDERA_KEY_PATH` | Path to Hedera private key file |
+| `NODALYNC_HEDERA_CONTRACT_ID` | Settlement contract ID (default: 0.0.7729011) |
+| `NODALYNC_HEDERA_NETWORK` | Network: testnet, mainnet, or previewnet |
 
 ---
 

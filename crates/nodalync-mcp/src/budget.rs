@@ -1,10 +1,12 @@
 //! Budget tracking for MCP sessions.
 //!
 //! Tracks spending against a session budget to ensure AI assistants
-//! don't overspend on queries.
+//! don't overspend on queries. Optionally integrates with payment channels
+//! for on-chain budget verification.
 
-use nodalync_types::Amount;
+use nodalync_types::{Amount, Hash};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::RwLock;
 
 /// Tinybars per HBAR (10^8).
 pub const TINYBARS_PER_HBAR: u64 = 100_000_000;
@@ -15,6 +17,7 @@ pub const DEFAULT_AUTO_APPROVE_HBAR: f64 = 0.01;
 /// Budget tracker for MCP sessions.
 ///
 /// Thread-safe budget tracking with atomic operations.
+/// Optionally tracks a payment channel for on-chain budget verification.
 #[derive(Debug)]
 pub struct BudgetTracker {
     /// Total budget in tinybars.
@@ -23,6 +26,19 @@ pub struct BudgetTracker {
     spent: AtomicU64,
     /// Auto-approve threshold in tinybars.
     auto_approve_threshold: Amount,
+    /// Optional channel tracking for on-chain payments.
+    channel: RwLock<Option<ChannelInfo>>,
+}
+
+/// Information about a linked payment channel.
+#[derive(Debug, Clone)]
+pub struct ChannelInfo {
+    /// Channel ID.
+    pub channel_id: Hash,
+    /// Current channel balance (synced from ops).
+    pub balance: Amount,
+    /// Last sync timestamp.
+    pub last_sync: u64,
 }
 
 impl BudgetTracker {
@@ -35,6 +51,7 @@ impl BudgetTracker {
             total_budget,
             spent: AtomicU64::new(0),
             auto_approve_threshold,
+            channel: RwLock::new(None),
         }
     }
 
@@ -47,6 +64,30 @@ impl BudgetTracker {
             total_budget,
             spent: AtomicU64::new(0),
             auto_approve_threshold,
+            channel: RwLock::new(None),
+        }
+    }
+
+    /// Create a budget tracker backed by a payment channel.
+    ///
+    /// The channel balance becomes the actual budget, and spending
+    /// is verified against the channel.
+    pub fn with_channel(channel_id: Hash, balance: Amount, auto_approve_hbar: f64) -> Self {
+        let auto_approve_threshold = hbar_to_tinybars(auto_approve_hbar);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        Self {
+            total_budget: balance,
+            spent: AtomicU64::new(0),
+            auto_approve_threshold,
+            channel: RwLock::new(Some(ChannelInfo {
+                channel_id,
+                balance,
+                last_sync: now,
+            })),
         }
     }
 
@@ -151,12 +192,78 @@ impl BudgetTracker {
 
     /// Get budget status as a structured object for JSON serialization.
     pub fn status_json(&self) -> BudgetStatus {
+        let channel_info = self.channel.read().ok().and_then(|c| c.clone());
         BudgetStatus {
             total_hbar: self.total_budget_hbar(),
             spent_hbar: self.spent_hbar(),
             remaining_hbar: self.remaining_hbar(),
             auto_approve_hbar: self.auto_approve_threshold_hbar(),
+            channel_id: channel_info.as_ref().map(|c| format!("{:?}", c.channel_id)),
+            channel_balance_hbar: channel_info.map(|c| tinybars_to_hbar(c.balance)),
         }
+    }
+
+    /// Check if a payment channel is linked.
+    pub fn has_channel(&self) -> bool {
+        self.channel
+            .read()
+            .ok()
+            .map(|c| c.is_some())
+            .unwrap_or(false)
+    }
+
+    /// Get the linked channel ID if any.
+    pub fn channel_id(&self) -> Option<Hash> {
+        self.channel
+            .read()
+            .ok()
+            .and_then(|c| c.as_ref().map(|info| info.channel_id))
+    }
+
+    /// Get the channel balance if a channel is linked.
+    pub fn channel_balance(&self) -> Option<Amount> {
+        self.channel
+            .read()
+            .ok()
+            .and_then(|c| c.as_ref().map(|info| info.balance))
+    }
+
+    /// Set or update the linked payment channel.
+    pub fn set_channel(&self, channel_id: Hash, balance: Amount) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        if let Ok(mut channel) = self.channel.write() {
+            *channel = Some(ChannelInfo {
+                channel_id,
+                balance,
+                last_sync: now,
+            });
+        }
+    }
+
+    /// Update the channel balance from on-chain data.
+    pub fn sync_channel_balance(&self, new_balance: Amount) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        if let Ok(mut channel) = self.channel.write() {
+            if let Some(ref mut info) = *channel {
+                info.balance = new_balance;
+                info.last_sync = now;
+            }
+        }
+    }
+
+    /// Get remaining channel balance (channel balance - spent).
+    pub fn channel_remaining(&self) -> Amount {
+        self.channel_balance()
+            .unwrap_or(0)
+            .saturating_sub(self.spent())
     }
 }
 
@@ -171,6 +278,12 @@ pub struct BudgetStatus {
     pub remaining_hbar: f64,
     /// Auto-approve threshold in HBAR.
     pub auto_approve_hbar: f64,
+    /// Linked channel ID (if any).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+    /// Channel balance in HBAR (if channel linked).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_balance_hbar: Option<f64>,
 }
 
 /// Convert HBAR to tinybars.
@@ -282,5 +395,59 @@ mod tests {
         assert_eq!(status.spent_hbar, 0.25);
         assert_eq!(status.remaining_hbar, 0.75);
         assert_eq!(status.auto_approve_hbar, 0.05);
+        assert!(status.channel_id.is_none());
+    }
+
+    #[test]
+    fn test_budget_tracker_with_channel() {
+        let channel_id = Hash([1u8; 32]);
+        let balance = 50_000_000; // 0.5 HBAR
+
+        let tracker = BudgetTracker::with_channel(channel_id, balance, 0.01);
+
+        assert!(tracker.has_channel());
+        assert_eq!(tracker.channel_id(), Some(channel_id));
+        assert_eq!(tracker.channel_balance(), Some(balance));
+        assert_eq!(tracker.total_budget(), balance);
+    }
+
+    #[test]
+    fn test_budget_tracker_set_channel() {
+        let tracker = BudgetTracker::new(1.0);
+
+        assert!(!tracker.has_channel());
+
+        let channel_id = Hash([2u8; 32]);
+        tracker.set_channel(channel_id, 75_000_000);
+
+        assert!(tracker.has_channel());
+        assert_eq!(tracker.channel_id(), Some(channel_id));
+        assert_eq!(tracker.channel_balance(), Some(75_000_000));
+    }
+
+    #[test]
+    fn test_budget_tracker_sync_channel() {
+        let channel_id = Hash([3u8; 32]);
+        let tracker = BudgetTracker::with_channel(channel_id, 100_000_000, 0.01);
+
+        // Initial balance
+        assert_eq!(tracker.channel_balance(), Some(100_000_000));
+
+        // Sync with new balance
+        tracker.sync_channel_balance(80_000_000);
+        assert_eq!(tracker.channel_balance(), Some(80_000_000));
+    }
+
+    #[test]
+    fn test_channel_remaining() {
+        let channel_id = Hash([4u8; 32]);
+        let tracker = BudgetTracker::with_channel(channel_id, 100_000_000, 0.01);
+
+        // Full balance remaining
+        assert_eq!(tracker.channel_remaining(), 100_000_000);
+
+        // After spending
+        tracker.spend(30_000_000).unwrap();
+        assert_eq!(tracker.channel_remaining(), 70_000_000);
     }
 }

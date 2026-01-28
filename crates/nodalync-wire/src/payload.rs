@@ -165,6 +165,9 @@ pub struct QueryRequestPayload {
     pub payment: Payment,
     /// Optional version specification
     pub version_spec: Option<VersionSpec>,
+    /// Payment nonce for replay protection (must be > channel nonce)
+    #[serde(default)]
+    pub payment_nonce: u64,
 }
 
 /// Specification for which version to retrieve.

@@ -326,11 +326,17 @@ where
         );
 
         // Send query request
+        // Get next nonce for replay protection
+        // Note: In MVP, we use 1 as a placeholder. Full implementation
+        // will get the nonce from the payment channel with the owner.
+        let payment_nonce = 1u64;
+
         let request = QueryRequestPayload {
             hash: *hash,
             query: None,
             payment,
             version_spec: None,
+            payment_nonce,
         };
 
         let response = network.send_query(libp2p_peer, request).await?;
@@ -463,11 +469,15 @@ where
             Signature::from_bytes([0u8; 64]),
         );
 
+        // Placeholder nonce for MVP
+        let payment_nonce = 1u64;
+
         let request = QueryRequestPayload {
             hash: *hash,
             query: None,
             payment,
             version_spec: None,
+            payment_nonce,
         };
 
         match network.send_query(libp2p_peer, request).await {

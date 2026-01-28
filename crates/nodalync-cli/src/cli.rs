@@ -341,6 +341,22 @@ pub enum Commands {
         /// in real-time using the search_network tool.
         #[arg(long)]
         enable_network: bool,
+
+        /// Hedera account ID for settlement (e.g., 0.0.7703962).
+        #[arg(long, env = "NODALYNC_HEDERA_ACCOUNT_ID")]
+        hedera_account_id: Option<String>,
+
+        /// Path to Hedera private key file.
+        #[arg(long, env = "NODALYNC_HEDERA_KEY_PATH")]
+        hedera_private_key: Option<PathBuf>,
+
+        /// Hedera settlement contract ID (default: 0.0.7729011).
+        #[arg(long, env = "NODALYNC_HEDERA_CONTRACT_ID", default_value = "0.0.7729011")]
+        hedera_contract_id: String,
+
+        /// Hedera network (testnet, mainnet, previewnet).
+        #[arg(long, env = "NODALYNC_HEDERA_NETWORK", default_value = "testnet")]
+        hedera_network: String,
     },
 
     // =========================================================================

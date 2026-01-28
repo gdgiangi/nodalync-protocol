@@ -194,6 +194,76 @@ pub struct SearchResultInfo {
 }
 
 // ============================================================================
+// Hedera Settlement Tools
+// ============================================================================
+
+/// Output from the `get_hedera_balance` tool.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct GetHederaBalanceOutput {
+    /// Balance in tinybars.
+    pub balance_tinybars: u64,
+    /// Balance in HBAR (8 decimal places).
+    pub balance_hbar: f64,
+    /// Account ID.
+    pub account_id: String,
+    /// Network (testnet, mainnet, previewnet).
+    pub network: String,
+}
+
+/// Input for the `deposit_hbar` tool.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct DepositHbarInput {
+    /// Amount to deposit in HBAR.
+    pub amount_hbar: f64,
+}
+
+/// Output from the `deposit_hbar` tool.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct DepositHbarOutput {
+    /// Transaction ID.
+    pub transaction_id: String,
+    /// Amount deposited in tinybars.
+    pub amount_tinybars: u64,
+    /// New balance in tinybars.
+    pub new_balance_tinybars: u64,
+}
+
+/// Input for the `open_channel` tool.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct OpenChannelInput {
+    /// Peer ID to open channel with.
+    pub peer_id: String,
+    /// Initial deposit in HBAR.
+    pub deposit_hbar: f64,
+}
+
+/// Output from the `open_channel` tool.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct OpenChannelOutput {
+    /// Channel ID (base58 encoded).
+    pub channel_id: String,
+    /// Transaction ID from Hedera.
+    pub transaction_id: Option<String>,
+    /// Initial balance in the channel (tinybars).
+    pub balance_tinybars: u64,
+    /// Peer ID.
+    pub peer_id: String,
+}
+
+/// Output from the `get_channel_status` tool.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct GetChannelStatusOutput {
+    /// Whether Hedera settlement is configured.
+    pub hedera_configured: bool,
+    /// Number of open channels.
+    pub open_channels: u32,
+    /// Total balance across all channels (tinybars).
+    pub total_balance_tinybars: u64,
+    /// Pending settlement amount (tinybars).
+    pub pending_settlement_tinybars: u64,
+}
+
+// ============================================================================
 // Helper Functions
 // ============================================================================
 

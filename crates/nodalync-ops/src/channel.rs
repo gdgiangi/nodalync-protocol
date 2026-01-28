@@ -3,10 +3,10 @@
 //! This module implements payment channel operations as specified
 //! in Protocol Specification §7.3.
 
-use nodalync_crypto::{content_hash, Hash, PeerId};
+use nodalync_crypto::{content_hash, sign, Hash, PeerId, PrivateKey, Signature};
 use nodalync_store::ChannelStore;
-use nodalync_types::{Amount, Channel, Payment};
-use nodalync_valid::Validator;
+use nodalync_types::{Amount, Channel, Manifest, Payment, ProvenanceEntry};
+use nodalync_valid::{construct_payment_message, Validator};
 use nodalync_wire::{ChannelBalances, ChannelClosePayload, ChannelOpenPayload};
 use rand::Rng;
 
@@ -249,6 +249,88 @@ where
             _ => Ok(None),
         }
     }
+
+    /// Get the next payment nonce for a channel.
+    ///
+    /// Returns `channel.nonce + 1` if channel exists and is open.
+    pub fn get_next_payment_nonce(&self, peer: &PeerId) -> OpsResult<u64> {
+        match self.state.channels.get(peer)? {
+            Some(channel) if channel.is_open() => Ok(channel.nonce + 1),
+            Some(_) => Err(OpsError::ChannelNotOpen),
+            None => Err(OpsError::ChannelNotFound),
+        }
+    }
+}
+
+/// Sign a payment with the given private key.
+///
+/// Constructs the payment message and signs it, returning the updated signature.
+pub fn sign_payment(private_key: &PrivateKey, payment: &Payment) -> Signature {
+    let message = construct_payment_message(payment);
+    sign(private_key, &message)
+}
+
+/// Create a signed payment for a query.
+///
+/// This function creates a payment with proper signature for submitting
+/// a query request to a content owner.
+pub fn create_signed_payment(
+    private_key: &PrivateKey,
+    channel: &Channel,
+    amount: Amount,
+    recipient: PeerId,
+    query_hash: Hash,
+    provenance: Vec<ProvenanceEntry>,
+) -> (Payment, u64) {
+    let timestamp = current_timestamp();
+    let nonce = channel.nonce + 1;
+
+    // Create payment ID from content hash of payment details
+    let payment_id = content_hash(
+        &[
+            channel.channel_id.0.as_slice(),
+            &nonce.to_be_bytes(),
+            &amount.to_be_bytes(),
+            &recipient.0,
+        ]
+        .concat(),
+    );
+
+    // Create payment without signature first
+    let mut payment = Payment::new(
+        payment_id,
+        channel.channel_id,
+        amount,
+        recipient,
+        query_hash,
+        provenance,
+        timestamp,
+        Signature::from_bytes([0u8; 64]), // Placeholder
+    );
+
+    // Sign the payment
+    payment.signature = sign_payment(private_key, &payment);
+
+    (payment, nonce)
+}
+
+/// Create a signed payment from a manifest.
+///
+/// Convenience function that extracts provenance from the manifest.
+pub fn create_signed_payment_for_manifest(
+    private_key: &PrivateKey,
+    channel: &Channel,
+    manifest: &Manifest,
+    amount: Amount,
+) -> (Payment, u64) {
+    create_signed_payment(
+        private_key,
+        channel,
+        amount,
+        manifest.owner,
+        manifest.hash,
+        manifest.provenance.root_l0l1.clone(),
+    )
 }
 
 #[cfg(test)]
@@ -421,5 +503,76 @@ mod tests {
         // Check balance
         let balance = ops.get_channel_balance(&peer).unwrap().unwrap();
         assert_eq!(balance, 1000);
+    }
+
+    #[test]
+    fn test_payment_signature_roundtrip() {
+        use nodalync_crypto::verify;
+        use nodalync_valid::construct_payment_message;
+
+        // Generate keypair
+        let (private_key, public_key) = generate_identity();
+        let owner = peer_id_from_public_key(&public_key);
+        let channel_id = content_hash(b"test-channel");
+        let query_hash = content_hash(b"test-query");
+
+        // Create a channel
+        let mut channel = Channel::new(channel_id, owner, 1000, current_timestamp());
+        channel.mark_open(1000, 2000);
+
+        // Create and sign payment
+        let (payment, nonce) =
+            create_signed_payment(&private_key, &channel, 100, owner, query_hash, vec![]);
+
+        // Verify signature
+        let message = construct_payment_message(&payment);
+        assert!(verify(&public_key, &message, &payment.signature));
+        assert_eq!(nonce, 1); // First payment nonce should be 1
+    }
+
+    #[test]
+    fn test_payment_signature_invalid_key_fails() {
+        use nodalync_crypto::verify;
+        use nodalync_valid::construct_payment_message;
+
+        // Generate two keypairs
+        let (private_key, _) = generate_identity();
+        let (_, wrong_public_key) = generate_identity();
+
+        let owner = test_peer_id();
+        let channel_id = content_hash(b"test-channel");
+        let query_hash = content_hash(b"test-query");
+
+        // Create a channel
+        let mut channel = Channel::new(channel_id, owner, 1000, current_timestamp());
+        channel.mark_open(1000, 2000);
+
+        // Create and sign payment
+        let (payment, _) =
+            create_signed_payment(&private_key, &channel, 100, owner, query_hash, vec![]);
+
+        // Verify with wrong key should fail
+        let message = construct_payment_message(&payment);
+        assert!(!verify(&wrong_public_key, &message, &payment.signature));
+    }
+
+    #[test]
+    fn test_get_next_payment_nonce() {
+        let (mut ops, _temp) = create_test_ops();
+        let peer = test_peer_id();
+        let channel_id = content_hash(b"channel");
+
+        // No channel should fail
+        assert!(matches!(
+            ops.get_next_payment_nonce(&peer),
+            Err(OpsError::ChannelNotFound)
+        ));
+
+        // Accept channel (creates open channel)
+        ops.accept_payment_channel(&channel_id, &peer, 500, 1000)
+            .unwrap();
+
+        // Should get nonce = 1 (channel nonce starts at 0)
+        assert_eq!(ops.get_next_payment_nonce(&peer).unwrap(), 1);
     }
 }

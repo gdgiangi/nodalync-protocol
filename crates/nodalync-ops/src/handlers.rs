@@ -67,13 +67,14 @@ where
     /// CRITICAL: This handler:
     /// 1. Load manifest
     /// 2. Validate access
-    /// 3. Validate payment
-    /// 4. Update channel state (credit)
-    /// 5. Calculate ALL distributions via distribute_revenue()
-    /// 6. Enqueue ALL to settlement queue
-    /// 7. Update manifest economics
-    /// 8. Check settlement trigger (threshold/interval)
-    /// 9. Load and return content with receipt
+    /// 3. Validate payment amount
+    /// 4. Validate payment signature for paid content (channel, nonce, signature)
+    /// 5. Update channel state (credit)
+    /// 6. Calculate ALL distributions via distribute_revenue()
+    /// 7. Enqueue ALL to settlement queue
+    /// 8. Update manifest economics
+    /// 9. Check settlement trigger (threshold/interval)
+    /// 10. Load and return content with receipt
     pub async fn handle_query_request(
         &mut self,
         requester: &PeerId,
@@ -97,12 +98,54 @@ where
         // Check access control
         self.validator.validate_access(requester, &manifest)?;
 
-        // 3. Validate payment
+        // 3. Validate payment amount
         if payment_amount < manifest.economics.price {
             return Err(OpsError::PaymentInsufficient);
         }
 
-        // 4. Update channel state (credit - they pay us)
+        // 4. Validate payment signature for paid content
+        // Payment channels are REQUIRED for paid content queries.
+        if manifest.economics.price > 0 {
+            match self.state.channels.get(requester)? {
+                Some(channel) if channel.is_open() => {
+                    // Full payment validation: signature, nonce, amount, provenance
+                    // Note: We pass None for public key lookup in MVP. Full signature
+                    // verification requires a peer key registry.
+                    nodalync_valid::validate_payment(
+                        &request.payment,
+                        &channel,
+                        &manifest,
+                        None, // TODO: Get requester's public key from peer registry
+                        request.payment_nonce,
+                    )
+                    .map_err(|e| OpsError::PaymentValidationFailed(e.to_string()))?;
+
+                    // Verify payment nonce is strictly greater than channel nonce (replay prevention)
+                    if request.payment_nonce <= channel.nonce {
+                        return Err(OpsError::PaymentValidationFailed(format!(
+                            "payment nonce {} must be > channel nonce {}",
+                            request.payment_nonce, channel.nonce
+                        )));
+                    }
+                }
+                Some(_) => {
+                    // Channel exists but not open - require open channel for paid content
+                    return Err(OpsError::ChannelNotOpen);
+                }
+                None => {
+                    // No channel exists - require channel for paid content
+                    tracing::warn!(
+                        requester = %requester,
+                        hash = %request.hash,
+                        price = manifest.economics.price,
+                        "Paid content requested without payment channel"
+                    );
+                    return Err(OpsError::ChannelRequired);
+                }
+            }
+        }
+
+        // 5. Update channel state (credit - they pay us)
         if let Some(mut channel) = self.state.channels.get(requester)? {
             if channel.is_open() && payment_amount > 0 {
                 // Create payment record
@@ -131,19 +174,25 @@ where
                     .receive(payment.clone(), timestamp)
                     .map_err(|_| OpsError::InsufficientChannelBalance)?;
 
+                // Update nonce to prevent replay attacks
+                // Set to request nonce to track the highest seen nonce
+                if request.payment_nonce > channel.nonce {
+                    channel.nonce = request.payment_nonce;
+                }
+
                 self.state.channels.update(requester, &channel)?;
                 self.state.channels.add_payment(requester, payment)?;
             }
         }
 
-        // 5. Calculate ALL distributions via distribute_revenue()
+        // 6. Calculate ALL distributions via distribute_revenue()
         let distributions = distribute_revenue(
             payment_amount,
             &manifest.owner,
             &manifest.provenance.root_l0l1,
         );
 
-        // 6. Enqueue ALL to settlement queue
+        // 7. Enqueue ALL to settlement queue
         let payment_id =
             content_hash(&[request.hash.0.as_slice(), &timestamp.to_be_bytes()].concat());
 
@@ -158,16 +207,16 @@ where
             self.state.settlement.enqueue(queued)?;
         }
 
-        // 7. Update manifest economics
+        // 8. Update manifest economics
         manifest.economics.record_query(payment_amount);
         manifest.updated_at = timestamp;
         self.state.manifests.update(&manifest)?;
 
-        // 8. Check settlement trigger (threshold/interval)
+        // 9. Check settlement trigger (threshold/interval)
         // Don't fail the query if settlement fails
         let _ = self.trigger_settlement_batch().await;
 
-        // 9. Load and return content
+        // 10. Load and return content
         let content = self
             .state
             .content
@@ -599,7 +648,7 @@ mod tests {
     use crate::node_ops::DefaultNodeOperations;
     use nodalync_crypto::{content_hash, generate_identity, peer_id_from_public_key};
     use nodalync_store::{NodeStateConfig, SettlementQueueStore};
-    use nodalync_types::Metadata;
+    use nodalync_types::{Metadata, ProvenanceEntry};
     use nodalync_wire::ChannelBalances;
     use tempfile::TempDir;
 
@@ -625,13 +674,29 @@ mod tests {
         recipient: PeerId,
         query_hash: nodalync_crypto::Hash,
     ) -> Payment {
-        Payment::new(
-            content_hash(b"payment"),
-            content_hash(b"channel"),
+        create_test_payment_with_provenance(
             amount,
             recipient,
             query_hash,
+            content_hash(b"channel"),
             vec![],
+        )
+    }
+
+    fn create_test_payment_with_provenance(
+        amount: u64,
+        recipient: PeerId,
+        query_hash: nodalync_crypto::Hash,
+        channel_id: nodalync_crypto::Hash,
+        provenance: Vec<ProvenanceEntry>,
+    ) -> Payment {
+        Payment::new(
+            content_hash(b"payment"),
+            channel_id,
+            amount,
+            recipient,
+            query_hash,
+            provenance,
             current_timestamp(),
             Signature::from_bytes([0u8; 64]),
         )
@@ -691,14 +756,27 @@ mod tests {
 
         // Handle query request
         let requester = test_peer_id();
+
+        // Open a channel with the requester (required for paid content)
+        let channel_id = content_hash(b"test-query-channel");
+        ops.accept_payment_channel(&channel_id, &requester, 500, 1000)
+            .unwrap();
+
         let manifest = ops.get_content_manifest(&hash).unwrap().unwrap();
-        let payment = create_test_payment(100, manifest.owner, hash);
+        let payment = create_test_payment_with_provenance(
+            100,
+            manifest.owner,
+            hash,
+            channel_id,
+            manifest.provenance.root_l0l1.clone(),
+        );
 
         let request = QueryRequestPayload {
             hash,
             query: None,
             payment,
             version_spec: None,
+            payment_nonce: 1,
         };
 
         let response = ops
@@ -725,6 +803,12 @@ mod tests {
 
         // Handle query request with insufficient payment
         let requester = test_peer_id();
+
+        // Open a channel with the requester (required for paid content)
+        let channel_id = content_hash(b"test-insufficient-channel");
+        ops.accept_payment_channel(&channel_id, &requester, 500, 1000)
+            .unwrap();
+
         let manifest = ops.get_content_manifest(&hash).unwrap().unwrap();
         let payment = create_test_payment(100, manifest.owner, hash); // Less than 1000
 
@@ -733,6 +817,7 @@ mod tests {
             query: None,
             payment,
             version_spec: None,
+            payment_nonce: 1,
         };
 
         let result = ops.handle_query_request(&requester, &request).await;
@@ -844,14 +929,27 @@ mod tests {
 
         // Handle query request
         let requester = test_peer_id();
+
+        // Open a channel with the requester (required for paid content)
+        let channel_id = content_hash(b"test-settlement-channel");
+        ops.accept_payment_channel(&channel_id, &requester, 500, 1000)
+            .unwrap();
+
         let manifest = ops.get_content_manifest(&hash).unwrap().unwrap();
-        let payment = create_test_payment(100, manifest.owner, hash);
+        let payment = create_test_payment_with_provenance(
+            100,
+            manifest.owner,
+            hash,
+            channel_id,
+            manifest.provenance.root_l0l1.clone(),
+        );
 
         let request = QueryRequestPayload {
             hash,
             query: None,
             payment,
             version_spec: None,
+            payment_nonce: 1,
         };
         ops.handle_query_request(&requester, &request)
             .await
@@ -860,5 +958,165 @@ mod tests {
         // Now we should have pending distributions
         let pending = ops.get_pending_settlement_total().unwrap();
         assert_eq!(pending, 100); // Full payment amount
+    }
+
+    #[tokio::test]
+    async fn test_channel_nonce_updates_after_payment() {
+        let (mut ops, _temp) = create_test_ops();
+        let content = b"Premium knowledge content";
+        let requester = test_peer_id();
+
+        // Create and publish paid content
+        let meta = Metadata::new("Premium Knowledge", content.len() as u64);
+        let hash = ops.create_content(content, meta).unwrap();
+        ops.publish_content(&hash, Visibility::Shared, 100)
+            .await
+            .unwrap();
+
+        // Open a channel with the requester
+        let channel_id = content_hash(b"test-channel-nonce");
+        ops.accept_payment_channel(&channel_id, &requester, 500, 1000)
+            .unwrap();
+
+        // Get the channel nonce (should be 0 initially)
+        let channel = ops.state.channels.get(&requester).unwrap().unwrap();
+        assert_eq!(channel.nonce, 0);
+
+        // Get manifest to create a payment with correct provenance
+        let manifest = ops.state.manifests.load(&hash).unwrap().unwrap();
+
+        // Create payment with correct provenance
+        let payment = Payment::new(
+            content_hash(b"payment1"),
+            channel_id,
+            100,
+            ops.peer_id(),
+            hash,
+            manifest.provenance.root_l0l1.clone(),
+            current_timestamp(),
+            Signature::from_bytes([0u8; 64]),
+        );
+
+        // First query with nonce 1 should succeed
+        let request = QueryRequestPayload {
+            hash,
+            query: None,
+            payment: payment.clone(),
+            version_spec: None,
+            payment_nonce: 1,
+        };
+        let result = ops.handle_query_request(&requester, &request).await;
+        if let Err(ref e) = result {
+            eprintln!("First query failed: {:?}", e);
+        }
+        assert!(result.is_ok(), "First query should succeed: {:?}", result);
+
+        // Channel nonce should be updated to 1
+        let channel = ops.state.channels.get(&requester).unwrap().unwrap();
+        assert_eq!(channel.nonce, 1);
+
+        // Second query with same nonce should fail (replay attack prevention)
+        let request2 = QueryRequestPayload {
+            hash,
+            query: None,
+            payment: payment.clone(),
+            version_spec: None,
+            payment_nonce: 1, // Same nonce as before - should fail
+        };
+        let result2 = ops.handle_query_request(&requester, &request2).await;
+        assert!(
+            matches!(result2, Err(OpsError::PaymentValidationFailed(_))),
+            "Replay with same nonce should fail: {:?}",
+            result2
+        );
+
+        // Query with higher nonce should succeed
+        let payment3 = Payment::new(
+            content_hash(b"payment3"),
+            channel_id,
+            100,
+            ops.peer_id(),
+            hash,
+            manifest.provenance.root_l0l1.clone(),
+            current_timestamp(),
+            Signature::from_bytes([0u8; 64]),
+        );
+        let request3 = QueryRequestPayload {
+            hash,
+            query: None,
+            payment: payment3,
+            version_spec: None,
+            payment_nonce: 2,
+        };
+        let result3 = ops.handle_query_request(&requester, &request3).await;
+        assert!(
+            result3.is_ok(),
+            "Higher nonce should succeed: {:?}",
+            result3
+        );
+
+        // Channel nonce should now be 2
+        let channel = ops.state.channels.get(&requester).unwrap().unwrap();
+        assert_eq!(channel.nonce, 2);
+    }
+
+    #[tokio::test]
+    async fn test_free_content_no_channel_needed() {
+        let (mut ops, _temp) = create_test_ops();
+        let content = b"Free content for everyone";
+        let requester = test_peer_id();
+
+        // Create and publish free content (price = 0)
+        let meta = Metadata::new("Free Knowledge", content.len() as u64);
+        let hash = ops.create_content(content, meta).unwrap();
+        ops.publish_content(&hash, Visibility::Shared, 0)
+            .await
+            .unwrap();
+
+        // Query without channel should work for free content
+        let payment = create_test_payment(0, ops.peer_id(), hash);
+        let request = QueryRequestPayload {
+            hash,
+            query: None,
+            payment,
+            version_spec: None,
+            payment_nonce: 0,
+        };
+
+        let result = ops.handle_query_request(&requester, &request).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().content, content.to_vec());
+    }
+
+    #[tokio::test]
+    async fn test_paid_content_requires_channel() {
+        let (mut ops, _temp) = create_test_ops();
+        let content = b"Premium paid content";
+        let requester = test_peer_id();
+
+        // Create and publish paid content (price > 0)
+        let meta = Metadata::new("Premium Knowledge", content.len() as u64);
+        let hash = ops.create_content(content, meta).unwrap();
+        ops.publish_content(&hash, Visibility::Shared, 100)
+            .await
+            .unwrap();
+
+        // Query WITHOUT opening a channel should fail with ChannelRequired
+        let manifest = ops.get_content_manifest(&hash).unwrap().unwrap();
+        let payment = create_test_payment(100, manifest.owner, hash);
+        let request = QueryRequestPayload {
+            hash,
+            query: None,
+            payment,
+            version_spec: None,
+            payment_nonce: 1,
+        };
+
+        let result = ops.handle_query_request(&requester, &request).await;
+        assert!(
+            matches!(result, Err(OpsError::ChannelRequired)),
+            "Paid content without channel should return ChannelRequired: {:?}",
+            result
+        );
     }
 }

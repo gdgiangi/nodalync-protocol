@@ -50,6 +50,14 @@ pub enum OpsError {
     #[error("payment insufficient")]
     PaymentInsufficient,
 
+    /// Payment validation failed.
+    #[error("payment validation failed: {0}")]
+    PaymentValidationFailed(String),
+
+    /// Payment channel required for paid content.
+    #[error("payment channel required")]
+    ChannelRequired,
+
     /// Insufficient balance in channel.
     #[error("insufficient channel balance")]
     InsufficientChannelBalance,

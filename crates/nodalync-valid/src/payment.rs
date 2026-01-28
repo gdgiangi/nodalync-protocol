@@ -140,7 +140,10 @@ fn verify_payment_signature(pubkey: &PublicKey, payment: &Payment) -> bool {
 }
 
 /// Construct the message bytes for payment signing/verification.
-fn construct_payment_message(payment: &Payment) -> Vec<u8> {
+///
+/// The payment message includes all fields except the signature:
+/// `channel_id || amount (u64 BE) || recipient || query_hash || timestamp (u64 BE)`
+pub fn construct_payment_message(payment: &Payment) -> Vec<u8> {
     // The payment message includes all fields except the signature
     // Format: channel_id || amount (u64 BE) || recipient || query_hash || timestamp (u64 BE)
     let mut message = Vec::new();

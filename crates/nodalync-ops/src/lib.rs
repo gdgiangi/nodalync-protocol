@@ -160,6 +160,9 @@ pub use helpers::{
     total_provenance_weight, truncate_string, unique_owners, verify_content_hash,
 };
 
+// Channel payment helpers
+pub use channel::{create_signed_payment, create_signed_payment_for_manifest, sign_payment};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,13 +300,19 @@ mod tests {
         let (_, pk) = generate_identity();
         let requester = peer_id_from_public_key(&pk);
         let manifest = ops.get_content_manifest(&hash).unwrap().unwrap();
+
+        // Open a channel with the requester (required for paid content)
+        let channel_id = content_hash(b"test-settlement-queue-channel");
+        ops.accept_payment_channel(&channel_id, &requester, 500, 1000)
+            .unwrap();
+
         let payment = nodalync_types::Payment::new(
             content_hash(b"payment"),
-            content_hash(b"channel"),
+            channel_id,
             100,
             manifest.owner,
             hash,
-            vec![],
+            manifest.provenance.root_l0l1.clone(),
             current_timestamp(),
             nodalync_crypto::Signature::from_bytes([0u8; 64]),
         );
@@ -312,6 +321,7 @@ mod tests {
             query: None,
             payment,
             version_spec: None,
+            payment_nonce: 1,
         };
         ops.handle_query_request(&requester, &request)
             .await

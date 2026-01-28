@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use nodalync_crypto::{PeerId, Timestamp};
 use nodalync_net::Network;
+use nodalync_settle::Settlement;
 use nodalync_store::NodeState;
 use nodalync_valid::Validator;
 
@@ -46,6 +47,11 @@ where
     /// When `Some`, enables DHT announce/lookup, network queries, and channel messaging.
     /// When `None`, operations are local-only.
     network: Option<Arc<dyn Network>>,
+    /// Optional settlement for on-chain payment operations.
+    ///
+    /// When `Some`, enables Hedera settlement for payment batches.
+    /// When `None`, settlement batches are only processed locally.
+    settlement: Option<Arc<dyn Settlement>>,
 }
 
 impl<V, E> NodeOperations<V, E>
@@ -53,7 +59,7 @@ where
     V: Validator,
     E: L1Extractor,
 {
-    /// Create new NodeOperations with the given components (no network).
+    /// Create new NodeOperations with the given components (no network, no settlement).
     pub fn new(
         state: NodeState,
         validator: V,
@@ -68,6 +74,7 @@ where
             config,
             peer_id,
             network: None,
+            settlement: None,
         }
     }
 
@@ -87,6 +94,48 @@ where
             config,
             peer_id,
             network: Some(network),
+            settlement: None,
+        }
+    }
+
+    /// Create new NodeOperations with a settlement for on-chain operations.
+    pub fn with_settlement(
+        state: NodeState,
+        validator: V,
+        extractor: E,
+        config: OpsConfig,
+        peer_id: PeerId,
+        settlement: Arc<dyn Settlement>,
+    ) -> Self {
+        Self {
+            state,
+            validator,
+            extractor,
+            config,
+            peer_id,
+            network: None,
+            settlement: Some(settlement),
+        }
+    }
+
+    /// Create new NodeOperations with both network and settlement.
+    pub fn with_network_and_settlement(
+        state: NodeState,
+        validator: V,
+        extractor: E,
+        config: OpsConfig,
+        peer_id: PeerId,
+        network: Arc<dyn Network>,
+        settlement: Arc<dyn Settlement>,
+    ) -> Self {
+        Self {
+            state,
+            validator,
+            extractor,
+            config,
+            peer_id,
+            network: Some(network),
+            settlement: Some(settlement),
         }
     }
 
@@ -128,6 +177,26 @@ where
     /// Remove the network (switch to local-only mode).
     pub fn clear_network(&mut self) {
         self.network = None;
+    }
+
+    /// Get a reference to the settlement (if available).
+    pub fn settlement(&self) -> Option<&Arc<dyn Settlement>> {
+        self.settlement.as_ref()
+    }
+
+    /// Check if settlement is available.
+    pub fn has_settlement(&self) -> bool {
+        self.settlement.is_some()
+    }
+
+    /// Set the settlement for on-chain operations.
+    pub fn set_settlement(&mut self, settlement: Arc<dyn Settlement>) {
+        self.settlement = Some(settlement);
+    }
+
+    /// Remove the settlement (switch to local-only mode).
+    pub fn clear_settlement(&mut self) {
+        self.settlement = None;
     }
 }
 
@@ -188,6 +257,76 @@ impl DefaultNodeOperations {
             config,
             peer_id,
             network,
+        )
+    }
+
+    /// Create with default validator/extractor and a settlement.
+    pub fn with_defaults_and_settlement(
+        state: NodeState,
+        peer_id: PeerId,
+        settlement: Arc<dyn Settlement>,
+    ) -> Self {
+        Self::with_settlement(
+            state,
+            nodalync_valid::DefaultValidator::new(),
+            crate::extraction::RuleBasedExtractor::new(),
+            OpsConfig::default(),
+            peer_id,
+            settlement,
+        )
+    }
+
+    /// Create with custom configuration and a settlement.
+    pub fn with_config_and_settlement(
+        state: NodeState,
+        peer_id: PeerId,
+        config: OpsConfig,
+        settlement: Arc<dyn Settlement>,
+    ) -> Self {
+        Self::with_settlement(
+            state,
+            nodalync_valid::DefaultValidator::new(),
+            crate::extraction::RuleBasedExtractor::new(),
+            config,
+            peer_id,
+            settlement,
+        )
+    }
+
+    /// Create with default validator/extractor, network, and settlement.
+    pub fn with_defaults_network_and_settlement(
+        state: NodeState,
+        peer_id: PeerId,
+        network: Arc<dyn Network>,
+        settlement: Arc<dyn Settlement>,
+    ) -> Self {
+        Self::with_network_and_settlement(
+            state,
+            nodalync_valid::DefaultValidator::new(),
+            crate::extraction::RuleBasedExtractor::new(),
+            OpsConfig::default(),
+            peer_id,
+            network,
+            settlement,
+        )
+    }
+
+    /// Create with custom configuration, network, and settlement.
+    pub fn with_config_network_and_settlement(
+        state: NodeState,
+        peer_id: PeerId,
+        config: OpsConfig,
+        network: Arc<dyn Network>,
+        settlement: Arc<dyn Settlement>,
+    ) -> Self {
+        Self::with_network_and_settlement(
+            state,
+            nodalync_valid::DefaultValidator::new(),
+            crate::extraction::RuleBasedExtractor::new(),
+            config,
+            peer_id,
+            network,
+            settlement,
         )
     }
 }

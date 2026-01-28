@@ -1,6 +1,6 @@
 [package]
 name = "nodalync-mcp"
-version = "0.6.0"
+version = "0.7.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -39,6 +39,12 @@ nodalync-types.workspace = true
 nodalync-store.workspace = true
 nodalync-ops.workspace = true
 nodalync-net.workspace = true
+nodalync-settle.workspace = true
+
+[features]
+default = []
+# Enable Hedera settlement integration (requires protoc installed)
+hedera-sdk = ["nodalync-settle/hedera-sdk"]
 
 [dev-dependencies]
 tempfile.workspace = true
