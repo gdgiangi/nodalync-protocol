@@ -68,8 +68,8 @@ tempfile = "3.10"
 rmcp = { version = "0.8", features = ["server", "transport-io"] }
 serde_json = "1.0"
 
-# Metrics
-prometheus = "0.13"
+# Metrics (disable protobuf feature to avoid RUSTSEC-2024-0437)
+prometheus = { version = "0.13", default-features = false }
 
 # Internal crates (use path for local development)
 nodalync-crypto = { path = "crates/nodalync-crypto" }
