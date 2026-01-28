@@ -92,7 +92,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config = setup_config(&temp_dir);
 
-        init(config.clone(), OutputFormat::Human).unwrap();
+        init(config.clone(), OutputFormat::Human, false).unwrap();
 
         // Create a file to update with
         let file_path = temp_dir.path().join("new_content.txt");

@@ -4,10 +4,12 @@
 //! as specified in Protocol Specification §7.2 and §7.4.
 
 use nodalync_crypto::{content_hash, Hash, PeerId, Signature, UNKNOWN_PEER_ID};
-use nodalync_store::{CacheStore, CachedContent, ContentStore, ManifestStore};
-use nodalync_types::{Amount, L1Summary, Manifest, Payment, Visibility};
+use nodalync_store::{CacheStore, CachedContent, ContentStore, ManifestFilter, ManifestStore};
+use nodalync_types::{Amount, ContentType, L1Summary, Manifest, Payment, Visibility};
 use nodalync_valid::Validator;
-use nodalync_wire::{PaymentReceipt, QueryRequestPayload, VersionInfo, VersionSpec};
+use nodalync_wire::{
+    PaymentReceipt, QueryRequestPayload, SearchFilters, SearchPayload, VersionInfo, VersionSpec,
+};
 
 use crate::error::{OpsError, OpsResult};
 use crate::extraction::L1Extractor;
@@ -533,6 +535,168 @@ where
     pub fn get_content_manifest(&self, hash: &Hash) -> OpsResult<Option<Manifest>> {
         Ok(self.state.manifests.load(hash)?)
     }
+
+    /// Search the network for content matching query.
+    ///
+    /// Combines results from:
+    /// 1. Local manifests
+    /// 2. Cached announcements from network
+    /// 3. Connected peers via SEARCH protocol
+    ///
+    /// Results are deduplicated by hash (local takes precedence).
+    pub async fn search_network(
+        &mut self,
+        query: &str,
+        content_type: Option<ContentType>,
+        limit: u32,
+    ) -> OpsResult<Vec<NetworkSearchResult>> {
+        let mut all_results = Vec::new();
+        let mut seen_hashes = std::collections::HashSet::new();
+
+        // 1. Search local manifests
+        let mut filter = ManifestFilter::new()
+            .with_text_query(query)
+            .with_visibility(Visibility::Shared)
+            .limit(limit);
+
+        if let Some(ct) = content_type {
+            filter = filter.with_content_type(ct);
+        }
+
+        let local_manifests = self.state.manifests.list(filter)?;
+        for manifest in local_manifests {
+            if seen_hashes.insert(manifest.hash) {
+                let l1_summary = self
+                    .extract_l1_summary(&manifest.hash)
+                    .unwrap_or_else(|_| L1Summary::empty(manifest.hash));
+
+                all_results.push(NetworkSearchResult {
+                    hash: manifest.hash,
+                    title: manifest.metadata.title.clone(),
+                    content_type: manifest.content_type,
+                    price: manifest.economics.price,
+                    owner: manifest.owner,
+                    l1_summary,
+                    total_queries: manifest.economics.total_queries,
+                    source: SearchSource::Local,
+                });
+            }
+        }
+
+        // 2. Search cached announcements
+        let announcements = self.state.search_announcements(query, content_type, limit);
+        for announce in announcements {
+            if seen_hashes.insert(announce.hash) {
+                all_results.push(NetworkSearchResult {
+                    hash: announce.hash,
+                    title: announce.title.clone(),
+                    content_type: announce.content_type,
+                    price: announce.price,
+                    owner: UNKNOWN_PEER_ID,
+                    l1_summary: announce.l1_summary.clone(),
+                    total_queries: 0,
+                    source: SearchSource::Cached,
+                });
+            }
+        }
+
+        // 3. Query connected peers via SEARCH protocol
+        if let Some(network) = self.network().cloned() {
+            let search_payload = SearchPayload {
+                query: query.to_string(),
+                filters: content_type.map(|ct| SearchFilters {
+                    content_types: Some(vec![ct]),
+                    ..Default::default()
+                }),
+                limit,
+                offset: 0,
+            };
+
+            // Query up to 5 connected peers
+            for peer in network.connected_peers().iter().take(5) {
+                match network.send_search(*peer, search_payload.clone()).await {
+                    Ok(response) => {
+                        for result in response.results {
+                            if seen_hashes.insert(result.hash) {
+                                // Create and cache an announcement so this content can be queried later
+                                let announcement = nodalync_wire::AnnouncePayload {
+                                    hash: result.hash,
+                                    content_type: result.content_type,
+                                    title: result.title.clone(),
+                                    l1_summary: result.l1_summary.clone(),
+                                    price: result.price,
+                                    addresses: vec![],
+                                    publisher_peer_id: Some(peer.to_string()),
+                                };
+                                self.state.store_announcement(announcement);
+
+                                all_results.push(NetworkSearchResult {
+                                    hash: result.hash,
+                                    title: result.title.clone(),
+                                    content_type: result.content_type,
+                                    price: result.price,
+                                    owner: result.owner,
+                                    l1_summary: result.l1_summary.clone(),
+                                    total_queries: result.total_queries,
+                                    source: SearchSource::Peer,
+                                });
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::debug!(peer = %peer, error = %e, "Peer search failed");
+                    }
+                }
+            }
+        }
+
+        // Truncate to limit
+        all_results.truncate(limit as usize);
+
+        Ok(all_results)
+    }
+}
+
+/// Source of a search result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchSource {
+    /// Result from local manifests.
+    Local,
+    /// Result from cached network announcements.
+    Cached,
+    /// Result from a peer via SEARCH protocol.
+    Peer,
+}
+
+impl std::fmt::Display for SearchSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Local => write!(f, "local"),
+            Self::Cached => write!(f, "cached"),
+            Self::Peer => write!(f, "peer"),
+        }
+    }
+}
+
+/// Search result with source information.
+#[derive(Debug, Clone)]
+pub struct NetworkSearchResult {
+    /// Content hash.
+    pub hash: Hash,
+    /// Content title.
+    pub title: String,
+    /// Content type.
+    pub content_type: ContentType,
+    /// Query price.
+    pub price: Amount,
+    /// Content owner (may be UNKNOWN_PEER_ID for cached announcements).
+    pub owner: PeerId,
+    /// L1 summary preview.
+    pub l1_summary: L1Summary,
+    /// Total queries served.
+    pub total_queries: u64,
+    /// Where this result came from.
+    pub source: SearchSource,
 }
 
 /// Extract primary topics from mentions.
@@ -636,7 +800,7 @@ mod tests {
         let versions = ops.get_content_versions(&hash1).unwrap();
 
         // Should have both versions
-        assert!(versions.len() >= 1);
+        assert!(!versions.is_empty());
         assert!(versions.iter().any(|v| v.number == 1));
     }
 

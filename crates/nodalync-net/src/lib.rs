@@ -133,7 +133,7 @@ pub use traits::Network;
 
 // Re-export libp2p types commonly needed
 pub use libp2p::request_response::InboundRequestId;
-pub use libp2p::{Multiaddr, PeerId};
+pub use libp2p::{identity, multiaddr, Multiaddr, PeerId};
 
 #[cfg(test)]
 mod tests {

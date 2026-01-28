@@ -62,7 +62,7 @@ mod tests {
         let config = setup_config(&temp_dir);
 
         // Initialize first
-        init(config.clone(), OutputFormat::Human).unwrap();
+        init(config.clone(), OutputFormat::Human, false).unwrap();
 
         // Then whoami
         let result = whoami(config, OutputFormat::Human);
@@ -80,7 +80,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config = setup_config(&temp_dir);
 
-        init(config.clone(), OutputFormat::Human).unwrap();
+        init(config.clone(), OutputFormat::Human, false).unwrap();
 
         let result = whoami(config, OutputFormat::Json);
         assert!(result.is_ok());

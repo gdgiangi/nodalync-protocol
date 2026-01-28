@@ -304,7 +304,7 @@ mod tests {
     #[test]
     fn test_merkle_root_single() {
         let entry = test_entry(100);
-        let root = compute_merkle_root(&[entry.clone()]);
+        let root = compute_merkle_root(std::slice::from_ref(&entry));
 
         // Single entry: root equals entry hash
         assert_eq!(root, hash_settlement_entry(&entry));
@@ -364,8 +364,8 @@ mod tests {
     #[test]
     fn test_verify_merkle_proof_single() {
         let entry = test_entry(100);
-        let root = compute_merkle_root(&[entry.clone()]);
-        let proof = create_merkle_proof(&[entry.clone()], 0).unwrap();
+        let root = compute_merkle_root(std::slice::from_ref(&entry));
+        let proof = create_merkle_proof(std::slice::from_ref(&entry), 0).unwrap();
 
         assert!(verify_merkle_proof(&root, &entry, &proof));
     }

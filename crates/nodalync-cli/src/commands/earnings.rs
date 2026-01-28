@@ -83,7 +83,7 @@ mod tests {
         let config = setup_config(&temp_dir);
 
         // Initialize identity first
-        crate::commands::init::init(config.clone(), OutputFormat::Human).unwrap();
+        crate::commands::init::init(config.clone(), OutputFormat::Human, false).unwrap();
 
         let result = earnings(config, OutputFormat::Human, None, 10);
         assert!(result.is_ok());

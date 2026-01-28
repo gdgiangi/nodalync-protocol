@@ -899,6 +899,87 @@ fn truncate_title(title: &str, max_len: usize) -> String {
     }
 }
 
+/// Output for search command.
+#[derive(Debug, Serialize)]
+pub struct SearchOutput {
+    pub query: String,
+    pub results: Vec<SearchResult>,
+    pub total: usize,
+    /// Sources searched: "local" or "local + network".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sources: Option<String>,
+}
+
+/// Individual search result.
+#[derive(Debug, Serialize)]
+pub struct SearchResult {
+    pub hash: String,
+    pub title: String,
+    pub content_type: String,
+    pub price: u64,
+    pub owner: String,
+    pub description: Option<String>,
+    /// Where this result came from: "local", "cached", or "peer".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+impl Render for SearchOutput {
+    fn render_human(&self) -> String {
+        if self.results.is_empty() {
+            return format!("{} \"{}\"", "No results found for".dimmed(), self.query);
+        }
+
+        let sources_info = self
+            .sources
+            .as_ref()
+            .map(|s| format!(" ({})", s))
+            .unwrap_or_default();
+
+        let mut lines = vec![format!(
+            "{} {} results for \"{}\"{}:\n",
+            "Found".green().bold(),
+            self.total,
+            self.query,
+            sources_info.dimmed()
+        )];
+
+        for result in &self.results {
+            let hash_short = short_hash(&result.hash);
+            let price_str = if result.price > 0 {
+                format!(" {}", format_ndl(result.price))
+            } else {
+                " free".dimmed().to_string()
+            };
+            let source_str = result
+                .source
+                .as_ref()
+                .map(|s| format!(" [{}]", s).dimmed().to_string())
+                .unwrap_or_default();
+            let desc_str = result
+                .description
+                .as_ref()
+                .map(|d| format!("\n    {}", truncate_title(d, 60).dimmed()))
+                .unwrap_or_default();
+            lines.push(format!(
+                "  {} {} [{}]{}{}{}",
+                hash_short.cyan(),
+                truncate_title(&result.title, 40),
+                result.content_type,
+                price_str,
+                source_str,
+                desc_str
+            ));
+        }
+
+        lines.join("\n")
+    }
+
+    fn render_json(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

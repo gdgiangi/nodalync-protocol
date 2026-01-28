@@ -28,7 +28,7 @@ use nodalync_wire::{
     create_message, decode_message, decode_payload, encode_message, encode_payload,
     AnnouncePayload, ChannelClosePayload, ChannelOpenPayload, Message, MessageType,
     PreviewRequestPayload, PreviewResponsePayload, QueryRequestPayload, QueryResponsePayload,
-    SettleConfirmPayload,
+    SearchPayload, SearchResponsePayload, SettleConfirmPayload,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock as StdRwLock};
@@ -585,6 +585,27 @@ impl Network for NetworkNode {
         if response.message_type != MessageType::QueryResponse {
             return Err(NetworkError::InvalidResponseType {
                 expected: "QueryResponse".to_string(),
+                got: format!("{:?}", response.message_type),
+            });
+        }
+
+        decode_payload(&response.payload).map_err(|e| NetworkError::Decoding(e.to_string()))
+    }
+
+    async fn send_search(
+        &self,
+        peer: PeerId,
+        request: SearchPayload,
+    ) -> NetworkResult<SearchResponsePayload> {
+        let payload =
+            encode_payload(&request).map_err(|e| NetworkError::Encoding(e.to_string()))?;
+        let message = self.create_signed_message(MessageType::Search, payload);
+
+        let response = self.send(peer, message).await?;
+
+        if response.message_type != MessageType::SearchResponse {
+            return Err(NetworkError::InvalidResponseType {
+                expected: "SearchResponse".to_string(),
                 got: format!("{:?}", response.message_type),
             });
         }

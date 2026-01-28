@@ -11,7 +11,7 @@ use nodalync_crypto::{Hash, PeerId as NodalyncPeerId};
 use nodalync_wire::{
     AnnouncePayload, ChannelClosePayload, ChannelOpenPayload, Message, MessageType,
     PreviewRequestPayload, PreviewResponsePayload, QueryRequestPayload, QueryResponsePayload,
-    SettleConfirmPayload,
+    SearchPayload, SearchResponsePayload, SettleConfirmPayload,
 };
 
 /// The Network trait provides the public API for P2P networking.
@@ -78,6 +78,13 @@ pub trait Network: Send + Sync {
         peer: libp2p::PeerId,
         request: QueryRequestPayload,
     ) -> NetworkResult<QueryResponsePayload>;
+
+    /// Send a search request and receive the response.
+    async fn send_search(
+        &self,
+        peer: libp2p::PeerId,
+        request: SearchPayload,
+    ) -> NetworkResult<SearchResponsePayload>;
 
     /// Send a channel open request.
     async fn send_channel_open(

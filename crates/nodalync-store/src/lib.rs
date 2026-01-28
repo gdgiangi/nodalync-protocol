@@ -425,6 +425,90 @@ impl NodeState {
             Err(_) => Vec::new(),
         }
     }
+
+    /// Search stored announcements by text query.
+    ///
+    /// Searches the title field for the given query (case-insensitive).
+    /// Optionally filters by content type.
+    pub fn search_announcements(
+        &self,
+        query: &str,
+        content_type: Option<nodalync_types::ContentType>,
+        limit: u32,
+    ) -> Vec<AnnouncePayload> {
+        use nodalync_types::{ContentType, L1Summary};
+
+        let conn = self.conn.lock().unwrap();
+        let pattern = format!("%{}%", query.to_lowercase());
+
+        let (sql, params): (&str, Vec<Box<dyn rusqlite::ToSql>>) = if let Some(ct) = content_type {
+            (
+                "SELECT hash, content_type, title, l1_summary, price, addresses, publisher_peer_id \
+                 FROM announcements \
+                 WHERE LOWER(title) LIKE ?1 AND content_type = ?2 \
+                 ORDER BY received_at DESC LIMIT ?3",
+                vec![
+                    Box::new(pattern) as Box<dyn rusqlite::ToSql>,
+                    Box::new(ct as u8),
+                    Box::new(limit),
+                ],
+            )
+        } else {
+            (
+                "SELECT hash, content_type, title, l1_summary, price, addresses, publisher_peer_id \
+                 FROM announcements \
+                 WHERE LOWER(title) LIKE ?1 \
+                 ORDER BY received_at DESC LIMIT ?2",
+                vec![
+                    Box::new(pattern) as Box<dyn rusqlite::ToSql>,
+                    Box::new(limit),
+                ],
+            )
+        };
+
+        let mut stmt = match conn.prepare(sql) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+
+        let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+
+        let rows = stmt.query_map(params_refs.as_slice(), |row| {
+            let hash_bytes: Vec<u8> = row.get(0)?;
+            let content_type_u8: u8 = row.get(1)?;
+            let title: String = row.get(2)?;
+            let l1_summary_json: String = row.get(3)?;
+            let price: i64 = row.get(4)?;
+            let addresses_json: String = row.get(5)?;
+            let publisher_peer_id: Option<String> = row.get(6)?;
+
+            let mut hash_arr = [0u8; 32];
+            if hash_bytes.len() == 32 {
+                hash_arr.copy_from_slice(&hash_bytes);
+            }
+            let hash = Hash(hash_arr);
+
+            let content_type = ContentType::from_u8(content_type_u8).unwrap_or(ContentType::L0);
+            let l1_summary: L1Summary =
+                serde_json::from_str(&l1_summary_json).unwrap_or_else(|_| L1Summary::empty(hash));
+            let addresses: Vec<String> = serde_json::from_str(&addresses_json).unwrap_or_default();
+
+            Ok(AnnouncePayload {
+                hash,
+                content_type,
+                title,
+                l1_summary,
+                price: price as u64,
+                addresses,
+                publisher_peer_id,
+            })
+        });
+
+        match rows {
+            Ok(iter) => iter.filter_map(|r| r.ok()).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -474,7 +558,7 @@ mod tests {
 
     #[test]
     fn test_node_state_identity() {
-        let mut state = NodeState::open_in_memory().unwrap();
+        let state = NodeState::open_in_memory().unwrap();
 
         assert!(!state.identity.exists());
 
@@ -530,5 +614,72 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM manifests", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_search_announcements() {
+        use nodalync_types::{ContentType, L1Summary};
+
+        let state = NodeState::open_in_memory().unwrap();
+
+        // Store some test announcements
+        let hash1 = content_hash(b"protocol guide content");
+        let announce1 = AnnouncePayload {
+            hash: hash1,
+            content_type: ContentType::L0,
+            title: "Protocol Guide".to_string(),
+            l1_summary: L1Summary::empty(hash1),
+            price: 100,
+            addresses: vec![],
+            publisher_peer_id: None,
+        };
+        state.store_announcement(announce1);
+
+        let hash2 = content_hash(b"api reference content");
+        let announce2 = AnnouncePayload {
+            hash: hash2,
+            content_type: ContentType::L0,
+            title: "API Reference".to_string(),
+            l1_summary: L1Summary::empty(hash2),
+            price: 200,
+            addresses: vec![],
+            publisher_peer_id: None,
+        };
+        state.store_announcement(announce2);
+
+        let hash3 = content_hash(b"user manual content");
+        let announce3 = AnnouncePayload {
+            hash: hash3,
+            content_type: ContentType::L1,
+            title: "User Manual".to_string(),
+            l1_summary: L1Summary::empty(hash3),
+            price: 50,
+            addresses: vec![],
+            publisher_peer_id: None,
+        };
+        state.store_announcement(announce3);
+
+        // Test search by text query
+        let results = state.search_announcements("protocol", None, 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Protocol Guide");
+
+        // Test case insensitive search
+        let results = state.search_announcements("REFERENCE", None, 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "API Reference");
+
+        // Test search with content type filter
+        let results = state.search_announcements("", Some(ContentType::L1), 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "User Manual");
+
+        // Test search with no matches
+        let results = state.search_announcements("nonexistent", None, 10);
+        assert!(results.is_empty());
+
+        // Test limit
+        let results = state.search_announcements("", None, 2);
+        assert_eq!(results.len(), 2);
     }
 }

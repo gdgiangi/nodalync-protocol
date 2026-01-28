@@ -101,7 +101,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config = setup_config(&temp_dir);
 
-        init(config.clone(), OutputFormat::Human).unwrap();
+        init(config.clone(), OutputFormat::Human, false).unwrap();
 
         let result = query(config, OutputFormat::Human, "invalidhash", None).await;
         assert!(result.is_err());

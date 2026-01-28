@@ -4,9 +4,10 @@ use crate::config::{default_config_path, CliConfig};
 use crate::context::NodeContext;
 use crate::error::{CliError, CliResult};
 use crate::output::{InitOutput, OutputFormat, Render};
+use crate::wizard::run_wizard;
 
 /// Execute the init command.
-pub fn init(config: CliConfig, format: OutputFormat) -> CliResult<String> {
+pub fn init(config: CliConfig, format: OutputFormat, wizard: bool) -> CliResult<String> {
     // Check if identity already exists
     let base_dir = config.base_dir();
     let identity_dir = base_dir.join("identity");
@@ -14,6 +15,13 @@ pub fn init(config: CliConfig, format: OutputFormat) -> CliResult<String> {
     if identity_dir.join("keypair.key").exists() {
         return Err(CliError::IdentityExists);
     }
+
+    // Run wizard if requested
+    let config = if wizard && crate::prompt::is_interactive() {
+        run_wizard(config)?
+    } else {
+        config
+    };
 
     // Initialize storage
     let state = NodeContext::for_init(config.clone())?;
@@ -67,7 +75,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config = test_config(&temp_dir);
 
-        let result = init(config.clone(), OutputFormat::Human);
+        let result = init(config.clone(), OutputFormat::Human, false);
         assert!(result.is_ok());
 
         let output = result.unwrap();
@@ -83,11 +91,11 @@ mod tests {
         let config = test_config(&temp_dir);
 
         // First init should succeed
-        let result = init(config.clone(), OutputFormat::Human);
+        let result = init(config.clone(), OutputFormat::Human, false);
         assert!(result.is_ok());
 
         // Second init should fail
-        let result2 = init(config, OutputFormat::Human);
+        let result2 = init(config, OutputFormat::Human, false);
         assert!(matches!(result2, Err(CliError::IdentityExists)));
     }
 }

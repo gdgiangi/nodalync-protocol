@@ -646,7 +646,7 @@ mod tests {
 
         // Started 100 seconds ago
         let uptime = calculate_uptime(now - 100);
-        assert!(uptime >= 100 && uptime <= 102); // Allow small variance
+        assert!((100..=102).contains(&uptime)); // Allow small variance
 
         // Future start time should give 0
         let uptime = calculate_uptime(now + 1000);

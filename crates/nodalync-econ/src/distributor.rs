@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn test_default_distributor_default() {
-        let distributor = DefaultDistributor::default();
+        let distributor = DefaultDistributor;
         let owner = test_peer_id();
         let payment = test_payment(owner, vec![]);
 

@@ -159,7 +159,7 @@ mod tests {
         // 10 MB max message
         assert_eq!(MAX_MESSAGE_SIZE, 10 * 1024 * 1024);
         // Message must be able to fit in content (with overhead)
-        assert!(MAX_MESSAGE_SIZE < MAX_CONTENT_SIZE);
+        const { assert!(MAX_MESSAGE_SIZE < MAX_CONTENT_SIZE) };
     }
 
     #[test]
@@ -182,9 +182,9 @@ mod tests {
             0.05
         );
         // Min price is positive
-        assert!(MIN_PRICE > 0);
+        const { assert!(MIN_PRICE > 0) };
         // Max price is greater than min
-        assert!(MAX_PRICE > MIN_PRICE);
+        const { assert!(MAX_PRICE > MIN_PRICE) };
         // Batch threshold is 100 HBAR (100 * 10^8 tinybars)
         assert_eq!(SETTLEMENT_BATCH_THRESHOLD, 100 * 100_000_000);
     }

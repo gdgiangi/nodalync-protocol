@@ -466,7 +466,7 @@ mod tests {
         )]);
 
         // This should pass because provenance was computed correctly
-        assert!(validate_provenance(&l3_manifest, &[source.clone()]).is_ok());
+        assert!(validate_provenance(&l3_manifest, std::slice::from_ref(&source)).is_ok());
 
         // Now test that wrong weight fails
         let mut wrong_weight_manifest = l3_manifest.clone();

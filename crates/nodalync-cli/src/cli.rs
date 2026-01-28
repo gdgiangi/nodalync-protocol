@@ -61,7 +61,11 @@ pub enum Commands {
     ///
     /// Creates a new Ed25519 keypair and stores it encrypted.
     /// Also creates a default configuration file.
-    Init,
+    Init {
+        /// Run interactive setup wizard.
+        #[arg(short, long)]
+        wizard: bool,
+    },
 
     /// Show identity information.
     ///
@@ -110,6 +114,10 @@ pub enum Commands {
         /// Maximum results to show.
         #[arg(short, long, default_value = "50")]
         limit: u32,
+
+        /// Include content available from network peers.
+        #[arg(short = 'n', long)]
+        network: bool,
     },
 
     /// Update content (create a new version).
@@ -326,7 +334,61 @@ pub enum Commands {
         /// Queries below this amount are approved automatically.
         #[arg(short, long, default_value = "0.01")]
         auto_approve: f64,
+
+        /// Enable network connectivity for live peer search.
+        ///
+        /// When enabled, the MCP server can search connected peers
+        /// in real-time using the search_network tool.
+        #[arg(long)]
+        enable_network: bool,
     },
+
+    // =========================================================================
+    // Discovery Commands
+    // =========================================================================
+    /// Search for content by keyword.
+    ///
+    /// Searches title, description, and tags of local content.
+    Search {
+        /// Search query (matches title, description, and tags).
+        query: String,
+
+        /// Filter by content type.
+        #[arg(short = 't', long)]
+        content_type: Option<ContentTypeArg>,
+
+        /// Maximum results to show.
+        #[arg(short, long, default_value = "20")]
+        limit: u32,
+
+        /// Search across network (not just local).
+        #[arg(short, long)]
+        all: bool,
+    },
+
+    // =========================================================================
+    // Shell Completion Commands
+    // =========================================================================
+    /// Generate shell completions.
+    ///
+    /// Outputs shell completion scripts for various shells.
+    Completions {
+        /// Shell to generate completions for.
+        shell: CompletionShell,
+    },
+}
+
+/// Shell types for completion generation.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum CompletionShell {
+    /// Bash shell.
+    Bash,
+    /// Zsh shell.
+    Zsh,
+    /// Fish shell.
+    Fish,
+    /// PowerShell.
+    PowerShell,
 }
 
 /// Visibility level argument for clap.

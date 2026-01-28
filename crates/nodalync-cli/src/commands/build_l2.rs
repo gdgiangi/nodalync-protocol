@@ -93,7 +93,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config = setup_config(&temp_dir);
 
-        init(config.clone(), OutputFormat::Human).unwrap();
+        init(config.clone(), OutputFormat::Human, false).unwrap();
 
         let sources: Vec<String> = vec![];
         let result = build_l2(config, OutputFormat::Human, &sources, None);
@@ -108,7 +108,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config = setup_config(&temp_dir);
 
-        init(config.clone(), OutputFormat::Human).unwrap();
+        init(config.clone(), OutputFormat::Human, false).unwrap();
 
         let sources = vec!["invalidhash".to_string()];
         let result = build_l2(config, OutputFormat::Human, &sources, None);

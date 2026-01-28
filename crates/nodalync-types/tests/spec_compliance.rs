@@ -204,8 +204,8 @@ fn spec_4_5_provenance_l3_constraints() {
     let provenance =
         Provenance::new_derived(vec![entry1, entry2], vec![source1_hash, source2_hash], 1);
 
-    assert!(provenance.root_l0l1.len() >= 1);
-    assert!(provenance.derived_from.len() >= 1);
+    assert!(!provenance.root_l0l1.is_empty());
+    assert!(!provenance.derived_from.is_empty());
     assert!(provenance.depth > 0);
     assert!(provenance.is_derived());
     assert!(provenance.is_valid(&derived_hash));

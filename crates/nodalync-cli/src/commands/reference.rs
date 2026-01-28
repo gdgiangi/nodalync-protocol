@@ -50,7 +50,7 @@ mod tests {
         let config = setup_config(&temp_dir);
 
         // Initialize identity first
-        crate::commands::init::init(config.clone(), OutputFormat::Human).unwrap();
+        crate::commands::init::init(config.clone(), OutputFormat::Human, false).unwrap();
 
         let result = reference(config, OutputFormat::Human, "invalidhash");
         assert!(result.is_err());

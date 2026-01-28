@@ -63,6 +63,11 @@ pub struct ListSourcesInput {
     /// Maximum number of results (default: 10, max: 50).
     #[serde(default)]
     pub limit: Option<u32>,
+
+    /// Include content from network peers (default: false).
+    /// When true, searches local content + cached announcements + connected peers.
+    #[serde(default)]
+    pub include_network: Option<bool>,
 }
 
 /// A single source in the list output.
@@ -92,6 +97,100 @@ pub struct ListSourcesOutput {
 
     /// Total number of sources available (may be > sources.len()).
     pub total_available: u32,
+}
+
+// ============================================================================
+// health_status Tool
+// ============================================================================
+
+/// Output from the `health_status` tool.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct HealthStatusOutput {
+    /// Number of connected peers.
+    pub connected_peers: u32,
+
+    /// Whether the node has bootstrapped to the network.
+    pub is_bootstrapped: bool,
+
+    /// Remaining budget for this session in HBAR.
+    pub budget_remaining_hbar: f64,
+
+    /// Total session budget in HBAR.
+    pub budget_total_hbar: f64,
+
+    /// Amount spent in this session in HBAR.
+    pub budget_spent_hbar: f64,
+
+    /// Total content items available locally.
+    pub local_content_count: u32,
+
+    /// Node peer ID.
+    pub peer_id: String,
+}
+
+// ============================================================================
+// search_network Tool
+// ============================================================================
+
+/// Input for the `search_network` tool.
+///
+/// Searches the network for content matching a query.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct SearchNetworkInput {
+    /// Search query (matches against titles, descriptions, and tags).
+    pub query: String,
+
+    /// Maximum results (default: 10, max: 50).
+    #[serde(default)]
+    pub limit: Option<u32>,
+
+    /// Filter by content type (L0, L1, L2, L3).
+    #[serde(default)]
+    pub content_type: Option<String>,
+}
+
+/// Output from the `search_network` tool.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct SearchNetworkOutput {
+    /// Matching content sources.
+    pub results: Vec<SearchResultInfo>,
+
+    /// Total results found.
+    pub total: u32,
+
+    /// Number of peers queried.
+    pub peers_queried: u32,
+
+    /// Search latency in milliseconds.
+    pub latency_ms: u64,
+}
+
+/// Individual search result with source attribution.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct SearchResultInfo {
+    /// Content hash (base58 encoded).
+    pub hash: String,
+
+    /// Content title.
+    pub title: String,
+
+    /// Price per query in HBAR.
+    pub price_hbar: f64,
+
+    /// Content type (L0, L1, L2, L3).
+    pub content_type: String,
+
+    /// Content owner (may be "unknown" for cached announcements).
+    pub owner: String,
+
+    /// Where result came from: "local", "cached", or "peer".
+    pub source: String,
+
+    /// Preview of L1 mentions (extracted facts/entities).
+    pub preview: Vec<String>,
+
+    /// Primary topics extracted from content.
+    pub topics: Vec<String>,
 }
 
 // ============================================================================

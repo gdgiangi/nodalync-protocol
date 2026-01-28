@@ -14,8 +14,8 @@ use nodalync_valid::Validator;
 use nodalync_wire::{
     decode_message, decode_payload, AnnouncePayload, ChannelAcceptPayload, ChannelClosePayload,
     ChannelOpenPayload, MessageType, PaymentReceipt, PreviewRequestPayload, PreviewResponsePayload,
-    QueryRequestPayload, QueryResponsePayload, VersionInfo, VersionRequestPayload,
-    VersionResponsePayload,
+    QueryRequestPayload, QueryResponsePayload, SearchPayload, SearchResponsePayload,
+    SearchResult as WireSearchResult, VersionInfo, VersionRequestPayload, VersionResponsePayload,
 };
 use tracing::{debug, info};
 
@@ -225,6 +225,91 @@ where
             version_root: request.version_root,
             versions,
             latest,
+        })
+    }
+
+    /// Handle an incoming search request.
+    ///
+    /// 1. Search local manifests matching query
+    /// 2. Apply filters (content type, max price)
+    /// 3. Return SearchResponsePayload with results
+    pub fn handle_search_request(
+        &mut self,
+        _requester: &PeerId,
+        request: &SearchPayload,
+    ) -> OpsResult<SearchResponsePayload> {
+        use nodalync_store::ManifestFilter;
+        use nodalync_types::L1Summary;
+
+        let query = request.query.to_lowercase();
+        let limit = request.limit.min(100);
+
+        // Build filter for shared content only
+        let mut filter = ManifestFilter::new()
+            .with_text_query(&query)
+            .with_visibility(Visibility::Shared)
+            .limit(limit);
+
+        // Apply content type filter if specified
+        if let Some(ref filters) = request.filters {
+            if let Some(ref content_types) = filters.content_types {
+                if let Some(ct) = content_types.first() {
+                    filter = filter.with_content_type(*ct);
+                }
+            }
+        }
+
+        // Search local manifests
+        let manifests = self.state.manifests.list(filter)?;
+
+        // Convert to SearchResult
+        let results: Vec<WireSearchResult> = manifests
+            .iter()
+            .map(|m| {
+                // Extract L1 summary if available
+                let l1_summary = self
+                    .extract_l1_summary(&m.hash)
+                    .unwrap_or_else(|_| L1Summary::empty(m.hash));
+
+                // Calculate simple relevance score based on title match
+                let relevance_score = if m.metadata.title.to_lowercase().contains(&query) {
+                    1.0
+                } else {
+                    0.5
+                };
+
+                WireSearchResult {
+                    hash: m.hash,
+                    content_type: m.content_type,
+                    title: m.metadata.title.clone(),
+                    owner: m.owner,
+                    l1_summary,
+                    price: m.economics.price,
+                    total_queries: m.economics.total_queries,
+                    relevance_score,
+                }
+            })
+            .collect();
+
+        // Apply max_price filter if specified
+        let results = if let Some(ref filters) = request.filters {
+            if let Some(max_price) = filters.max_price {
+                results
+                    .into_iter()
+                    .filter(|r| r.price <= max_price)
+                    .collect()
+            } else {
+                results
+            }
+        } else {
+            results
+        };
+
+        let total_count = results.len() as u64;
+
+        Ok(SearchResponsePayload {
+            results,
+            total_count,
         })
     }
 
@@ -465,6 +550,19 @@ where
                         debug!("Received channel close request");
                         self.handle_channel_close(&nodalync_peer, &request)?;
                         Ok(None) // No response needed for close
+                    }
+                    MessageType::Search => {
+                        let request: SearchPayload =
+                            decode_payload(&message.payload).map_err(|e| {
+                                OpsError::invalid_operation(format!("decode error: {}", e))
+                            })?;
+                        debug!("Received search request for query: {}", request.query);
+                        let response = self.handle_search_request(&nodalync_peer, &request)?;
+                        let response_bytes =
+                            nodalync_wire::encode_payload(&response).map_err(|e| {
+                                OpsError::invalid_operation(format!("encoding error: {}", e))
+                            })?;
+                        Ok(Some((MessageType::SearchResponse, response_bytes)))
                     }
                     _ => {
                         debug!("Unhandled message type: {:?}", message.message_type);

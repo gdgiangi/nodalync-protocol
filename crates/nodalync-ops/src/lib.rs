@@ -151,6 +151,9 @@ pub use extraction::{L1Extractor, RuleBasedExtractor};
 pub use node_ops::{current_timestamp, DefaultNodeOperations, NodeOperations};
 pub use ops::{Operations, PreviewResponse, QueryResponse};
 
+// Query types
+pub use query::{NetworkSearchResult, SearchSource};
+
 // Helper functions
 pub use helpers::{
     generate_channel_id, generate_payment_id, is_queryable_by, merge_provenance_entries,
@@ -209,7 +212,7 @@ mod tests {
 
         // Verify versions
         let versions = ops.get_content_versions(&hash1).unwrap();
-        assert!(versions.len() >= 1);
+        assert!(!versions.is_empty());
     }
 
     /// Integration test: Derive content from sources

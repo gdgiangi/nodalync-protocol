@@ -73,7 +73,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config = setup_config(&temp_dir);
 
-        init(config.clone(), OutputFormat::Human).unwrap();
+        init(config.clone(), OutputFormat::Human, false).unwrap();
 
         let result = versions(config, OutputFormat::Human, "invalidhash");
         assert!(result.is_err());

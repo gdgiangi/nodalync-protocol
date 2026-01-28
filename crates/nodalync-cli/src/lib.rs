@@ -48,9 +48,10 @@ pub mod output;
 pub mod progress;
 pub mod prompt;
 pub mod signals;
+pub mod wizard;
 
 // Re-export main types
-pub use cli::{Cli, Commands, OutputFormatArg, VisibilityArg};
+pub use cli::{Cli, Commands, CompletionShell, OutputFormatArg, VisibilityArg};
 pub use config::CliConfig;
 pub use context::NodeContext;
 pub use error::{CliError, CliResult};

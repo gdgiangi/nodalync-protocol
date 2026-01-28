@@ -2,6 +2,7 @@
 
 pub mod balance;
 pub mod build_l2;
+pub mod completions;
 pub mod delete;
 pub mod deposit;
 pub mod earnings;
@@ -13,6 +14,7 @@ pub mod preview;
 pub mod publish;
 pub mod query;
 pub mod reference;
+pub mod search;
 pub mod settle;
 pub mod start;
 pub mod status;
@@ -27,6 +29,7 @@ pub mod withdraw;
 // Re-export command handlers
 pub use balance::balance;
 pub use build_l2::build_l2;
+pub use completions::completions;
 pub use delete::delete;
 pub use deposit::deposit;
 pub use earnings::earnings;
@@ -38,6 +41,7 @@ pub use preview::preview;
 pub use publish::publish;
 pub use query::query;
 pub use reference::reference;
+pub use search::search;
 pub use settle::settle;
 pub use start::{start, start_daemon_sync};
 pub use status::status;

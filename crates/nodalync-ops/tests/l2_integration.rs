@@ -191,7 +191,7 @@ fn test_l0_l1_l2_l3_full_flow() {
 
     // Verify depth increased
     assert!(
-        l3_manifest.provenance.depth >= l2_manifest.provenance.depth + 1,
+        l3_manifest.provenance.depth > l2_manifest.provenance.depth,
         "L3 depth should be greater than L2 depth"
     );
 }

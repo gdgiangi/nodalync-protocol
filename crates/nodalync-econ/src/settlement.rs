@@ -297,7 +297,7 @@ mod tests {
         let entry = ProvenanceEntry::with_weight(test_hash(b"src"), root, Visibility::Shared, 1);
         let payment = test_payment(100, owner, vec![entry]);
 
-        let batch1 = create_settlement_batch(&[payment.clone()]);
+        let batch1 = create_settlement_batch(std::slice::from_ref(&payment));
         let batch2 = create_settlement_batch(&[payment]);
 
         // Same input should produce same output

@@ -103,7 +103,7 @@ async fn run(cli: Cli) -> CliResult<()> {
     // Dispatch command
     let output = match cli.command {
         // Identity commands
-        Commands::Init => commands::init(config, format)?,
+        Commands::Init { wizard } => commands::init(config, format, wizard)?,
 
         Commands::Whoami => commands::whoami(config, format)?,
 
@@ -131,13 +131,18 @@ async fn run(cli: Cli) -> CliResult<()> {
             visibility,
             content_type,
             limit,
-        } => commands::list(
-            config,
-            format,
-            visibility.map(Into::into),
-            content_type.map(Into::into),
-            limit,
-        )?,
+            network,
+        } => {
+            commands::list(
+                config,
+                format,
+                visibility.map(Into::into),
+                content_type.map(Into::into),
+                limit,
+                network,
+            )
+            .await?
+        }
 
         Commands::Update { hash, file, title } => {
             commands::update(config, format, &hash, &file, title)?
@@ -201,7 +206,29 @@ async fn run(cli: Cli) -> CliResult<()> {
         Commands::McpServer {
             budget,
             auto_approve,
-        } => commands::mcp_server(config, budget, auto_approve).await?,
+            enable_network,
+        } => commands::mcp_server(config, budget, auto_approve, enable_network).await?,
+
+        // Search command
+        Commands::Search {
+            query,
+            content_type,
+            limit,
+            all,
+        } => {
+            commands::search(
+                config,
+                format,
+                &query,
+                content_type.map(Into::into),
+                limit,
+                all,
+            )
+            .await?
+        }
+
+        // Completions command
+        Commands::Completions { shell } => commands::completions(shell)?,
     };
 
     // Print output

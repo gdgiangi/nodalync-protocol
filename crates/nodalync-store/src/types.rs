@@ -28,6 +28,8 @@ pub struct ManifestFilter {
     pub offset: Option<u32>,
     /// Filter by owner.
     pub owner: Option<PeerId>,
+    /// Filter by text query (searches title, description, tags).
+    pub text_query: Option<String>,
 }
 
 impl ManifestFilter {
@@ -75,6 +77,12 @@ impl ManifestFilter {
     /// Filter by owner.
     pub fn with_owner(mut self, owner: PeerId) -> Self {
         self.owner = Some(owner);
+        self
+    }
+
+    /// Filter by text query (searches title, description, tags).
+    pub fn with_text_query(mut self, query: impl Into<String>) -> Self {
+        self.text_query = Some(query.into());
         self
     }
 }
@@ -229,6 +237,7 @@ mod tests {
         peer_id_from_public_key(&public_key)
     }
 
+    #[allow(dead_code)]
     fn test_public_key() -> PublicKey {
         let (_, public_key) = generate_identity();
         public_key

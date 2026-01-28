@@ -376,6 +376,20 @@ impl ManifestStore for SqliteManifestStore {
         if let Some(owner) = filter.owner {
             sql.push_str(&format!(" AND owner = ?{}", param_idx));
             params_values.push(Box::new(owner.0.to_vec()));
+            param_idx += 1;
+        }
+
+        if let Some(ref text_query) = filter.text_query {
+            let pattern = format!("%{}%", text_query.to_lowercase());
+            sql.push_str(&format!(
+                " AND (LOWER(title) LIKE ?{} OR LOWER(COALESCE(description, '')) LIKE ?{} OR LOWER(COALESCE(tags, '')) LIKE ?{})",
+                param_idx,
+                param_idx + 1,
+                param_idx + 2
+            ));
+            params_values.push(Box::new(pattern.clone()));
+            params_values.push(Box::new(pattern.clone()));
+            params_values.push(Box::new(pattern));
             // param_idx is not incremented here as it's the last filter
         }
 
