@@ -42,6 +42,7 @@ pub mod commands;
 pub mod config;
 pub mod context;
 pub mod error;
+pub mod metrics;
 pub mod node_runner;
 pub mod output;
 pub mod progress;

@@ -163,28 +163,60 @@ nodalync settle
 ### Node Management
 
 ```bash
-# Start node
-nodalync start [--daemon]
+# Start node (foreground)
+nodalync start
 > Starting Nodalync node...
+> PeerId: 12D3KooW...
 > Listening on /ip4/0.0.0.0/tcp/9000
 > Connected to 12 peers
 > DHT bootstrapped
 
+# Start with health endpoint (for containers/monitoring)
+nodalync start --health --health-port 8080
+> Starting Nodalync node...
+> PeerId: 12D3KooW...
+> Health endpoint: http://0.0.0.0:8080/health
+> Metrics endpoint: http://0.0.0.0:8080/metrics
+
+# Start as daemon (background)
+nodalync start --daemon
+> Nodalync daemon started (PID: 12345)
+> PeerId: 12D3KooW...
+
 # Node status
 nodalync status
-> Node: running
-> PeerId: ndl1abc123...
+> Node: running (PID: 12345)
+> PeerId: 12D3KooW...
 > Uptime: 4h 23m
 > Peers: 12 connected
 > Content: 5 shared, 2 private
 > Pending: 12 payments (4.23 HBAR)
 
-# Stop node
+# Stop daemon
 nodalync stop
 > Shutting down gracefully...
 > Flushing pending operations...
 > Node stopped
 ```
+
+**Health Endpoints** (when `--health` flag is used):
+
+| Endpoint | Content-Type | Description |
+|----------|--------------|-------------|
+| `GET /health` | `application/json` | `{"status":"ok","connected_peers":N,"uptime_secs":M}` |
+| `GET /metrics` | `text/plain` | Prometheus metrics format |
+
+**Prometheus Metrics:**
+- `nodalync_connected_peers` — Current peer count
+- `nodalync_peer_events_total{event}` — Connect/disconnect events
+- `nodalync_dht_operations_total{op,result}` — DHT put/get operations
+- `nodalync_gossipsub_messages_total` — Broadcast messages received
+- `nodalync_settlement_batches_total{status}` — Settlement batches
+- `nodalync_settlement_latency_seconds` — Settlement operation latency
+- `nodalync_queries_total` — Total queries processed
+- `nodalync_query_latency_seconds` — Query latency histogram
+- `nodalync_uptime_seconds` — Node uptime
+- `nodalync_node_info{version,peer_id}` — Node metadata
 
 ---
 
@@ -262,6 +294,14 @@ pub enum Commands {
     Start {
         #[arg(short, long)]
         daemon: bool,
+
+        /// Enable HTTP health endpoint
+        #[arg(long)]
+        health: bool,
+
+        /// Port for health endpoint (default: 8080)
+        #[arg(long, default_value = "8080")]
+        health_port: u16,
     },
     
     /// Node status

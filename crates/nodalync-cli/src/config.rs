@@ -160,12 +160,15 @@ fn default_gossipsub_propagation_wait() -> u64 {
     5
 }
 
+/// Default bootstrap node address.
+const DEFAULT_BOOTSTRAP_NODE: &str = "/dns4/nodalync-bootstrap.eastus.azurecontainer.io/tcp/9000/p2p/12D3KooWMqrUmZm4e1BJTRMWqKHCe1TSX9Vu83uJLEyCGr2dUjYm";
+
 impl Default for NetworkConfigSection {
     fn default() -> Self {
         Self {
             enabled: true,
             listen_addresses: vec!["/ip4/0.0.0.0/tcp/9000".to_string()],
-            bootstrap_nodes: vec![],
+            bootstrap_nodes: vec![DEFAULT_BOOTSTRAP_NODE.to_string()],
             gossipsub_propagation_wait: default_gossipsub_propagation_wait(),
         }
     }

@@ -1,0 +1,41 @@
+# Example Prometheus configuration for Nodalync
+#
+# Usage:
+#   1. Copy this file to your Prometheus config directory
+#   2. Adjust the targets to match your Nodalync node(s)
+#   3. Restart Prometheus
+#
+# The Nodalync node exposes metrics at /metrics when started with --health flag:
+#   nodalync start --health --health-port 8080
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "rules/nodalync-alerts.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          # Uncomment and configure if using Alertmanager
+          # - alertmanager:9093
+
+scrape_configs:
+  # Scrape Nodalync node metrics
+  - job_name: 'nodalync'
+    static_configs:
+      - targets: ['localhost:8080']
+        labels:
+          instance: 'local-node'
+
+    # Optional: Add more nodes
+    # - targets: ['node2.example.com:8080']
+    #   labels:
+    #     instance: 'node2'
+
+  # Scrape Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

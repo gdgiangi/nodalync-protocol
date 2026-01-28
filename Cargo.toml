@@ -16,7 +16,9 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+# Note: version is NOT workspace-inherited. See VERSIONING below.
+# Protocol crates: 0.2.x (matches spec)
+# Application crates: 0.5.x (CLI/MCP releases)
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/nodalync/nodalync"
@@ -65,6 +67,9 @@ tempfile = "3.10"
 # MCP
 rmcp = { version = "0.8", features = ["server", "transport-io"] }
 serde_json = "1.0"
+
+# Metrics
+prometheus = "0.13"
 
 # Internal crates (use path for local development)
 nodalync-crypto = { path = "crates/nodalync-crypto" }

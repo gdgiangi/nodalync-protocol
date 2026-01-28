@@ -308,7 +308,7 @@ deploy_container() {
         --image "$ACR_IMAGE" \
         --os-type Linux \
         --dns-name-label "$DNS_LABEL" \
-        --ports 9000 \
+        --ports 9000 8080 \
         --protocol TCP \
         --cpu 1 \
         --memory 2 \
@@ -321,7 +321,7 @@ deploy_container() {
         --azure-file-volume-share-name "$SHARE_NAME" \
         --azure-file-volume-mount-path /home/nodalync/.nodalync \
         --environment-variables $env_vars \
-        --command-line "nodalync start" \
+        --command-line "nodalync start --health" \
         --output none
 
     log_info "Container deployed"
@@ -361,6 +361,9 @@ show_status() {
         echo ""
         echo "  Look for libp2p_peer_id (12D3KooW...), then:"
         echo "  /dns4/${fqdn}/tcp/9000/p2p/<PEER_ID>"
+        echo ""
+        log_info "Health endpoint:"
+        echo "  curl http://${fqdn}:8080/health"
         echo ""
     fi
 }

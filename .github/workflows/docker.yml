@@ -1,10 +1,20 @@
 name: Docker
 
+# Builds Docker images for CLI/application releases only.
+#
+# Triggers:
+#   - v* tags (CLI releases) → builds and pushes versioned images
+#   - main branch → builds and pushes :latest and :main
+#   - PRs → builds only (no push)
+#
+# Does NOT trigger on protocol-v* tags (libraries don't need Docker images).
+
 on:
   push:
     branches: [main]
     tags:
       - "v*"
+      # Explicitly exclude protocol tags (v* won't match protocol-v*)
   pull_request:
     branches: [main]
   workflow_dispatch:

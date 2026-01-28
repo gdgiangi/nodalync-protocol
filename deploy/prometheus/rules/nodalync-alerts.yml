@@ -1,0 +1,107 @@
+groups:
+  - name: nodalync-critical
+    rules:
+      # Node is down - health endpoint unreachable
+      - alert: NodalyncNodeDown
+        expr: up{job="nodalync"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Nodalync node is down"
+          description: "The Nodalync node has been unreachable for more than 1 minute."
+
+      # All settlements failing - no successful settlements in 15 minutes
+      - alert: NodalyncAllSettlementsFailing
+        expr: |
+          increase(nodalync_settlement_batches_total{status="success"}[15m]) == 0
+          and
+          increase(nodalync_settlement_batches_total{status="failed"}[15m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "All Nodalync settlements are failing"
+          description: "No successful settlements in the last 15 minutes while failures occurred."
+
+      # Critically low balance - less than 0.1 HBAR (10,000,000 tinybars)
+      - alert: NodalyncCriticallyLowBalance
+        expr: nodalync_contract_balance_tinybars < 10000000
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Nodalync contract balance critically low"
+          description: "Contract balance is below 0.1 HBAR. Settlements will fail soon."
+
+  - name: nodalync-warning
+    rules:
+      # No peers connected for 5 minutes
+      - alert: NodalyncNoPeers
+        expr: nodalync_connected_peers == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Nodalync node has no connected peers"
+          description: "The node has had zero connected peers for over 5 minutes."
+
+      # Settlement failure rate over 10% in last 5 minutes
+      - alert: NodalyncSettlementFailureRate
+        expr: |
+          (
+            increase(nodalync_settlement_batches_total{status="failed"}[5m])
+            /
+            (increase(nodalync_settlement_batches_total{status="success"}[5m]) + increase(nodalync_settlement_batches_total{status="failed"}[5m]))
+          ) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Nodalync settlement failure rate is high"
+          description: "More than 10% of settlements are failing in the last 5 minutes."
+
+      # Low balance - less than 1 HBAR (100,000,000 tinybars)
+      - alert: NodalyncLowBalance
+        expr: nodalync_contract_balance_tinybars < 100000000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Nodalync contract balance is low"
+          description: "Contract balance is below 1 HBAR. Consider depositing more funds."
+
+      # High settlement latency - P95 over 30 seconds
+      - alert: NodalyncHighSettlementLatency
+        expr: histogram_quantile(0.95, rate(nodalync_settlement_latency_seconds_bucket[5m])) > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Nodalync settlement latency is high"
+          description: "95th percentile settlement latency exceeds 30 seconds."
+
+      # High query latency - P95 over 5 seconds
+      - alert: NodalyncHighQueryLatency
+        expr: histogram_quantile(0.95, rate(nodalync_query_latency_seconds_bucket[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Nodalync query latency is high"
+          description: "95th percentile query latency exceeds 5 seconds."
+
+      # DHT operations failing at high rate
+      - alert: NodalyncDhtFailures
+        expr: |
+          (
+            increase(nodalync_dht_operations_total{result="failure"}[5m])
+            /
+            (increase(nodalync_dht_operations_total{result="success"}[5m]) + increase(nodalync_dht_operations_total{result="failure"}[5m]) + increase(nodalync_dht_operations_total{result="not_found"}[5m]))
+          ) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Nodalync DHT failure rate is high"
+          description: "More than 20% of DHT operations are failing."

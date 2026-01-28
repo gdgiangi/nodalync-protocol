@@ -1,13 +1,22 @@
 name: Release
 
+# Unified release workflow for both CLI and Protocol releases.
+#
+# Tag patterns:
+#   - v0.5.0, v0.5.1, etc.           → CLI/application release (builds binaries + Docker)
+#   - protocol-v0.2.1, etc.          → Protocol release (GitHub release only, no binaries)
+#
+# Protocol crates are libraries - consumers use them via Cargo, not binaries.
+
 on:
   push:
     tags:
       - 'v*'
+      - 'protocol-v*'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g., v0.1.0)'
+        description: 'Release tag (e.g., v0.5.0 or protocol-v0.2.1)'
         required: true
         type: string
 
@@ -20,9 +29,38 @@ permissions:
   contents: write
 
 jobs:
-  # Build binaries for all platforms
+  # Determine release type from tag
+  check-release-type:
+    name: Check Release Type
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.info.outputs.tag }}
+      release_type: ${{ steps.info.outputs.release_type }}
+      version: ${{ steps.info.outputs.version }}
+    steps:
+      - name: Determine release info
+        id: info
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+          if [[ "$TAG" == protocol-v* ]]; then
+            echo "release_type=protocol" >> $GITHUB_OUTPUT
+            echo "version=${TAG#protocol-v}" >> $GITHUB_OUTPUT
+          else
+            echo "release_type=cli" >> $GITHUB_OUTPUT
+            echo "version=${TAG#v}" >> $GITHUB_OUTPUT
+          fi
+
+  # Build CLI binaries (only for CLI releases)
   build:
     name: Build ${{ matrix.target }}
+    needs: check-release-type
+    if: needs.check-release-type.outputs.release_type == 'cli'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -86,10 +124,11 @@ jobs:
           path: dist/${{ env.BINARY_NAME }}-${{ matrix.target }}.*
           retention-days: 7
 
-  # Create GitHub Release
-  release:
-    name: Create Release
-    needs: build
+  # Create CLI Release (with binaries)
+  release-cli:
+    name: Create CLI Release
+    needs: [check-release-type, build]
+    if: needs.check-release-type.outputs.release_type == 'cli'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -109,26 +148,21 @@ jobs:
           done
           cat checksums.txt
 
-      - name: Determine tag
-        id: tag
-        run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-          fi
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          name: Nodalync ${{ steps.tag.outputs.tag }}
+          tag_name: ${{ needs.check-release-type.outputs.tag }}
+          name: Nodalync CLI ${{ needs.check-release-type.outputs.tag }}
           body: |
+            ## Nodalync CLI ${{ needs.check-release-type.outputs.version }}
+
+            Application release with CLI and MCP server.
+
             ## Installation
 
             ### Linux (x86_64)
             ```bash
-            curl -LO https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/nodalync-x86_64-unknown-linux-gnu.tar.gz
+            curl -LO https://github.com/${{ github.repository }}/releases/download/${{ needs.check-release-type.outputs.tag }}/nodalync-x86_64-unknown-linux-gnu.tar.gz
             tar -xzf nodalync-x86_64-unknown-linux-gnu.tar.gz
             chmod +x nodalync
             sudo mv nodalync /usr/local/bin/
@@ -136,7 +170,7 @@ jobs:
 
             ### macOS (Apple Silicon)
             ```bash
-            curl -LO https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/nodalync-aarch64-apple-darwin.tar.gz
+            curl -LO https://github.com/${{ github.repository }}/releases/download/${{ needs.check-release-type.outputs.tag }}/nodalync-aarch64-apple-darwin.tar.gz
             tar -xzf nodalync-aarch64-apple-darwin.tar.gz
             chmod +x nodalync
             sudo mv nodalync /usr/local/bin/
@@ -144,7 +178,7 @@ jobs:
 
             ### macOS (Intel)
             ```bash
-            curl -LO https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/nodalync-x86_64-apple-darwin.tar.gz
+            curl -LO https://github.com/${{ github.repository }}/releases/download/${{ needs.check-release-type.outputs.tag }}/nodalync-x86_64-apple-darwin.tar.gz
             tar -xzf nodalync-x86_64-apple-darwin.tar.gz
             chmod +x nodalync
             sudo mv nodalync /usr/local/bin/
@@ -152,8 +186,8 @@ jobs:
 
             ### Docker
             ```bash
-            docker pull gdgiangi/nodalync:${{ steps.tag.outputs.tag }}
-            docker run --rm gdgiangi/nodalync:${{ steps.tag.outputs.tag }} --help
+            docker pull gabrielgiangi/nodalync:${{ needs.check-release-type.outputs.tag }}
+            docker run --rm gabrielgiangi/nodalync:${{ needs.check-release-type.outputs.tag }} --help
             ```
 
             ## Checksums
@@ -161,6 +195,57 @@ jobs:
           files: |
             release/*
           draft: false
-          prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
+          prerelease: ${{ contains(needs.check-release-type.outputs.tag, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Create Protocol Release (no binaries)
+  release-protocol:
+    name: Create Protocol Release
+    needs: check-release-type
+    if: needs.check-release-type.outputs.release_type == 'protocol'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check-release-type.outputs.tag }}
+          name: Nodalync Protocol ${{ needs.check-release-type.outputs.tag }}
+          body: |
+            ## Nodalync Protocol ${{ needs.check-release-type.outputs.version }}
+
+            Protocol library release. These crates define the Nodalync wire format,
+            data structures, validation rules, and network protocol.
+
+            ## Crates Updated
+
+            | Crate | Version | Description |
+            |-------|---------|-------------|
+            | `nodalync-crypto` | ${{ needs.check-release-type.outputs.version }} | Cryptographic primitives |
+            | `nodalync-types` | ${{ needs.check-release-type.outputs.version }} | Data structures |
+            | `nodalync-wire` | ${{ needs.check-release-type.outputs.version }} | Wire protocol serialization |
+            | `nodalync-store` | ${{ needs.check-release-type.outputs.version }} | Storage layer |
+            | `nodalync-valid` | ${{ needs.check-release-type.outputs.version }} | Validation rules |
+            | `nodalync-econ` | ${{ needs.check-release-type.outputs.version }} | Economic rules |
+            | `nodalync-ops` | ${{ needs.check-release-type.outputs.version }} | Protocol operations |
+            | `nodalync-net` | ${{ needs.check-release-type.outputs.version }} | Network protocol |
+            | `nodalync-settle` | ${{ needs.check-release-type.outputs.version }} | Settlement layer |
+
+            ## For Developers
+
+            Protocol crates are libraries. Add them to your `Cargo.toml`:
+
+            ```toml
+            [dependencies]
+            nodalync-types = { git = "https://github.com/${{ github.repository }}", tag = "${{ needs.check-release-type.outputs.tag }}" }
+            ```
+
+            ## Specification
+
+            See [docs/spec.md](https://github.com/${{ github.repository }}/blob/main/docs/spec.md) for the protocol specification.
+          draft: false
+          prerelease: ${{ contains(needs.check-release-type.outputs.tag, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -5,7 +5,7 @@ use crate::context::NodeContext;
 use crate::error::{CliError, CliResult};
 use crate::node_runner::{
     check_existing_node, pid_file_path, remove_pid_file, remove_status_file,
-    run_event_loop_with_status, status_file_path, write_pid_file_with_start_time,
+    run_event_loop_with_health, status_file_path, write_pid_file_with_start_time, HealthConfig,
 };
 use crate::output::{OutputFormat, Render, StartOutput};
 use crate::signals::shutdown_signal;
@@ -16,7 +16,13 @@ use tracing::info;
 ///
 /// For daemon mode, use `start_daemon_sync` which must be called
 /// before any tokio runtime is created.
-pub async fn start(config: CliConfig, format: OutputFormat, daemon: bool) -> CliResult<String> {
+pub async fn start(
+    config: CliConfig,
+    format: OutputFormat,
+    daemon: bool,
+    health: bool,
+    health_port: u16,
+) -> CliResult<String> {
     let base_dir = config.base_dir();
 
     // Check for existing running node
@@ -62,13 +68,23 @@ pub async fn start(config: CliConfig, format: OutputFormat, daemon: bool) -> Cli
     // Print status and run event loop
     let output_str = output.render(format);
     println!("{}", output_str);
+    if health {
+        println!("Health endpoint: http://0.0.0.0:{}/health", health_port);
+    }
     println!("\nPress Ctrl+C to stop the node...\n");
 
     // Set up shutdown signal handler
     let shutdown_rx = shutdown_signal();
 
-    // Run the event loop with status file updates
-    let result = run_event_loop_with_status(&mut ctx, shutdown_rx, Some(&base_dir)).await;
+    // Configure health endpoint
+    let health_config = HealthConfig {
+        enabled: health,
+        port: health_port,
+    };
+
+    // Run the event loop with status file updates and health endpoint
+    let result =
+        run_event_loop_with_health(&mut ctx, shutdown_rx, Some(&base_dir), health_config).await;
 
     // Cleanup on exit
     info!("Cleaning up...");
@@ -86,7 +102,12 @@ pub async fn start(config: CliConfig, format: OutputFormat, daemon: bool) -> Cli
 /// It forks the process first, then creates a fresh tokio runtime in the child.
 /// This avoids the "cannot start runtime from within runtime" panic.
 #[cfg(unix)]
-pub fn start_daemon_sync(config: CliConfig, _format: OutputFormat) -> CliResult<String> {
+pub fn start_daemon_sync(
+    config: CliConfig,
+    _format: OutputFormat,
+    health: bool,
+    health_port: u16,
+) -> CliResult<String> {
     use daemonize::Daemonize;
     use std::fs::File;
 
@@ -163,13 +184,27 @@ pub fn start_daemon_sync(config: CliConfig, _format: OutputFormat) -> CliResult<
                 let peer_id = ctx.peer_id().to_string();
                 eprintln!("Nodalync daemon started (PID: {})", std::process::id());
                 eprintln!("PeerId: {}", peer_id);
+                if health {
+                    eprintln!("Health endpoint: http://0.0.0.0:{}/health", health_port);
+                }
 
                 // Set up shutdown signal handler
                 let shutdown_rx = shutdown_signal();
 
-                // Run the event loop with status file updates
-                let result =
-                    run_event_loop_with_status(&mut ctx, shutdown_rx, Some(&base_dir)).await;
+                // Configure health endpoint
+                let health_config = HealthConfig {
+                    enabled: health,
+                    port: health_port,
+                };
+
+                // Run the event loop with status file updates and health endpoint
+                let result = run_event_loop_with_health(
+                    &mut ctx,
+                    shutdown_rx,
+                    Some(&base_dir),
+                    health_config,
+                )
+                .await;
 
                 // Cleanup
                 let _ = remove_pid_file(&pid_path);
@@ -192,7 +227,12 @@ pub fn start_daemon_sync(config: CliConfig, _format: OutputFormat) -> CliResult<
 
 /// Start the node in daemon mode (non-Unix stub).
 #[cfg(not(unix))]
-pub fn start_daemon_sync(_config: CliConfig, _format: OutputFormat) -> CliResult<String> {
+pub fn start_daemon_sync(
+    _config: CliConfig,
+    _format: OutputFormat,
+    _health: bool,
+    _health_port: u16,
+) -> CliResult<String> {
     Err(CliError::user(
         "Daemon mode is only supported on Unix systems",
     ))

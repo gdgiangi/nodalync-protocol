@@ -290,6 +290,14 @@ pub enum Commands {
         /// Run in daemon mode (background).
         #[arg(short, long)]
         daemon: bool,
+
+        /// Enable HTTP health endpoint.
+        #[arg(long)]
+        health: bool,
+
+        /// Port for the HTTP health endpoint.
+        #[arg(long, default_value = "8080")]
+        health_port: u16,
     },
 
     /// Show node status.

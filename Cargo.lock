@@ -3190,11 +3190,11 @@ dependencies = [
 
 [[package]]
 name = "nodalync"
-version = "0.0.1"
+version = "0.5.0"
 
 [[package]]
 name = "nodalync-cli"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "ciborium",
  "clap",
@@ -3216,6 +3216,7 @@ dependencies = [
  "nodalync-types",
  "nodalync-valid",
  "nodalync-wire",
+ "prometheus",
  "serde",
  "serde_json",
  "tempfile",
@@ -3228,7 +3229,7 @@ dependencies = [
 
 [[package]]
 name = "nodalync-crypto"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "bs58",
  "ed25519-dalek",
@@ -3241,7 +3242,7 @@ dependencies = [
 
 [[package]]
 name = "nodalync-econ"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "nodalync-crypto",
  "nodalync-types",
@@ -3252,7 +3253,7 @@ dependencies = [
 
 [[package]]
 name = "nodalync-mcp"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "bs58",
  "directories",
@@ -3272,7 +3273,7 @@ dependencies = [
 
 [[package]]
 name = "nodalync-net"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "futures",
@@ -3293,7 +3294,7 @@ dependencies = [
 
 [[package]]
 name = "nodalync-ops"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "nodalync-crypto",
@@ -3313,7 +3314,7 @@ dependencies = [
 
 [[package]]
 name = "nodalync-settle"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "hedera",
@@ -3331,7 +3332,7 @@ dependencies = [
 
 [[package]]
 name = "nodalync-store"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -3350,7 +3351,7 @@ dependencies = [
 
 [[package]]
 name = "nodalync-types"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "nodalync-crypto",
  "serde",
@@ -3360,7 +3361,7 @@ dependencies = [
 
 [[package]]
 name = "nodalync-valid"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "nodalync-crypto",
  "nodalync-types",
@@ -3371,7 +3372,7 @@ dependencies = [
 
 [[package]]
 name = "nodalync-wire"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "ciborium",
  "nodalync-crypto",
@@ -3820,6 +3821,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "prometheus"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d33c28a30771f7f96db69893f78b857f7450d7e0237e9c8fc6427a81bae7ed1"
+dependencies = [
+ "cfg-if",
+ "fnv",
+ "lazy_static",
+ "memchr",
+ "parking_lot",
+ "protobuf",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "prometheus-client"
 version = "0.22.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3894,6 +3910,12 @@ checksum = "9091c90b0a32608e984ff2fa4091273cbdd755d54935c51d520887f4a1dbd5b0"
 dependencies = [
  "prost",
 ]
+
+[[package]]
+name = "protobuf"
+version = "2.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "106dd99e98437432fed6519dedecfade6a06a73bb7b2a1e019fdd2bee5778d94"
 
 [[package]]
 name = "ptr_meta"

@@ -17,9 +17,14 @@ fn main() {
     let cli = Cli::parse();
 
     // Check if this is a daemon start - must be handled before tokio runtime
-    if let Commands::Start { daemon: true } = &cli.command {
+    if let Commands::Start {
+        daemon: true,
+        health,
+        health_port,
+    } = &cli.command
+    {
         // Handle daemon mode synchronously before any async runtime exists
-        if let Err(e) = handle_daemon_start(&cli) {
+        if let Err(e) = handle_daemon_start(&cli, *health, *health_port) {
             eprintln!("{}: {}", "Error".red().bold(), e);
             std::process::exit(e.exit_code());
         }
@@ -55,7 +60,7 @@ async fn async_main(cli: Cli) {
 
 /// Handle daemon start before tokio runtime is created.
 /// This avoids the "cannot start runtime from within runtime" panic.
-fn handle_daemon_start(cli: &Cli) -> CliResult<()> {
+fn handle_daemon_start(cli: &Cli, health: bool, health_port: u16) -> CliResult<()> {
     use nodalync_cli::commands::start_daemon_sync;
 
     // Initialize logging based on --verbose flag or RUST_LOG env var
@@ -81,7 +86,7 @@ fn handle_daemon_start(cli: &Cli) -> CliResult<()> {
     // Note: On success, the parent process exits inside this call after forking.
     // The child process runs the daemon and never returns here.
     // Only on error does this function return.
-    start_daemon_sync(config, format)?;
+    start_daemon_sync(config, format, health, health_port)?;
 
     // If we get here, something unexpected happened
     Ok(())
@@ -182,7 +187,11 @@ async fn run(cli: Cli) -> CliResult<()> {
         Commands::Settle => commands::settle(config, format).await?,
 
         // Node management commands
-        Commands::Start { daemon } => commands::start(config, format, daemon).await?,
+        Commands::Start {
+            daemon,
+            health,
+            health_port,
+        } => commands::start(config, format, daemon, health, health_port).await?,
 
         Commands::Status => commands::status(config, format).await?,
 

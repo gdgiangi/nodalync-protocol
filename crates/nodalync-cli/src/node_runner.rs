@@ -9,12 +9,15 @@ use std::time::Duration;
 
 use nodalync_net::{InboundRequestId, Network, NetworkEvent, NetworkNode};
 use nodalync_wire::MessageType;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
 use crate::context::NodeContext;
 use crate::error::{CliError, CliResult};
+use crate::metrics::{Metrics, SharedMetrics};
 
 // =============================================================================
 // PID File Utilities
@@ -215,6 +218,28 @@ pub fn remove_status_file(path: &Path) -> CliResult<()> {
 }
 
 // =============================================================================
+// Health Endpoint Configuration
+// =============================================================================
+
+/// Configuration for the HTTP health endpoint.
+#[derive(Debug, Clone)]
+pub struct HealthConfig {
+    /// Whether the health endpoint is enabled.
+    pub enabled: bool,
+    /// Port to listen on.
+    pub port: u16,
+}
+
+impl Default for HealthConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: 8080,
+        }
+    }
+}
+
+// =============================================================================
 // Event Loop
 // =============================================================================
 
@@ -241,10 +266,26 @@ pub async fn run_event_loop(
 ///
 /// This variant writes the node's runtime status to a file periodically,
 /// allowing the `status` command to read the current state.
+///
+/// This is a convenience wrapper around `run_event_loop_with_health` with
+/// health endpoint disabled.
 pub async fn run_event_loop_with_status(
+    ctx: &mut NodeContext,
+    shutdown_rx: watch::Receiver<bool>,
+    base_dir: Option<&Path>,
+) -> CliResult<()> {
+    run_event_loop_with_health(ctx, shutdown_rx, base_dir, HealthConfig::default()).await
+}
+
+/// Run the node event loop with status file updates and optional health endpoint.
+///
+/// This variant writes the node's runtime status to a file periodically,
+/// and optionally runs an HTTP health endpoint for container orchestration.
+pub async fn run_event_loop_with_health(
     ctx: &mut NodeContext,
     mut shutdown_rx: watch::Receiver<bool>,
     base_dir: Option<&Path>,
+    health_config: HealthConfig,
 ) -> CliResult<()> {
     info!("Starting node event loop");
 
@@ -258,6 +299,48 @@ pub async fn run_event_loop_with_status(
 
     // Status update interval (every 5 seconds)
     let mut status_interval = interval(Duration::from_secs(5));
+
+    // Track start time for uptime calculation
+    let start_time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    // Create metrics (always created, used for instrumentation even without health endpoint)
+    let metrics: SharedMetrics = Arc::new(Metrics::new());
+
+    // Set initial node info
+    let version = env!("CARGO_PKG_VERSION");
+    let peer_id = network.local_peer_id().to_string();
+    metrics
+        .node_info
+        .with_label_values(&[version, &peer_id])
+        .set(1);
+
+    // Spawn health server if enabled
+    let health_shutdown_tx = if health_config.enabled {
+        let (tx, rx) = watch::channel(false);
+        let network_clone = Arc::clone(network);
+        let metrics_clone = Arc::clone(&metrics);
+        let port = health_config.port;
+
+        tokio::spawn(async move {
+            if let Err(e) =
+                run_health_server(port, network_clone, start_time, Some(metrics_clone), rx).await
+            {
+                warn!("Health server error: {}", e);
+            }
+        });
+
+        info!("Health endpoint enabled on port {}", port);
+        info!(
+            "Metrics endpoint available at http://0.0.0.0:{}/metrics",
+            port
+        );
+        Some(tx)
+    } else {
+        None
+    };
 
     // Helper to write status
     let write_status = |network: &Arc<NetworkNode>, path: &Option<PathBuf>| {
@@ -297,6 +380,30 @@ pub async fn run_event_loop_with_status(
             event_result = network.next_event() => {
                 match event_result {
                     Ok(event) => {
+                        // Instrument metrics based on event type
+                        match &event {
+                            NetworkEvent::PeerConnected { .. } => {
+                                metrics.peer_events_total.with_label_values(&["connect"]).inc();
+                                metrics.connected_peers.set(network.connected_peers().len() as i64);
+                            }
+                            NetworkEvent::PeerDisconnected { .. } => {
+                                metrics.peer_events_total.with_label_values(&["disconnect"]).inc();
+                                metrics.connected_peers.set(network.connected_peers().len() as i64);
+                            }
+                            NetworkEvent::DhtPutComplete { success, .. } => {
+                                let result = if *success { "success" } else { "failure" };
+                                metrics.dht_operations_total.with_label_values(&["put", result]).inc();
+                            }
+                            NetworkEvent::DhtGetResult { value, .. } => {
+                                let result = if value.is_some() { "success" } else { "not_found" };
+                                metrics.dht_operations_total.with_label_values(&["get", result]).inc();
+                            }
+                            NetworkEvent::BroadcastReceived { .. } => {
+                                metrics.gossipsub_messages_total.inc();
+                            }
+                            _ => {}
+                        }
+
                         // Check if this is a peer connect/disconnect event
                         let peer_change = matches!(
                             &event,
@@ -322,12 +429,115 @@ pub async fn run_event_loop_with_status(
         }
     }
 
+    // Signal health server to shutdown
+    if let Some(tx) = health_shutdown_tx {
+        let _ = tx.send(true);
+    }
+
     // Clean up status file on exit
     if let Some(ref path) = status_path {
         let _ = remove_status_file(path);
     }
 
     info!("Event loop stopped");
+    Ok(())
+}
+
+/// Run a minimal HTTP health server with optional Prometheus metrics endpoint.
+///
+/// Routes:
+/// - `GET /metrics` - Prometheus text format metrics
+/// - `GET /health` or other - JSON health status
+async fn run_health_server(
+    port: u16,
+    network: Arc<NetworkNode>,
+    start_time: u64,
+    metrics: Option<SharedMetrics>,
+    mut shutdown_rx: watch::Receiver<bool>,
+) -> CliResult<()> {
+    let addr = format!("0.0.0.0:{}", port);
+    let listener = TcpListener::bind(&addr).await.map_err(|e| {
+        CliError::config(format!("Failed to bind health server to {}: {}", addr, e))
+    })?;
+
+    info!("Health server listening on {}", addr);
+
+    loop {
+        tokio::select! {
+            // Check for shutdown
+            result = shutdown_rx.changed() => {
+                if result.is_err() || *shutdown_rx.borrow() {
+                    info!("Health server shutting down");
+                    break;
+                }
+            }
+
+            // Accept connections
+            accept_result = listener.accept() => {
+                match accept_result {
+                    Ok((mut socket, _)) => {
+                        let connected_peers = network.connected_peers().len();
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        let uptime_secs = now.saturating_sub(start_time);
+
+                        // Read and parse HTTP request
+                        let mut buf = [0u8; 1024];
+                        let n = socket.read(&mut buf).await.unwrap_or(0);
+                        let request = String::from_utf8_lossy(&buf[..n]);
+
+                        // Parse request path from first line (e.g., "GET /metrics HTTP/1.1")
+                        let path = request
+                            .lines()
+                            .next()
+                            .and_then(|line| line.split_whitespace().nth(1))
+                            .unwrap_or("/health");
+
+                        let (content_type, body) = if path == "/metrics" {
+                            if let Some(ref m) = metrics {
+                                // Update uptime before encoding
+                                m.uptime_seconds.set(uptime_secs as i64);
+                                m.connected_peers.set(connected_peers as i64);
+                                ("text/plain; version=0.0.4; charset=utf-8", m.encode())
+                            } else {
+                                // Metrics not enabled, return empty
+                                ("text/plain", String::from("# Metrics not enabled\n"))
+                            }
+                        } else {
+                            // Default to health endpoint
+                            let json = format!(
+                                r#"{{"status":"ok","connected_peers":{},"uptime_secs":{}}}"#,
+                                connected_peers, uptime_secs
+                            );
+                            ("application/json", json)
+                        };
+
+                        // Build HTTP response
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\n\
+                             Content-Type: {}\r\n\
+                             Content-Length: {}\r\n\
+                             Connection: close\r\n\
+                             \r\n\
+                             {}",
+                            content_type,
+                            body.len(),
+                            body
+                        );
+
+                        // Send response (ignore errors, client may have disconnected)
+                        let _ = socket.write_all(response.as_bytes()).await;
+                    }
+                    Err(e) => {
+                        debug!("Health server accept error: {}", e);
+                    }
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 

@@ -49,10 +49,8 @@ tarpaulin-report.html
 
 # Development/planning files (not part of release)
 CLAUDE.md
-CHECKLIST.md
-L2_IMPLEMENTATION_PLAN.md
-DESIGN_DECISIONS.md
 WHATS_NEXT.md
+/deploy/azure/DEPLOYMENT_LOG.md
 .claude/
 /data/
 
@@ -60,3 +58,4 @@ WHATS_NEXT.md
 deploy/**/config.env
 deploy/**/*.env
 !deploy/**/*.env.example
+.env

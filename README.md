@@ -33,20 +33,21 @@ creates perpetual economic participation in all derivative work.
 
 ### Status
 
-**v0.1.0 — Feature Complete**
+**Protocol v0.2.1** · **CLI v0.5.0**
 
-| Phase | Crate | Description |
-|-------|-------|-------------|
-| 1 | `nodalync-crypto`  | Hashing (SHA-256), Ed25519 signing, PeerId derivation |
-| 1 | `nodalync-types` | All data structures including L2 Entity Graph |
-| 2 | `nodalync-wire` | Deterministic CBOR serialization, 17 message types |
-| 2 | `nodalync-store` | SQLite manifests, filesystem content, settlement queue |
-| 2 | `nodalync-valid` | Content, provenance, payment, L2 validation |
-| 2 | `nodalync-econ` | 95/5 revenue distribution, Merkle batching |
-| 3 | `nodalync-ops` | CREATE, DERIVE, BUILD_L2, MERGE_L2, QUERY |
-| 4 | `nodalync-net` | libp2p (TCP/Noise/yamux), Kademlia DHT |
-| 4 | `nodalync-settle` | Hedera settlement, smart contract deployed to testnet |
-| 5 | `nodalync-cli` | Full CLI with interactive prompts, progress indicators |
+| Layer | Crate | Version | Description |
+|-------|-------|---------|-------------|
+| Protocol | `nodalync-crypto` | 0.2.1 | Hashing (SHA-256), Ed25519 signing, PeerId derivation |
+| Protocol | `nodalync-types` | 0.2.1 | All data structures including L2 Entity Graph |
+| Protocol | `nodalync-wire` | 0.2.1 | Deterministic CBOR serialization, 21 message types |
+| Protocol | `nodalync-store` | 0.2.1 | SQLite manifests, filesystem content, settlement queue |
+| Protocol | `nodalync-valid` | 0.2.1 | Content, provenance, payment, L2 validation |
+| Protocol | `nodalync-econ` | 0.2.1 | 95/5 revenue distribution, Merkle batching |
+| Protocol | `nodalync-ops` | 0.2.1 | CREATE, DERIVE, BUILD_L2, MERGE_L2, QUERY |
+| Protocol | `nodalync-net` | 0.2.1 | libp2p (TCP/Noise/yamux), Kademlia DHT, GossipSub |
+| Protocol | `nodalync-settle` | 0.2.1 | Hedera settlement, smart contract deployed to testnet |
+| App | `nodalync-cli` | 0.5.0 | Full CLI with daemon mode, health endpoints |
+| App | `nodalync-mcp` | 0.5.0 | MCP server for AI agent integration |
 
 **Hedera Testnet:**
 
@@ -73,7 +74,7 @@ cd nodalync-protocol
 # Build all crates
 cargo build --workspace
 
-# Run tests (738+ tests)
+# Run tests (776+ tests)
 cargo test --workspace
 
 # Build with Hedera support (requires protoc)
@@ -108,6 +109,34 @@ nodalync query <hash>
 nodalync earnings
 ```
 
+### Running a Node
+
+```bash
+# Start node (foreground)
+nodalync start
+
+# Start node with health endpoint (for containers/monitoring)
+nodalync start --health --health-port 8080
+
+# Start as daemon (background)
+nodalync start --daemon
+
+# Check status
+nodalync status
+
+# Stop daemon
+nodalync stop
+```
+
+**Health Endpoints** (when `--health` enabled):
+- `GET /health` — JSON status: `{"status":"ok","connected_peers":N,"uptime_secs":M}`
+- `GET /metrics` — Prometheus metrics (peers, DHT ops, settlements, queries)
+
+**Bootstrap Node:**
+```
+/dns4/nodalync-bootstrap.eastus.azurecontainer.io/tcp/9000/p2p/12D3KooWMqrUmZm4e1BJTRMWqKHCe1TSX9Vu83uJLEyCGr2dUjYm
+```
+
 ---
 
 ### Knowledge Layers
@@ -138,6 +167,32 @@ nodalync earnings
 6. **AI-native interface** — MCP integration enables any agent to query knowledge bases with automatic compensation
 
 7. **Local-first sovereignty** — Your data stays on your node; buyers get query access, not downloads
+
+---
+
+### Versioning
+
+This repository uses **split versioning** to distinguish protocol stability from application features:
+
+| Component | Version | Stability | Tag Pattern | Release Contents |
+|-----------|---------|-----------|-------------|------------------|
+| **Protocol crates** | `0.2.x` | Stable, spec-driven | `protocol-v*` | GitHub release only |
+| **Application crates** | `0.5.x` | Feature releases | `v*` | Binaries + Docker |
+
+**Protocol crates** (`nodalync-crypto`, `nodalync-types`, `nodalync-wire`, `nodalync-store`, `nodalync-valid`, `nodalync-econ`, `nodalync-ops`, `nodalync-net`, `nodalync-settle`):
+- Version tracks the [protocol specification](./docs/spec.md) (currently v0.2.1)
+- Changes are rare and require spec updates
+- Breaking changes require major version bump
+- Tag `protocol-v0.2.1` → creates GitHub release (libraries, no binaries)
+
+**Application crates** (`nodalync-cli`, `nodalync-mcp`):
+- Version tracks CLI/MCP features
+- Independent release cadence
+- Tag `v0.5.0` → builds binaries for all platforms + Docker images
+
+**For users:** Download releases tagged `v*` (e.g., `v0.5.0`). This is the CLI version.
+
+**For developers:** Protocol crate versions indicate wire compatibility. Same `0.2.x` = compatible.
 
 ---
 

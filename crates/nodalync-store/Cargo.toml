@@ -1,6 +1,6 @@
 [package]
 name = "nodalync-store"
-version.workspace = true
+version = "0.2.1"
 edition.workspace = true
 description = "Local storage layer for the Nodalync protocol"
 license.workspace = true

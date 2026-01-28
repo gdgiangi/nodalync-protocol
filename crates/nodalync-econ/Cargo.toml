@@ -1,6 +1,6 @@
 [package]
 name = "nodalync-econ"
-version.workspace = true
+version = "0.2.1"
 edition.workspace = true
 
 [dependencies]
