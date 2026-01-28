@@ -1,6 +1,6 @@
 # Nodalync Protocol Specification
 
-**Version:** 0.2.1-draft
+**Version:** 0.3.0
 **Author:** Gabriel Giangi
 **Date:** January 2026
 **Status:** Draft
@@ -2452,6 +2452,7 @@ nodalync/
 *End of Protocol Specification*
 
 **Version History:**
+- 0.3.0 (January 2026): Added SEARCH protocol for network-wide content discovery, ManifestFilter with text search
 - 0.2.1-draft (January 2026): Changed currency from NDL token to HBAR (Hedera native)
 - 0.2.0-draft (January 2026): Added L2 Entity Graph as protocol-level content type
 - 0.1.0-draft (January 2025): Initial draft
