@@ -351,7 +351,11 @@ pub enum Commands {
         hedera_private_key: Option<PathBuf>,
 
         /// Hedera settlement contract ID (default: 0.0.7729011).
-        #[arg(long, env = "NODALYNC_HEDERA_CONTRACT_ID", default_value = "0.0.7729011")]
+        #[arg(
+            long,
+            env = "NODALYNC_HEDERA_CONTRACT_ID",
+            default_value = "0.0.7729011"
+        )]
         hedera_contract_id: String,
 
         /// Hedera network (testnet, mainnet, previewnet).
