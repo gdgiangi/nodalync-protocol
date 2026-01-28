@@ -168,7 +168,8 @@ pub fn start_daemon_sync(config: CliConfig, _format: OutputFormat) -> CliResult<
                 let shutdown_rx = shutdown_signal();
 
                 // Run the event loop with status file updates
-                let result = run_event_loop_with_status(&mut ctx, shutdown_rx, Some(&base_dir)).await;
+                let result =
+                    run_event_loop_with_status(&mut ctx, shutdown_rx, Some(&base_dir)).await;
 
                 // Cleanup
                 let _ = remove_pid_file(&pid_path);

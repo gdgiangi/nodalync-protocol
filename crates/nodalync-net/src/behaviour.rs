@@ -135,9 +135,7 @@ impl NodalyncBehaviour {
         let identify = identify::Behaviour::new(identify_config);
 
         // Configure Ping - keeps connections alive
-        let ping = ping::Behaviour::new(
-            ping::Config::new().with_interval(Duration::from_secs(15)),
-        );
+        let ping = ping::Behaviour::new(ping::Config::new().with_interval(Duration::from_secs(15)));
 
         Self {
             kademlia,
@@ -185,9 +183,7 @@ impl NodalyncBehaviour {
         let identify = identify::Behaviour::new(identify_config);
 
         // Configure Ping - keeps connections alive
-        let ping = ping::Behaviour::new(
-            ping::Config::new().with_interval(Duration::from_secs(15)),
-        );
+        let ping = ping::Behaviour::new(ping::Config::new().with_interval(Duration::from_secs(15)));
 
         Self {
             kademlia,
