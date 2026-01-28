@@ -6,7 +6,10 @@ use nodalync_types::Visibility;
 use crate::config::CliConfig;
 use crate::context::NodeContext;
 use crate::error::CliResult;
-use crate::node_runner::{calculate_uptime, check_existing_node, pid_file_path, read_start_time};
+use crate::node_runner::{
+    calculate_uptime, check_existing_node, pid_file_path, read_start_time, read_status_file,
+    status_file_path,
+};
 use crate::output::{OutputFormat, Render, StatusOutput};
 
 /// Execute the status command.
@@ -107,8 +110,10 @@ pub async fn status(config: CliConfig, format: OutputFormat) -> CliResult<String
     let pending = ctx.ops.state.settlement.get_pending()?;
     let pending_amount = ctx.ops.state.settlement.get_pending_total()?;
 
-    // Get connected peers
-    let connected_peers = ctx.connected_peers() as u32;
+    // Get connected peers from the status file (written by the running node)
+    let connected_peers = read_status_file(&status_file_path(&base_dir))
+        .map(|s| s.connected_peers)
+        .unwrap_or(0);
 
     let output = StatusOutput {
         running: true,

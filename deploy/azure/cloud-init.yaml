@@ -1,0 +1,16 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+
+packages:
+  - docker.io
+  - docker-compose
+
+runcmd:
+  - systemctl enable docker
+  - systemctl start docker
+  - usermod -aG docker nodalync
+  - mkdir -p /home/nodalync/.nodalync
+  - chown -R nodalync:nodalync /home/nodalync/.nodalync
+  # Pull and run nodalync (will be configured via script after VM is up)
+  - docker pull gabrielgiangi/nodalync:latest

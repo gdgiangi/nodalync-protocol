@@ -4,8 +4,8 @@ use crate::config::CliConfig;
 use crate::context::NodeContext;
 use crate::error::{CliError, CliResult};
 use crate::node_runner::{
-    check_existing_node, pid_file_path, remove_pid_file, run_event_loop,
-    write_pid_file_with_start_time,
+    check_existing_node, pid_file_path, remove_pid_file, remove_status_file,
+    run_event_loop_with_status, status_file_path, write_pid_file_with_start_time,
 };
 use crate::output::{OutputFormat, Render, StartOutput};
 use crate::signals::shutdown_signal;
@@ -67,12 +67,13 @@ pub async fn start(config: CliConfig, format: OutputFormat, daemon: bool) -> Cli
     // Set up shutdown signal handler
     let shutdown_rx = shutdown_signal();
 
-    // Run the event loop
-    let result = run_event_loop(&mut ctx, shutdown_rx).await;
+    // Run the event loop with status file updates
+    let result = run_event_loop_with_status(&mut ctx, shutdown_rx, Some(&base_dir)).await;
 
     // Cleanup on exit
     info!("Cleaning up...");
     let _ = remove_pid_file(&pid_path);
+    let _ = remove_status_file(&status_file_path(&base_dir));
 
     result?;
 
@@ -166,11 +167,12 @@ pub fn start_daemon_sync(config: CliConfig, _format: OutputFormat) -> CliResult<
                 // Set up shutdown signal handler
                 let shutdown_rx = shutdown_signal();
 
-                // Run the event loop
-                let result = run_event_loop(&mut ctx, shutdown_rx).await;
+                // Run the event loop with status file updates
+                let result = run_event_loop_with_status(&mut ctx, shutdown_rx, Some(&base_dir)).await;
 
                 // Cleanup
                 let _ = remove_pid_file(&pid_path);
+                let _ = remove_status_file(&status_file_path(&base_dir));
 
                 if let Err(e) = result {
                     eprintln!("Node error: {}", e);

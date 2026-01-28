@@ -1,19 +1,21 @@
 //! Transport layer for the Nodalync protocol.
 //!
 //! This module builds the libp2p transport stack using:
+//! - DNS for hostname resolution
 //! - TCP for connectivity
 //! - Noise (XX handshake) for encryption
 //! - Yamux for multiplexing
 
-use libp2p::{core::upgrade, identity::Keypair, noise, tcp, yamux, PeerId, Transport};
+use libp2p::{core::upgrade, dns, identity::Keypair, noise, tcp, yamux, PeerId, Transport};
 use std::time::Duration;
 
 /// Build the libp2p transport stack.
 ///
 /// The transport stack consists of:
-/// 1. TCP for base connectivity
-/// 2. Noise protocol (XX handshake) for encryption
-/// 3. Yamux for stream multiplexing
+/// 1. DNS for resolving hostnames (dns4/dns6)
+/// 2. TCP for base connectivity
+/// 3. Noise protocol (XX handshake) for encryption
+/// 4. Yamux for stream multiplexing
 ///
 /// Returns a boxed transport suitable for use with a Swarm.
 pub fn build_transport(
@@ -24,6 +26,9 @@ pub fn build_transport(
     let tcp_config = tcp::Config::default().nodelay(true);
     let tcp = tcp::tokio::Transport::new(tcp_config);
 
+    // Wrap TCP with DNS resolution support
+    let dns_tcp = dns::tokio::Transport::system(tcp).expect("DNS transport should initialize");
+
     // Create Noise config for authenticated encryption
     let noise_config = noise::Config::new(keypair).expect("noise keypair should be valid");
 
@@ -31,7 +36,8 @@ pub fn build_transport(
     let yamux_config = yamux::Config::default();
 
     // Build the transport stack
-    tcp.upgrade(upgrade::Version::V1)
+    dns_tcp
+        .upgrade(upgrade::Version::V1)
         .authenticate(noise_config)
         .multiplex(yamux_config)
         .timeout(idle_timeout)

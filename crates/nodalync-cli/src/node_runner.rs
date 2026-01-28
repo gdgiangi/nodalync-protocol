@@ -5,10 +5,12 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use nodalync_net::{InboundRequestId, Network, NetworkEvent, NetworkNode};
 use nodalync_wire::MessageType;
 use tokio::sync::watch;
+use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
 use crate::context::NodeContext;
@@ -20,6 +22,9 @@ use crate::error::{CliError, CliResult};
 
 /// Default PID file name.
 const PID_FILE_NAME: &str = "node.pid";
+
+/// Default status file name.
+const STATUS_FILE_NAME: &str = "node.status";
 
 /// Get the PID file path for the given base directory.
 pub fn pid_file_path(base_dir: &Path) -> PathBuf {
@@ -167,6 +172,49 @@ pub fn check_existing_node(base_dir: &Path) -> Option<u32> {
 }
 
 // =============================================================================
+// Status File Utilities
+// =============================================================================
+
+/// Runtime status written by the running node.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RuntimeStatus {
+    /// Number of connected peers.
+    pub connected_peers: u32,
+    /// Unix timestamp when status was last updated.
+    pub updated_at: u64,
+}
+
+/// Get the status file path for the given base directory.
+pub fn status_file_path(base_dir: &Path) -> PathBuf {
+    base_dir.join(STATUS_FILE_NAME)
+}
+
+/// Write the runtime status to the status file.
+pub fn write_status_file(path: &Path, status: &RuntimeStatus) -> CliResult<()> {
+    let json = serde_json::to_string(status)
+        .map_err(|e| CliError::User(format!("Failed to serialize status: {}", e)))?;
+    std::fs::write(path, json)?;
+    Ok(())
+}
+
+/// Read the runtime status from the status file.
+///
+/// Returns None if the file doesn't exist or can't be parsed.
+pub fn read_status_file(path: &Path) -> Option<RuntimeStatus> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+}
+
+/// Remove the status file.
+pub fn remove_status_file(path: &Path) -> CliResult<()> {
+    if path.exists() {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+// =============================================================================
 // Event Loop
 // =============================================================================
 
@@ -178,12 +226,25 @@ pub fn check_existing_node(base_dir: &Path) -> Option<u32> {
 /// # Arguments
 /// * `ctx` - The node context with network and operations
 /// * `shutdown_rx` - A watch receiver that triggers shutdown when changed to true
+/// * `base_dir` - The base directory for status file (optional)
 ///
 /// # Returns
 /// Ok(()) on graceful shutdown, or an error if something goes wrong.
 pub async fn run_event_loop(
     ctx: &mut NodeContext,
+    shutdown_rx: watch::Receiver<bool>,
+) -> CliResult<()> {
+    run_event_loop_with_status(ctx, shutdown_rx, None).await
+}
+
+/// Run the node event loop with status file updates.
+///
+/// This variant writes the node's runtime status to a file periodically,
+/// allowing the `status` command to read the current state.
+pub async fn run_event_loop_with_status(
+    ctx: &mut NodeContext,
     mut shutdown_rx: watch::Receiver<bool>,
+    base_dir: Option<&Path>,
 ) -> CliResult<()> {
     info!("Starting node event loop");
 
@@ -191,6 +252,31 @@ pub async fn run_event_loop(
         .network
         .as_ref()
         .ok_or(CliError::config("Network not initialized"))?;
+
+    // Status file path (if base_dir provided)
+    let status_path = base_dir.map(status_file_path);
+
+    // Status update interval (every 5 seconds)
+    let mut status_interval = interval(Duration::from_secs(5));
+
+    // Helper to write status
+    let write_status = |network: &Arc<NetworkNode>, path: &Option<PathBuf>| {
+        if let Some(ref path) = path {
+            let status = RuntimeStatus {
+                connected_peers: network.connected_peers().len() as u32,
+                updated_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+            };
+            if let Err(e) = write_status_file(path, &status) {
+                debug!("Failed to write status file: {}", e);
+            }
+        }
+    };
+
+    // Write initial status
+    write_status(network, &status_path);
 
     loop {
         tokio::select! {
@@ -202,12 +288,28 @@ pub async fn run_event_loop(
                 }
             }
 
+            // Periodic status update
+            _ = status_interval.tick() => {
+                write_status(network, &status_path);
+            }
+
             // Process network events
             event_result = network.next_event() => {
                 match event_result {
                     Ok(event) => {
+                        // Check if this is a peer connect/disconnect event
+                        let peer_change = matches!(
+                            &event,
+                            NetworkEvent::PeerConnected { .. } | NetworkEvent::PeerDisconnected { .. }
+                        );
+
                         if let Err(e) = handle_event(&mut ctx.ops, Arc::clone(network), event).await {
                             warn!("Error handling event: {}", e);
+                        }
+
+                        // Update status immediately on peer changes
+                        if peer_change {
+                            write_status(network, &status_path);
                         }
                     }
                     Err(e) => {
@@ -218,6 +320,11 @@ pub async fn run_event_loop(
                 }
             }
         }
+    }
+
+    // Clean up status file on exit
+    if let Some(ref path) = status_path {
+        let _ = remove_status_file(path);
     }
 
     info!("Event loop stopped");

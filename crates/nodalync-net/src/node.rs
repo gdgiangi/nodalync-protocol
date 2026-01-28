@@ -765,6 +765,10 @@ async fn run_swarm(
                         handle_identify_event(id_event, &mut swarm, &ctx.peer_mapper);
                     }
 
+                    SwarmEvent::Behaviour(NodalyncBehaviourEvent::Ping(ping_event)) => {
+                        handle_ping_event(ping_event);
+                    }
+
                     SwarmEvent::ConnectionEstablished { peer_id, num_established, .. } => {
                         debug!("Connection established with {} (total: {})", peer_id, num_established);
                         // Track connected peer
@@ -1037,6 +1041,18 @@ fn handle_identify_event(
         // Add addresses to Kademlia
         for addr in info.listen_addrs {
             swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
+        }
+    }
+}
+
+/// Handle Ping events.
+fn handle_ping_event(event: libp2p::ping::Event) {
+    match event.result {
+        Ok(rtt) => {
+            debug!("Ping to {} succeeded: {:?}", event.peer, rtt);
+        }
+        Err(e) => {
+            debug!("Ping to {} failed: {}", event.peer, e);
         }
     }
 }

@@ -12,12 +12,14 @@ nodalync-wire = { path = "../nodalync-wire" }
 # libp2p with required features
 libp2p = { version = "0.54", features = [
     "tcp",
+    "dns",
     "noise",
     "yamux",
     "kad",
     "gossipsub",
     "request-response",
     "identify",
+    "ping",
     "macros",
     "tokio",
 ] }

@@ -13,6 +13,7 @@ use libp2p::{
     gossipsub::{self, MessageId},
     identify,
     kad::{self, store::MemoryStore, Mode},
+    ping,
     request_response::{self, ProtocolSupport},
     swarm::NetworkBehaviour,
     PeerId,
@@ -27,6 +28,7 @@ use std::time::Duration;
 /// - `request_response`: Request-response messaging
 /// - `gossipsub`: Pub-sub for broadcast messages
 /// - `identify`: Peer identification and capability exchange
+/// - `ping`: Keep-alive pings to maintain connections
 #[derive(NetworkBehaviour)]
 #[behaviour(to_swarm = "NodalyncBehaviourEvent")]
 pub struct NodalyncBehaviour {
@@ -41,6 +43,9 @@ pub struct NodalyncBehaviour {
 
     /// Identify for peer discovery and capability exchange.
     pub identify: identify::Behaviour,
+
+    /// Ping for connection keep-alive.
+    pub ping: ping::Behaviour,
 }
 
 /// Events emitted by NodalyncBehaviour.
@@ -57,6 +62,9 @@ pub enum NodalyncBehaviourEvent {
 
     /// Identify event.
     Identify(identify::Event),
+
+    /// Ping event.
+    Ping(ping::Event),
 }
 
 impl From<kad::Event> for NodalyncBehaviourEvent {
@@ -80,6 +88,12 @@ impl From<gossipsub::Event> for NodalyncBehaviourEvent {
 impl From<identify::Event> for NodalyncBehaviourEvent {
     fn from(event: identify::Event) -> Self {
         NodalyncBehaviourEvent::Identify(event)
+    }
+}
+
+impl From<ping::Event> for NodalyncBehaviourEvent {
+    fn from(event: ping::Event) -> Self {
+        NodalyncBehaviourEvent::Ping(event)
     }
 }
 
@@ -120,11 +134,17 @@ impl NodalyncBehaviour {
         .with_push_listen_addr_updates(true);
         let identify = identify::Behaviour::new(identify_config);
 
+        // Configure Ping - keeps connections alive
+        let ping = ping::Behaviour::new(
+            ping::Config::new().with_interval(Duration::from_secs(15)),
+        );
+
         Self {
             kademlia,
             request_response,
             gossipsub,
             identify,
+            ping,
         }
     }
 
@@ -164,11 +184,17 @@ impl NodalyncBehaviour {
                 .with_push_listen_addr_updates(true);
         let identify = identify::Behaviour::new(identify_config);
 
+        // Configure Ping - keeps connections alive
+        let ping = ping::Behaviour::new(
+            ping::Config::new().with_interval(Duration::from_secs(15)),
+        );
+
         Self {
             kademlia,
             request_response,
             gossipsub,
             identify,
+            ping,
         }
     }
 }

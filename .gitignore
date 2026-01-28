@@ -55,3 +55,8 @@ DESIGN_DECISIONS.md
 WHATS_NEXT.md
 .claude/
 /data/
+
+# Deployment secrets (never commit)
+deploy/**/config.env
+deploy/**/*.env
+!deploy/**/*.env.example
