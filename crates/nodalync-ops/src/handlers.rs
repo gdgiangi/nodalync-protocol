@@ -603,9 +603,12 @@ where
                         // Handle query request and convert errors to QueryError responses
                         match self.handle_query_request(&nodalync_peer, &request).await {
                             Ok(response) => {
-                                let response_bytes =
-                                    nodalync_wire::encode_payload(&response).map_err(|e| {
-                                        OpsError::invalid_operation(format!("encoding error: {}", e))
+                                let response_bytes = nodalync_wire::encode_payload(&response)
+                                    .map_err(|e| {
+                                        OpsError::invalid_operation(format!(
+                                            "encoding error: {}",
+                                            e
+                                        ))
                                     })?;
                                 Ok(Some((MessageType::QueryResponse, response_bytes)))
                             }
@@ -615,9 +618,12 @@ where
                                 let error_payload = QueryErrorPayload {
                                     hash: request.hash,
                                     error_code: nodalync_types::ErrorCode::ChannelNotFound,
-                                    message: Some("Payment channel required for paid content".to_string()),
+                                    message: Some(
+                                        "Payment channel required for paid content".to_string(),
+                                    ),
                                     required_channel_peer_id: Some(self.peer_id()),
-                                    required_channel_libp2p_peer: self.network()
+                                    required_channel_libp2p_peer: self
+                                        .network()
                                         .map(|n| n.local_peer_id().to_string()),
                                 };
                                 info!(
@@ -625,9 +631,12 @@ where
                                     our_peer_id = %self.peer_id(),
                                     "Returning ChannelRequired error with peer info"
                                 );
-                                let error_bytes =
-                                    nodalync_wire::encode_payload(&error_payload).map_err(|e| {
-                                        OpsError::invalid_operation(format!("encoding error: {}", e))
+                                let error_bytes = nodalync_wire::encode_payload(&error_payload)
+                                    .map_err(|e| {
+                                        OpsError::invalid_operation(format!(
+                                            "encoding error: {}",
+                                            e
+                                        ))
                                     })?;
                                 Ok(Some((MessageType::QueryError, error_bytes)))
                             }
@@ -641,9 +650,12 @@ where
                                     required_channel_peer_id: None,
                                     required_channel_libp2p_peer: None,
                                 };
-                                let error_bytes =
-                                    nodalync_wire::encode_payload(&error_payload).map_err(|e| {
-                                        OpsError::invalid_operation(format!("encoding error: {}", e))
+                                let error_bytes = nodalync_wire::encode_payload(&error_payload)
+                                    .map_err(|e| {
+                                        OpsError::invalid_operation(format!(
+                                            "encoding error: {}",
+                                            e
+                                        ))
                                     })?;
                                 Ok(Some((MessageType::QueryError, error_bytes)))
                             }

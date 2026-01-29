@@ -48,24 +48,6 @@ fn peer_id_to_string(peer_id: &NodalyncPeerId) -> String {
     bs58::encode(&peer_id.0).into_string()
 }
 
-/// Parse a base58 string to a Nodalync PeerId.
-fn string_to_peer_id(s: &str) -> Result<NodalyncPeerId, String> {
-    let bytes = bs58::decode(s)
-        .into_vec()
-        .map_err(|e| format!("invalid base58: {}", e))?;
-
-    if bytes.len() != 20 {
-        return Err(format!(
-            "invalid peer ID length: expected 20, got {}",
-            bytes.len()
-        ));
-    }
-
-    let mut peer_id = [0u8; 20];
-    peer_id.copy_from_slice(&bytes);
-    Ok(NodalyncPeerId(peer_id))
-}
-
 /// Configuration for the MCP server.
 #[derive(Debug, Clone)]
 pub struct McpServerConfig {
@@ -1039,7 +1021,8 @@ impl NodalyncMcpServer {
         if !ops.has_network() {
             warn!("Cannot open channel: network not available");
             return Ok(tool_error(&NodalyncMcpError::Internal(
-                "Network not available. Ensure MCP server is started with --enable-network".to_string()
+                "Network not available. Ensure MCP server is started with --enable-network"
+                    .to_string(),
             )));
         }
 
@@ -1051,7 +1034,10 @@ impl NodalyncMcpServer {
                 "Opening channel via libp2p peer ID"
             );
 
-            match ops.open_payment_channel_to_libp2p(libp2p_peer, deposit_tinybars).await {
+            match ops
+                .open_payment_channel_to_libp2p(libp2p_peer, deposit_tinybars)
+                .await
+            {
                 Ok((channel, remote_nodalync_id)) => {
                     let output = OpenChannelOutput {
                         channel_id: hash_to_string(&channel.channel_id),
@@ -1129,9 +1115,10 @@ impl NodalyncMcpServer {
             }
             Err(e) => {
                 warn!(error = %e, "Failed to open channel via Nodalync peer ID");
-                Ok(tool_error(&NodalyncMcpError::Internal(
-                    format!("Failed to open channel: {}. Check that the peer is connected.", e)
-                )))
+                Ok(tool_error(&NodalyncMcpError::Internal(format!(
+                    "Failed to open channel: {}. Check that the peer is connected.",
+                    e
+                ))))
             }
         }
     }

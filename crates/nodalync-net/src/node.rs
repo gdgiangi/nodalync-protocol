@@ -584,8 +584,7 @@ impl Network for NetworkNode {
 
         match response.message_type {
             MessageType::QueryResponse => {
-                decode_payload(&response.payload)
-                    .map_err(|e| NetworkError::Decoding(e.to_string()))
+                decode_payload(&response.payload).map_err(|e| NetworkError::Decoding(e.to_string()))
             }
             MessageType::QueryError => {
                 // Parse the error payload and return appropriate error
@@ -606,7 +605,9 @@ impl Network for NetworkNode {
                 // Return generic query error
                 Err(NetworkError::QueryError {
                     code: error_payload.error_code,
-                    message: error_payload.message.unwrap_or_else(|| "Unknown error".to_string()),
+                    message: error_payload
+                        .message
+                        .unwrap_or_else(|| "Unknown error".to_string()),
                 })
             }
             _ => Err(NetworkError::InvalidResponseType {

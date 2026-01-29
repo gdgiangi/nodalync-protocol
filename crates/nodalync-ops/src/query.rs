@@ -514,8 +514,6 @@ where
             Signature::from_bytes([0u8; 64]),
         );
 
-        let payment_nonce = payment_nonce;
-
         let request = QueryRequestPayload {
             hash: *hash,
             query: None,

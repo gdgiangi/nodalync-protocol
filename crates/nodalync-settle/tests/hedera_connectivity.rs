@@ -56,7 +56,9 @@ fn try_load_dotenv() {
 fn try_load_key_file() -> Option<String> {
     let home = env::var("HOME").ok()?;
     let key_path = PathBuf::from(home).join(".nodalync").join("hedera.key");
-    std::fs::read_to_string(key_path).ok().map(|s| s.trim().to_string())
+    std::fs::read_to_string(key_path)
+        .ok()
+        .map(|s| s.trim().to_string())
 }
 
 /// Get test credentials from environment, .env file, or key file
