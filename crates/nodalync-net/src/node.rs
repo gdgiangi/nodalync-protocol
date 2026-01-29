@@ -27,8 +27,8 @@ use nodalync_crypto::{
 use nodalync_wire::{
     create_message, decode_message, decode_payload, encode_message, encode_payload,
     AnnouncePayload, ChannelClosePayload, ChannelOpenPayload, Message, MessageType,
-    PreviewRequestPayload, PreviewResponsePayload, QueryRequestPayload, QueryResponsePayload,
-    SearchPayload, SearchResponsePayload, SettleConfirmPayload,
+    PreviewRequestPayload, PreviewResponsePayload, QueryErrorPayload, QueryRequestPayload,
+    QueryResponsePayload, SearchPayload, SearchResponsePayload, SettleConfirmPayload,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock as StdRwLock};
@@ -582,14 +582,38 @@ impl Network for NetworkNode {
 
         let response = self.send(peer, message).await?;
 
-        if response.message_type != MessageType::QueryResponse {
-            return Err(NetworkError::InvalidResponseType {
-                expected: "QueryResponse".to_string(),
-                got: format!("{:?}", response.message_type),
-            });
-        }
+        match response.message_type {
+            MessageType::QueryResponse => {
+                decode_payload(&response.payload)
+                    .map_err(|e| NetworkError::Decoding(e.to_string()))
+            }
+            MessageType::QueryError => {
+                // Parse the error payload and return appropriate error
+                let error_payload: QueryErrorPayload = decode_payload(&response.payload)
+                    .map_err(|e| NetworkError::Decoding(e.to_string()))?;
 
-        decode_payload(&response.payload).map_err(|e| NetworkError::Decoding(e.to_string()))
+                // Check if this is a ChannelRequired error with peer info
+                if error_payload.error_code == nodalync_types::ErrorCode::ChannelNotFound
+                    && (error_payload.required_channel_peer_id.is_some()
+                        || error_payload.required_channel_libp2p_peer.is_some())
+                {
+                    return Err(NetworkError::ChannelRequired {
+                        nodalync_peer_id: error_payload.required_channel_peer_id.map(|p| p.0),
+                        libp2p_peer_id: error_payload.required_channel_libp2p_peer,
+                    });
+                }
+
+                // Return generic query error
+                Err(NetworkError::QueryError {
+                    code: error_payload.error_code,
+                    message: error_payload.message.unwrap_or_else(|| "Unknown error".to_string()),
+                })
+            }
+            _ => Err(NetworkError::InvalidResponseType {
+                expected: "QueryResponse or QueryError".to_string(),
+                got: format!("{:?}", response.message_type),
+            }),
+        }
     }
 
     async fn send_search(
@@ -726,6 +750,14 @@ impl Network for NetworkNode {
 
     fn libp2p_peer_id(&self, nodalync_peer: &NodalyncPeerId) -> Option<PeerId> {
         self.peer_mapper.to_libp2p(nodalync_peer)
+    }
+
+    fn register_peer_mapping(&self, libp2p_peer: PeerId, nodalync_peer: NodalyncPeerId) {
+        // Register the mapping with a placeholder public key
+        // The public key will be updated if we receive it via identify or other means
+        let placeholder_pubkey = nodalync_crypto::PublicKey::from_bytes([0u8; 32]);
+        self.peer_mapper
+            .register(libp2p_peer, nodalync_peer, placeholder_pubkey);
     }
 }
 

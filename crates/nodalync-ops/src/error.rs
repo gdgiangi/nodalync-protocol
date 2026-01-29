@@ -4,6 +4,7 @@
 //! functions in this crate.
 
 use nodalync_crypto::Hash;
+use nodalync_types::ErrorCode;
 use thiserror::Error;
 
 /// Result type for operations.
@@ -57,6 +58,17 @@ pub enum OpsError {
     /// Payment channel required for paid content.
     #[error("payment channel required")]
     ChannelRequired,
+
+    /// Payment channel required with server peer info for opening channel.
+    /// This variant is returned when the server provides its peer IDs so the
+    /// client can open a channel and retry.
+    #[error("payment channel required (server peer info available)")]
+    ChannelRequiredWithPeerInfo {
+        /// Server's Nodalync peer ID (20 bytes).
+        nodalync_peer_id: Option<nodalync_crypto::PeerId>,
+        /// Server's libp2p peer ID (base58 string).
+        libp2p_peer_id: Option<String>,
+    },
 
     /// Insufficient balance in channel.
     #[error("insufficient channel balance")]
@@ -125,6 +137,47 @@ impl OpsError {
     pub fn payment_required(msg: impl Into<String>) -> Self {
         OpsError::PaymentRequired(msg.into())
     }
+
+    /// Get the protocol error code for this error.
+    ///
+    /// Maps operational errors to the appropriate `ErrorCode` from spec Appendix C.
+    pub fn error_code(&self) -> ErrorCode {
+        match self {
+            // Content errors
+            Self::NotFound(_) | Self::ManifestNotFound(_) => ErrorCode::NotFound,
+            Self::SourceNotQueried(_) => ErrorCode::NotFound,
+            Self::ContentHashMismatch => ErrorCode::InvalidHash,
+            Self::NotAnL3 => ErrorCode::InvalidManifest,
+
+            // Access errors
+            Self::AccessDenied => ErrorCode::AccessDenied,
+
+            // Payment errors
+            Self::PaymentRequired(_) => ErrorCode::PaymentRequired,
+            Self::PaymentInsufficient => ErrorCode::PaymentInvalid,
+            Self::PaymentValidationFailed(_) => ErrorCode::PaymentInvalid,
+            Self::ChannelRequired => ErrorCode::ChannelNotFound,
+            Self::ChannelRequiredWithPeerInfo { .. } => ErrorCode::ChannelNotFound,
+            Self::InsufficientChannelBalance => ErrorCode::InsufficientBalance,
+
+            // Channel errors
+            Self::ChannelNotFound => ErrorCode::ChannelNotFound,
+            Self::ChannelAlreadyExists => ErrorCode::ChannelNotFound, // Closest match
+            Self::ChannelNotOpen => ErrorCode::ChannelClosed,
+
+            // Operation errors
+            Self::InvalidOperation(_) => ErrorCode::InvalidManifest,
+
+            // Network errors
+            Self::Network(_) => ErrorCode::ConnectionFailed,
+            Self::PeerIdNotFound => ErrorCode::PeerNotFound,
+
+            // Wrapped errors - delegate to inner type
+            Self::Validation(e) => e.error_code(),
+            Self::Store(_) => ErrorCode::InternalError,
+            Self::Econ(_) => ErrorCode::InternalError,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -146,5 +199,50 @@ mod tests {
 
         let err = OpsError::payment_required("need funds");
         assert!(matches!(err, OpsError::PaymentRequired(_)));
+    }
+
+    #[test]
+    fn test_error_code_mapping() {
+        let hash = content_hash(b"test");
+
+        // Content errors
+        assert_eq!(OpsError::NotFound(hash).error_code(), ErrorCode::NotFound);
+        assert_eq!(
+            OpsError::ContentHashMismatch.error_code(),
+            ErrorCode::InvalidHash
+        );
+
+        // Access errors
+        assert_eq!(OpsError::AccessDenied.error_code(), ErrorCode::AccessDenied);
+
+        // Payment errors
+        assert_eq!(
+            OpsError::PaymentRequired("test".into()).error_code(),
+            ErrorCode::PaymentRequired
+        );
+        assert_eq!(
+            OpsError::PaymentInsufficient.error_code(),
+            ErrorCode::PaymentInvalid
+        );
+        assert_eq!(
+            OpsError::InsufficientChannelBalance.error_code(),
+            ErrorCode::InsufficientBalance
+        );
+
+        // Channel errors
+        assert_eq!(
+            OpsError::ChannelNotFound.error_code(),
+            ErrorCode::ChannelNotFound
+        );
+        assert_eq!(
+            OpsError::ChannelNotOpen.error_code(),
+            ErrorCode::ChannelClosed
+        );
+
+        // Network errors
+        assert_eq!(
+            OpsError::PeerIdNotFound.error_code(),
+            ErrorCode::PeerNotFound
+        );
     }
 }

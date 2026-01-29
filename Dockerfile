@@ -7,6 +7,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
+    protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy only Cargo files first for dependency caching
@@ -37,13 +38,13 @@ RUN mkdir -p crates/nodalync-crypto/src && echo "pub fn dummy() {}" > crates/nod
     mkdir -p crates/nodalync-cli/src && echo "fn main() {}" > crates/nodalync-cli/src/main.rs
 
 # Build dependencies only (this layer is cached)
-RUN cargo build --release -p nodalync-cli 2>/dev/null || true
+RUN cargo build --release --features hedera-sdk -p nodalync-cli 2>/dev/null || true
 
 # Now copy actual source code
 COPY crates ./crates
 
-# Build release binary (only recompiles our code, not dependencies)
-RUN cargo build --release -p nodalync-cli
+# Build release binary with Hedera SDK support
+RUN cargo build --release --features hedera-sdk -p nodalync-cli
 
 # Runtime stage
 FROM debian:bookworm-slim

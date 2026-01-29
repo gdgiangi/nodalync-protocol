@@ -899,6 +899,103 @@ fn truncate_title(title: &str, max_len: usize) -> String {
     }
 }
 
+/// Output for channel operations (open/close).
+#[derive(Debug, Serialize)]
+pub struct ChannelOutput {
+    pub channel_id: String,
+    pub peer_id: String,
+    pub state: String,
+    pub my_balance: u64,
+    pub their_balance: u64,
+    pub operation: String,
+}
+
+impl Render for ChannelOutput {
+    fn render_human(&self) -> String {
+        format!(
+            "{} {}\n{} {}\n{} {}\n{} {}\n{} {}",
+            format!("Channel {}:", self.operation).green().bold(),
+            short_hash(&self.channel_id),
+            "Peer:".bold(),
+            short_peer_id(&self.peer_id),
+            "State:".bold(),
+            self.state,
+            "My Balance:".bold(),
+            format_ndl(self.my_balance),
+            "Their Balance:".bold(),
+            format_ndl(self.their_balance)
+        )
+    }
+
+    fn render_json(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_default()
+    }
+}
+
+/// Output for channel list command.
+#[derive(Debug, Serialize)]
+pub struct ChannelListOutput {
+    pub channels: Vec<ChannelSummary>,
+    pub total: usize,
+    pub open_count: usize,
+}
+
+/// Summary of a payment channel.
+#[derive(Debug, Serialize)]
+pub struct ChannelSummary {
+    pub channel_id: String,
+    pub peer_id: String,
+    pub state: String,
+    pub my_balance: u64,
+    pub their_balance: u64,
+    pub pending_payments: u32,
+}
+
+impl Render for ChannelListOutput {
+    fn render_human(&self) -> String {
+        if self.channels.is_empty() {
+            return "No payment channels.".dimmed().to_string();
+        }
+
+        let mut lines = vec![format!(
+            "{} {} channels ({} open)\n",
+            "Payment Channels:".bold(),
+            self.total,
+            self.open_count
+        )];
+
+        for ch in &self.channels {
+            let state_str = match ch.state.as_str() {
+                "Open" => ch.state.clone().green().to_string(),
+                "Opening" => ch.state.clone().yellow().to_string(),
+                "Closing" | "Closed" => ch.state.clone().dimmed().to_string(),
+                "Disputed" => ch.state.clone().red().to_string(),
+                _ => ch.state.clone(),
+            };
+            let pending_str = if ch.pending_payments > 0 {
+                format!(" ({} pending)", ch.pending_payments)
+            } else {
+                String::new()
+            };
+            lines.push(format!(
+                "  {} {} [{}] my: {} / their: {}{}",
+                short_hash(&ch.channel_id).cyan(),
+                short_peer_id(&ch.peer_id),
+                state_str,
+                format_ndl(ch.my_balance),
+                format_ndl(ch.their_balance),
+                pending_str.dimmed()
+            ));
+        }
+
+        lines.join("\n")
+    }
+
+    fn render_json(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_default()
+    }
+}
+
 /// Output for search command.
 #[derive(Debug, Serialize)]
 pub struct SearchOutput {

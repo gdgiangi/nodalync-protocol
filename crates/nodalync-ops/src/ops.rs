@@ -31,6 +31,10 @@ pub struct PreviewResponse {
     pub manifest: Manifest,
     /// L1 summary with preview mentions.
     pub l1_summary: L1Summary,
+    /// The libp2p peer ID of the content provider (for opening payment channels).
+    /// This is set when content is discovered via announcements, indicating
+    /// which peer can serve the content (as opposed to the content owner).
+    pub provider_peer_id: Option<String>,
 }
 
 /// Main operations trait for the Nodalync protocol.

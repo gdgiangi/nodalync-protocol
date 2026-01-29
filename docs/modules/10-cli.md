@@ -160,6 +160,31 @@ nodalync settle
 > Settled: 4.23 HBAR to 5 recipients
 ```
 
+### Payment Channels
+
+```bash
+# Open payment channel with peer
+nodalync open-channel <peer-id> --deposit 1.0
+> Channel opened: QmChan...
+> Peer: ndl1abc123...
+> State: Open
+> My Balance: 1.00 HBAR
+> Their Balance: 1.00 HBAR
+
+# List all payment channels
+nodalync list-channels
+> Payment Channels: 3 channels (2 open)
+>   QmChan1... ndl1abc... [Open] my: 0.85 HBAR / their: 1.15 HBAR
+>   QmChan2... ndl1def... [Open] my: 2.30 HBAR / their: 0.70 HBAR (5 pending)
+>   QmChan3... ndl1ghi... [Closed] my: 0.00 HBAR / their: 0.00 HBAR
+
+# Close payment channel
+nodalync close-channel <peer-id>
+> Channel closed: QmChan...
+> Peer: ndl1abc123...
+> Final Balance: my: 0.85 HBAR / their: 1.15 HBAR
+```
+
 ### Node Management
 
 ```bash
@@ -309,7 +334,20 @@ pub enum Commands {
     
     /// Stop node
     Stop,
-    
+
+    /// Open payment channel
+    OpenChannel {
+        peer_id: String,
+        #[arg(short, long)]
+        deposit: f64,
+    },
+
+    /// Close payment channel
+    CloseChannel { peer_id: String },
+
+    /// List payment channels
+    ListChannels,
+
     // ... more commands
 }
 
@@ -424,3 +462,6 @@ max_search_results = 20
 6. **balance**: Shows correct amounts
 7. **JSON output**: Valid JSON for all commands
 8. **Error messages**: Helpful, actionable errors
+9. **open-channel**: Opens channel, both sides have state
+10. **list-channels**: Shows all channels with states
+11. **close-channel**: Cooperative close, settles on-chain

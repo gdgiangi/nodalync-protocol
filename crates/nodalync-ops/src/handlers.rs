@@ -9,7 +9,7 @@ use nodalync_net::NetworkEvent;
 use nodalync_store::{
     ChannelStore, ContentStore, ManifestStore, QueuedDistribution, SettlementQueueStore,
 };
-use nodalync_types::{Channel, Payment, Visibility};
+use nodalync_types::{Channel, ChannelState, Payment, Visibility};
 use nodalync_valid::Validator;
 use nodalync_wire::{
     decode_message, decode_payload, AnnouncePayload, ChannelAcceptPayload, ChannelClosePayload,
@@ -401,6 +401,51 @@ where
         })
     }
 
+    /// Handle an incoming channel accept response.
+    ///
+    /// Transitions channel from Opening to Open when peer accepts.
+    /// This is called on the initiator side when they receive the
+    /// ChannelAccept message from the responder.
+    pub fn handle_channel_accept(
+        &mut self,
+        peer: &PeerId,
+        response: &ChannelAcceptPayload,
+    ) -> OpsResult<()> {
+        let timestamp = current_timestamp();
+
+        // Get the channel we opened with this peer
+        let mut channel = self
+            .state
+            .channels
+            .get(peer)?
+            .ok_or(OpsError::ChannelNotFound)?;
+
+        // Verify the channel ID matches
+        if channel.channel_id != response.channel_id {
+            return Err(OpsError::invalid_operation("channel ID mismatch"));
+        }
+
+        // Verify channel is in Opening state
+        if channel.state != ChannelState::Opening {
+            return Err(OpsError::invalid_operation(format!(
+                "channel not in Opening state: {:?}",
+                channel.state
+            )));
+        }
+
+        // Transition to Open state with their deposit
+        channel.mark_open(response.initial_balance, timestamp);
+        self.state.channels.update(peer, &channel)?;
+
+        debug!(
+            channel_id = %response.channel_id,
+            their_deposit = response.initial_balance,
+            "Channel accepted and opened"
+        );
+
+        Ok(())
+    }
+
     /// Handle an incoming channel close request.
     ///
     /// 1. Verify channel exists
@@ -521,18 +566,17 @@ where
                 };
 
                 debug!(
-                    "Received message type {:?} from peer {}, payload length: {}",
+                    "Received message type {:?} from peer {}, sender {:?}, payload length: {}",
                     message.message_type,
                     peer,
+                    message.sender,
                     message.payload.len()
                 );
 
-                // Get the Nodalync peer ID if we have a mapping
-                let nodalync_peer = if let Some(network) = self.network() {
-                    network.nodalync_peer_id(&peer).unwrap_or(PeerId([0u8; 20]))
-                } else {
-                    PeerId([0u8; 20])
-                };
+                // Use the sender from the signed message - this is the authoritative Nodalync PeerId.
+                // The sender is included in the message hash that's signed, so we can trust it
+                // as long as the signature is valid (TODO: add signature verification here).
+                let nodalync_peer = message.sender;
 
                 // Handle the request based on message type
                 match message.message_type {
@@ -555,12 +599,55 @@ where
                                 OpsError::invalid_operation(format!("decode error: {}", e))
                             })?;
                         debug!("Received query request for hash: {}", request.hash);
-                        let response = self.handle_query_request(&nodalync_peer, &request).await?;
-                        let response_bytes =
-                            nodalync_wire::encode_payload(&response).map_err(|e| {
-                                OpsError::invalid_operation(format!("encoding error: {}", e))
-                            })?;
-                        Ok(Some((MessageType::QueryResponse, response_bytes)))
+
+                        // Handle query request and convert errors to QueryError responses
+                        match self.handle_query_request(&nodalync_peer, &request).await {
+                            Ok(response) => {
+                                let response_bytes =
+                                    nodalync_wire::encode_payload(&response).map_err(|e| {
+                                        OpsError::invalid_operation(format!("encoding error: {}", e))
+                                    })?;
+                                Ok(Some((MessageType::QueryResponse, response_bytes)))
+                            }
+                            Err(OpsError::ChannelRequired) => {
+                                // Return QueryError with our peer IDs so client can open channel
+                                use nodalync_wire::QueryErrorPayload;
+                                let error_payload = QueryErrorPayload {
+                                    hash: request.hash,
+                                    error_code: nodalync_types::ErrorCode::ChannelNotFound,
+                                    message: Some("Payment channel required for paid content".to_string()),
+                                    required_channel_peer_id: Some(self.peer_id()),
+                                    required_channel_libp2p_peer: self.network()
+                                        .map(|n| n.local_peer_id().to_string()),
+                                };
+                                info!(
+                                    requester = %nodalync_peer,
+                                    our_peer_id = %self.peer_id(),
+                                    "Returning ChannelRequired error with peer info"
+                                );
+                                let error_bytes =
+                                    nodalync_wire::encode_payload(&error_payload).map_err(|e| {
+                                        OpsError::invalid_operation(format!("encoding error: {}", e))
+                                    })?;
+                                Ok(Some((MessageType::QueryError, error_bytes)))
+                            }
+                            Err(e) => {
+                                // For other errors, return QueryError without peer info
+                                use nodalync_wire::QueryErrorPayload;
+                                let error_payload = QueryErrorPayload {
+                                    hash: request.hash,
+                                    error_code: e.error_code(),
+                                    message: Some(e.to_string()),
+                                    required_channel_peer_id: None,
+                                    required_channel_libp2p_peer: None,
+                                };
+                                let error_bytes =
+                                    nodalync_wire::encode_payload(&error_payload).map_err(|e| {
+                                        OpsError::invalid_operation(format!("encoding error: {}", e))
+                                    })?;
+                                Ok(Some((MessageType::QueryError, error_bytes)))
+                            }
+                        }
                     }
                     MessageType::VersionRequest => {
                         let request: VersionRequestPayload = decode_payload(&message.payload)
@@ -599,6 +686,15 @@ where
                         debug!("Received channel close request");
                         self.handle_channel_close(&nodalync_peer, &request)?;
                         Ok(None) // No response needed for close
+                    }
+                    MessageType::ChannelAccept => {
+                        let response: ChannelAcceptPayload = decode_payload(&message.payload)
+                            .map_err(|e| {
+                                OpsError::invalid_operation(format!("decode error: {}", e))
+                            })?;
+                        debug!("Received channel accept response");
+                        self.handle_channel_accept(&nodalync_peer, &response)?;
+                        Ok(None) // No response needed for accept
                     }
                     MessageType::Search => {
                         let request: SearchPayload =
@@ -902,6 +998,94 @@ mod tests {
         // Verify channel is closed
         let channel = ops.get_payment_channel(&requester).unwrap().unwrap();
         assert!(channel.is_closed());
+    }
+
+    #[tokio::test]
+    async fn test_handle_channel_accept_success() {
+        let (mut ops, _temp) = create_test_ops();
+        let peer = test_peer_id();
+
+        // Simulate initiator opening a channel (creates in Opening state)
+        let channel = ops
+            .open_payment_channel(&peer, 100_0000_0000)
+            .await
+            .unwrap();
+
+        // Verify channel is in Opening state
+        let stored_channel = ops.get_payment_channel(&peer).unwrap().unwrap();
+        assert_eq!(stored_channel.state, nodalync_types::ChannelState::Opening);
+
+        // Simulate receiving ChannelAccept from peer
+        let accept_response = ChannelAcceptPayload {
+            channel_id: channel.channel_id,
+            initial_balance: 100_0000_0000, // Their matching deposit
+            funding_tx: None,
+        };
+
+        ops.handle_channel_accept(&peer, &accept_response).unwrap();
+
+        // Verify channel is now Open
+        let opened_channel = ops.get_payment_channel(&peer).unwrap().unwrap();
+        assert!(opened_channel.is_open());
+        assert_eq!(opened_channel.their_balance, 100_0000_0000);
+    }
+
+    #[tokio::test]
+    async fn test_handle_channel_accept_wrong_channel_id() {
+        let (mut ops, _temp) = create_test_ops();
+        let peer = test_peer_id();
+
+        // Open a channel
+        ops.open_payment_channel(&peer, 100_0000_0000)
+            .await
+            .unwrap();
+
+        // Try to accept with wrong channel ID
+        let wrong_accept = ChannelAcceptPayload {
+            channel_id: content_hash(b"wrong channel"),
+            initial_balance: 100_0000_0000,
+            funding_tx: None,
+        };
+
+        let result = ops.handle_channel_accept(&peer, &wrong_accept);
+        assert!(matches!(result, Err(OpsError::InvalidOperation(_))));
+    }
+
+    #[test]
+    fn test_handle_channel_accept_wrong_state() {
+        let (mut ops, _temp) = create_test_ops();
+        let peer = test_peer_id();
+        let channel_id = content_hash(b"test channel");
+
+        // Accept a channel (creates in Open state directly)
+        ops.accept_payment_channel(&channel_id, &peer, 500, 500)
+            .unwrap();
+
+        // Try to accept again (channel already Open)
+        let accept = ChannelAcceptPayload {
+            channel_id,
+            initial_balance: 500,
+            funding_tx: None,
+        };
+
+        let result = ops.handle_channel_accept(&peer, &accept);
+        assert!(matches!(result, Err(OpsError::InvalidOperation(_))));
+    }
+
+    #[test]
+    fn test_handle_channel_accept_no_channel() {
+        let (mut ops, _temp) = create_test_ops();
+        let peer = test_peer_id();
+
+        // Try to accept without having opened a channel
+        let accept = ChannelAcceptPayload {
+            channel_id: content_hash(b"nonexistent"),
+            initial_balance: 500,
+            funding_tx: None,
+        };
+
+        let result = ops.handle_channel_accept(&peer, &accept);
+        assert!(matches!(result, Err(OpsError::ChannelNotFound)));
     }
 
     #[tokio::test]

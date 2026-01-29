@@ -14,19 +14,57 @@ use rmcp::{
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
-use nodalync_crypto::{peer_id_from_public_key, PeerId as NodalyncPeerId};
+use nodalync_crypto::{peer_id_from_public_key, PeerId as NodalyncPeerId, UNKNOWN_PEER_ID};
 use nodalync_net::{Multiaddr, Network, NetworkConfig, NetworkNode, PeerId as LibP2pPeerId};
 use nodalync_ops::DefaultNodeOperations;
 use nodalync_store::{ManifestFilter, ManifestStore, NodeState, NodeStateConfig};
 use nodalync_types::{ContentType, Visibility};
 
 use crate::budget::{hbar_to_tinybars, tinybars_to_hbar, BudgetTracker};
+use crate::error::McpError as NodalyncMcpError;
 use crate::tools::{
     hash_to_string, string_to_hash, DepositHbarInput, DepositHbarOutput, GetChannelStatusOutput,
     GetHederaBalanceOutput, HealthStatusOutput, ListSourcesInput, ListSourcesOutput,
     OpenChannelInput, OpenChannelOutput, QueryKnowledgeInput, QueryKnowledgeOutput,
     SearchNetworkInput, SearchNetworkOutput, SearchResultInfo, SourceInfo,
 };
+
+/// Create a standardized error response for MCP tools.
+///
+/// Returns a JSON-formatted error with error code, message, and recovery suggestion.
+fn tool_error(error: &NodalyncMcpError) -> CallToolResult {
+    let code = error.error_code();
+    let response = serde_json::json!({
+        "error": code.to_string(),
+        "code": code.code(),
+        "message": error.to_string(),
+        "suggestion": code.suggestion(),
+    });
+    CallToolResult::error(vec![Content::text(response.to_string())])
+}
+
+/// Convert a Nodalync PeerId to a base58 string.
+fn peer_id_to_string(peer_id: &NodalyncPeerId) -> String {
+    bs58::encode(&peer_id.0).into_string()
+}
+
+/// Parse a base58 string to a Nodalync PeerId.
+fn string_to_peer_id(s: &str) -> Result<NodalyncPeerId, String> {
+    let bytes = bs58::decode(s)
+        .into_vec()
+        .map_err(|e| format!("invalid base58: {}", e))?;
+
+    if bytes.len() != 20 {
+        return Err(format!(
+            "invalid peer ID length: expected 20, got {}",
+            bytes.len()
+        ));
+    }
+
+    let mut peer_id = [0u8; 20];
+    peer_id.copy_from_slice(&bytes);
+    Ok(NodalyncPeerId(peer_id))
+}
 
 /// Configuration for the MCP server.
 #[derive(Debug, Clone)]
@@ -231,6 +269,33 @@ impl NodalyncMcpServer {
             (None, None) => DefaultNodeOperations::with_defaults(state, peer_id),
         };
 
+        // Wrap ops in Arc<Mutex> for sharing
+        let ops = Arc::new(Mutex::new(ops));
+
+        // Spawn background event processor if network is enabled
+        if let Some(ref net) = network {
+            let ops_clone = Arc::clone(&ops);
+            let network_clone = Arc::clone(net);
+
+            tokio::spawn(async move {
+                info!("MCP event processor started");
+                loop {
+                    match network_clone.next_event().await {
+                        Ok(event) => {
+                            let mut ops_guard = ops_clone.lock().await;
+                            if let Err(e) = ops_guard.handle_network_event(event).await {
+                                warn!("MCP event handler error: {}", e);
+                            }
+                        }
+                        Err(e) => {
+                            warn!("MCP network event error: {} - stopping event processor", e);
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+
         // Create budget tracker
         let budget = BudgetTracker::with_auto_approve(config.budget_hbar, config.auto_approve_hbar);
 
@@ -243,7 +308,7 @@ impl NodalyncMcpServer {
         );
 
         Ok(Self {
-            ops: Arc::new(Mutex::new(ops)),
+            ops,
             budget: Arc::new(budget),
             tool_router: Self::tool_router(),
             network,
@@ -261,8 +326,9 @@ impl NodalyncMcpServer {
     ///
     /// Retrieves content matching the query, pays the content owner,
     /// and returns the content with provenance information.
+    /// Automatically opens payment channels when needed for paid content.
     #[tool(
-        description = "Query knowledge from the Nodalync network. Returns content with provenance and automatically handles payment. Query must be a base58-encoded content hash (use list_sources to discover hashes)."
+        description = "Query knowledge from the Nodalync network. Returns content with provenance and automatically handles payment. Automatically opens payment channels for paid content. Query must be a base58-encoded content hash (use list_sources to discover hashes)."
     )]
     async fn query_knowledge(
         &self,
@@ -273,23 +339,18 @@ impl NodalyncMcpServer {
         // Parse query as hash (natural language search not yet supported)
         let hash = match string_to_hash(&input.query) {
             Ok(h) => h,
-            Err(_) => {
-                return Ok(CallToolResult::error(vec![Content::text(
-                    "Query must be a base58-encoded content hash. Use list_sources to discover available content hashes.",
-                )]));
+            Err(e) => {
+                return Ok(tool_error(&NodalyncMcpError::InvalidHash(e)));
             }
         };
 
-        // Get preview to check price
+        // Get preview to check price and find provider
         let mut ops = self.ops.lock().await;
         let preview = match ops.preview_content(&hash).await {
             Ok(p) => p,
             Err(e) => {
                 warn!(hash = %hash_to_string(&hash), error = %e, "Content not found");
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Content not found: {}",
-                    e
-                ))]));
+                return Ok(tool_error(&NodalyncMcpError::Ops(e)));
             }
         };
 
@@ -302,44 +363,217 @@ impl NodalyncMcpServer {
             .map(hbar_to_tinybars)
             .unwrap_or(self.budget.remaining());
         if price > max_budget {
-            return Ok(CallToolResult::error(vec![Content::text(format!(
-                "Content costs {:.6} HBAR but query budget is {:.6} HBAR",
-                price_hbar,
-                tinybars_to_hbar(max_budget)
-            ))]));
+            return Ok(tool_error(&NodalyncMcpError::BudgetExceeded {
+                cost: price,
+                remaining: max_budget,
+            }));
         }
 
         // Check if auto-approve or needs confirmation
         let auto_approved = self.budget.can_auto_approve(price);
         if !auto_approved && !self.budget.can_afford(price) {
-            return Ok(CallToolResult::error(vec![Content::text(format!(
-                "Insufficient budget: content costs {:.6} HBAR but only {:.6} HBAR remaining",
-                price_hbar,
-                self.budget.remaining_hbar()
-            ))]));
+            return Ok(tool_error(&NodalyncMcpError::BudgetExceeded {
+                cost: price,
+                remaining: self.budget.remaining(),
+            }));
+        }
+
+        // For paid content, ensure we have a payment channel with the provider
+        let mut channel_opened = false;
+        let mut provider_peer_id: Option<String> = None;
+
+        // Debug: log preview details
+        info!(
+            hash = %hash_to_string(&hash),
+            price = price,
+            provider_peer_id = ?preview.provider_peer_id,
+            manifest_owner = %peer_id_to_string(&preview.manifest.owner),
+            "Query knowledge: preview details"
+        );
+
+        if price > 0 {
+            // Determine which peer to open a channel with:
+            // 1. If we have provider_peer_id from announcement (libp2p format), use that directly
+            // 2. Otherwise fall back to manifest.owner (Nodalync format)
+            if let Some(ref libp2p_peer_str) = preview.provider_peer_id {
+                // Content discovered via announcement - use the provider's libp2p peer ID directly
+                if let Ok(libp2p_peer) = libp2p_peer_str.parse::<LibP2pPeerId>() {
+                    // Check if we already have an open channel with this provider
+                    // We need to check by trying to find via network mapping
+                    let existing_nodalync_id = if let Some(ref network) = self.network {
+                        network.nodalync_peer_id(&libp2p_peer)
+                    } else {
+                        None
+                    };
+
+                    let has_channel = existing_nodalync_id
+                        .map(|id| ops.has_open_channel(&id).unwrap_or(false))
+                        .unwrap_or(false);
+
+                    if has_channel {
+                        provider_peer_id = existing_nodalync_id.map(|p| peer_id_to_string(&p));
+                    } else {
+                        // Auto-open a payment channel with default deposit (1 HBAR)
+                        let default_deposit = hbar_to_tinybars(1.0);
+                        info!(
+                            provider_libp2p = %libp2p_peer,
+                            deposit_hbar = 1.0,
+                            "Auto-opening payment channel via libp2p peer ID"
+                        );
+
+                        // Use the new method that takes libp2p peer ID directly
+                        match ops
+                            .open_payment_channel_to_libp2p(libp2p_peer, default_deposit)
+                            .await
+                        {
+                            Ok((channel, remote_nodalync_id)) => {
+                                info!(
+                                    channel_id = %hash_to_string(&channel.channel_id),
+                                    provider = %peer_id_to_string(&remote_nodalync_id),
+                                    "Payment channel opened successfully"
+                                );
+                                channel_opened = true;
+                                provider_peer_id = Some(peer_id_to_string(&remote_nodalync_id));
+                            }
+                            Err(e) => {
+                                warn!(
+                                    provider_libp2p = %libp2p_peer,
+                                    error = %e,
+                                    "Failed to open payment channel, continuing anyway"
+                                );
+                            }
+                        }
+                    }
+                } else {
+                    warn!(
+                        provider_str = %libp2p_peer_str,
+                        "Invalid libp2p peer ID format in announcement"
+                    );
+                }
+            } else if preview.manifest.owner != UNKNOWN_PEER_ID {
+                // Local content with known owner - use the old method
+                let peer = preview.manifest.owner;
+                provider_peer_id = Some(peer_id_to_string(&peer));
+
+                let has_channel = ops.has_open_channel(&peer).unwrap_or(false);
+
+                if !has_channel {
+                    let default_deposit = hbar_to_tinybars(1.0);
+                    info!(
+                        provider = %peer_id_to_string(&peer),
+                        deposit_hbar = 1.0,
+                        "Auto-opening payment channel for paid content"
+                    );
+
+                    match ops.open_payment_channel(&peer, default_deposit).await {
+                        Ok(channel) => {
+                            info!(
+                                channel_id = %hash_to_string(&channel.channel_id),
+                                provider = %peer_id_to_string(&peer),
+                                "Payment channel opened successfully"
+                            );
+                            channel_opened = true;
+
+                            // Give the channel a moment to be accepted by the remote peer
+                            tokio::time::sleep(Duration::from_millis(500)).await;
+                        }
+                        Err(e) => {
+                            warn!(
+                                provider = %peer_id_to_string(&peer),
+                                error = %e,
+                                "Failed to open payment channel, continuing anyway"
+                            );
+                        }
+                    }
+                }
+            } else {
+                warn!("No provider peer ID available for paid content - channel cannot be opened");
+            }
         }
 
         // Reserve budget BEFORE executing query (atomic spend returns None if insufficient)
         if price > 0 && self.budget.spend(price).is_none() {
-            return Ok(CallToolResult::error(vec![Content::text(format!(
-                "Budget reservation failed: content costs {:.6} HBAR but only {:.6} HBAR remaining",
-                price_hbar,
-                self.budget.remaining_hbar()
-            ))]));
+            return Ok(tool_error(&NodalyncMcpError::BudgetExceeded {
+                cost: price,
+                remaining: self.budget.remaining(),
+            }));
         }
 
         // Execute query (budget already reserved)
+        // If server returns ChannelRequiredWithPeerInfo, open channel and retry
         let response = match ops.query_content(&hash, price, None).await {
             Ok(r) => r,
+            Err(nodalync_ops::OpsError::ChannelRequiredWithPeerInfo {
+                nodalync_peer_id,
+                libp2p_peer_id,
+            }) => {
+                info!(
+                    nodalync_peer_id = ?nodalync_peer_id,
+                    libp2p_peer_id = ?libp2p_peer_id,
+                    "Server requires payment channel - auto-opening"
+                );
+
+                // Try to open channel using the provided peer info
+                let default_deposit = hbar_to_tinybars(1.0);
+
+                // Prefer libp2p peer ID for direct connection
+                if let Some(ref libp2p_str) = libp2p_peer_id {
+                    if let Ok(libp2p_peer) = libp2p_str.parse::<LibP2pPeerId>() {
+                        match ops
+                            .open_payment_channel_to_libp2p(libp2p_peer, default_deposit)
+                            .await
+                        {
+                            Ok((channel, remote_id)) => {
+                                info!(
+                                    channel_id = %hash_to_string(&channel.channel_id),
+                                    provider = %peer_id_to_string(&remote_id),
+                                    "Payment channel opened via libp2p peer ID - retrying query"
+                                );
+                                channel_opened = true;
+                                provider_peer_id = Some(peer_id_to_string(&remote_id));
+                            }
+                            Err(e) => {
+                                warn!(error = %e, "Failed to open channel via libp2p");
+                            }
+                        }
+                    }
+                } else if let Some(ref nodalync_id) = nodalync_peer_id {
+                    // Fallback to Nodalync peer ID
+                    match ops.open_payment_channel(nodalync_id, default_deposit).await {
+                        Ok(channel) => {
+                            info!(
+                                channel_id = %hash_to_string(&channel.channel_id),
+                                provider = %peer_id_to_string(nodalync_id),
+                                "Payment channel opened via Nodalync peer ID - retrying query"
+                            );
+                            channel_opened = true;
+                            provider_peer_id = Some(peer_id_to_string(nodalync_id));
+                            // Give channel time to be accepted
+                            tokio::time::sleep(Duration::from_millis(500)).await;
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Failed to open channel via Nodalync peer ID");
+                        }
+                    }
+                }
+
+                // Retry the query after opening channel
+                match ops.query_content(&hash, price, None).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        if price > 0 {
+                            self.budget.refund(price);
+                        }
+                        return Ok(tool_error(&NodalyncMcpError::Ops(e)));
+                    }
+                }
+            }
             Err(e) => {
                 // Refund budget on failure (best effort - log if this somehow fails)
                 if price > 0 {
                     self.budget.refund(price);
                 }
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Query failed: {}",
-                    e
-                ))]));
+                return Ok(tool_error(&NodalyncMcpError::Ops(e)));
             }
         };
 
@@ -371,12 +605,15 @@ impl NodalyncMcpServer {
             provenance,
             cost_hbar: price_hbar,
             remaining_budget_hbar: self.budget.remaining_hbar(),
+            channel_opened: if channel_opened { Some(true) } else { None },
+            provider_peer_id,
         };
 
         info!(
             hash = %hash_to_string(&hash),
             cost_hbar = price_hbar,
             remaining_hbar = self.budget.remaining_hbar(),
+            channel_opened = channel_opened,
             "Query completed successfully"
         );
 
@@ -430,6 +667,7 @@ impl NodalyncMcpServer {
                             price_hbar: tinybars_to_hbar(r.price),
                             preview,
                             topics: r.l1_summary.primary_topics.clone(),
+                            peer_id: r.publisher_peer_id.clone(),
                         });
                     }
                 }
@@ -464,12 +702,15 @@ impl NodalyncMcpServer {
                                 format!("{} bytes of content", m.metadata.content_size)
                             });
 
+                            // For local manifests, use the owner as peer_id
+                            let owner_peer_id = peer_id_to_string(&m.owner);
                             sources.push(SourceInfo {
                                 hash: hash_to_string(&m.hash),
                                 title: m.metadata.title.clone(),
                                 price_hbar: tinybars_to_hbar(m.economics.price),
                                 preview,
                                 topics: m.metadata.tags.clone(),
+                                peer_id: Some(owner_peer_id),
                             });
                         }
                     }
@@ -501,6 +742,7 @@ impl NodalyncMcpServer {
                             price_hbar: tinybars_to_hbar(announce.price),
                             preview,
                             topics: vec![],
+                            peer_id: announce.publisher_peer_id.clone(),
                         });
                     }
                 }
@@ -685,15 +927,15 @@ impl NodalyncMcpServer {
     )]
     async fn get_hedera_balance(&self) -> Result<CallToolResult, McpError> {
         let Some(settlement) = &self.settlement else {
-            return Ok(CallToolResult::error(vec![Content::text(
+            return Ok(tool_error(&NodalyncMcpError::internal(
                 "Hedera settlement is not configured. Start the MCP server with --hedera-account-id and --hedera-private-key options.",
-            )]));
+            )));
         };
 
         let Some(config) = &self.hedera_config else {
-            return Ok(CallToolResult::error(vec![Content::text(
+            return Ok(tool_error(&NodalyncMcpError::internal(
                 "Hedera configuration not found.",
-            )]));
+            )));
         };
 
         let balance = settlement
@@ -731,9 +973,9 @@ impl NodalyncMcpServer {
         Parameters(input): Parameters<DepositHbarInput>,
     ) -> Result<CallToolResult, McpError> {
         let Some(settlement) = &self.settlement else {
-            return Ok(CallToolResult::error(vec![Content::text(
+            return Ok(tool_error(&NodalyncMcpError::internal(
                 "Hedera settlement is not configured.",
-            )]));
+            )));
         };
 
         let amount_tinybars = hbar_to_tinybars(input.amount_hbar);
@@ -770,50 +1012,128 @@ impl NodalyncMcpServer {
     ///
     /// Creates a new payment channel for off-chain micropayments.
     #[tool(
-        description = "Open a payment channel with a peer. Channels enable fast off-chain micropayments for content queries. The deposit is locked until the channel is closed."
+        description = "Open a payment channel with a peer. Channels enable fast off-chain micropayments for content queries. The deposit is locked until the channel is closed. Use the peer_id from list_sources or search_network results. Minimum deposit: 100 HBAR."
     )]
     async fn open_channel(
         &self,
         Parameters(input): Parameters<OpenChannelInput>,
     ) -> Result<CallToolResult, McpError> {
-        // Parse peer ID
-        let peer_bytes = bs58::decode(&input.peer_id)
-            .into_vec()
-            .map_err(|_| McpError::invalid_params("Invalid peer ID format", None))?;
+        // Validate minimum deposit (100 HBAR = 10,000,000,000 tinybars)
+        const MIN_DEPOSIT_HBAR: f64 = 100.0;
+        if input.deposit_hbar < MIN_DEPOSIT_HBAR {
+            warn!(
+                deposit = input.deposit_hbar,
+                minimum = MIN_DEPOSIT_HBAR,
+                "Deposit below minimum"
+            );
+            return Ok(tool_error(&NodalyncMcpError::Internal(format!(
+                "Deposit {} HBAR is below minimum of {} HBAR. Payment channels require at least 100 HBAR deposit.",
+                input.deposit_hbar, MIN_DEPOSIT_HBAR
+            ))));
+        }
+
+        let deposit_tinybars = hbar_to_tinybars(input.deposit_hbar);
+        let mut ops = self.ops.lock().await;
+
+        // Check if network is available
+        if !ops.has_network() {
+            warn!("Cannot open channel: network not available");
+            return Ok(tool_error(&NodalyncMcpError::Internal(
+                "Network not available. Ensure MCP server is started with --enable-network".to_string()
+            )));
+        }
+
+        // Try to parse as libp2p peer ID first (starts with "12D3Koo" or similar)
+        if let Ok(libp2p_peer) = input.peer_id.parse::<LibP2pPeerId>() {
+            info!(
+                libp2p_peer = %libp2p_peer,
+                deposit_hbar = input.deposit_hbar,
+                "Opening channel via libp2p peer ID"
+            );
+
+            match ops.open_payment_channel_to_libp2p(libp2p_peer, deposit_tinybars).await {
+                Ok((channel, remote_nodalync_id)) => {
+                    let output = OpenChannelOutput {
+                        channel_id: hash_to_string(&channel.channel_id),
+                        transaction_id: None, // MVP: local only
+                        balance_tinybars: channel.my_balance,
+                        peer_id: peer_id_to_string(&remote_nodalync_id),
+                    };
+
+                    info!(
+                        channel_id = %output.channel_id,
+                        remote_nodalync_id = %output.peer_id,
+                        deposit_hbar = input.deposit_hbar,
+                        "Channel opened successfully via libp2p"
+                    );
+
+                    let json = serde_json::to_string_pretty(&output)
+                        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+                    return Ok(CallToolResult::success(vec![Content::text(json)]));
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to open channel via libp2p");
+                    return Ok(tool_error(&NodalyncMcpError::Internal(
+                        format!("Failed to open channel: {}. Check that the peer is connected and reachable.", e)
+                    )));
+                }
+            }
+        }
+
+        // Try to parse as Nodalync peer ID (20 bytes base58, starts with "ndl")
+        let peer_bytes = match bs58::decode(&input.peer_id).into_vec() {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                return Ok(tool_error(&NodalyncMcpError::InvalidHash(
+                    "Invalid peer ID format. Use the peer_id from list_sources (starts with 12D3Koo).".to_string()
+                )));
+            }
+        };
 
         if peer_bytes.len() != 20 {
-            return Err(McpError::invalid_params("Peer ID must be 20 bytes", None));
+            return Ok(tool_error(&NodalyncMcpError::InvalidHash(
+                format!("Invalid peer ID. Expected libp2p peer ID (from list_sources, starts with 12D3Koo) or Nodalync peer ID (20 bytes). Got {} bytes.", peer_bytes.len())
+            )));
         }
 
         let mut peer_arr = [0u8; 20];
         peer_arr.copy_from_slice(&peer_bytes);
         let peer_id = nodalync_crypto::PeerId(peer_arr);
 
-        let deposit_tinybars = hbar_to_tinybars(input.deposit_hbar);
-
-        let mut ops = self.ops.lock().await;
-        let channel = ops
-            .open_payment_channel(&peer_id, deposit_tinybars)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        let output = OpenChannelOutput {
-            channel_id: hash_to_string(&channel.channel_id),
-            transaction_id: None, // MVP: local only
-            balance_tinybars: channel.my_balance,
-            peer_id: input.peer_id,
-        };
-
         info!(
-            channel_id = %output.channel_id,
+            nodalync_peer = %peer_id_to_string(&peer_id),
             deposit_hbar = input.deposit_hbar,
-            "Channel opened"
+            "Opening channel via Nodalync peer ID"
         );
 
-        let json = serde_json::to_string_pretty(&output)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        match ops.open_payment_channel(&peer_id, deposit_tinybars).await {
+            Ok(channel) => {
+                let output = OpenChannelOutput {
+                    channel_id: hash_to_string(&channel.channel_id),
+                    transaction_id: None, // MVP: local only
+                    balance_tinybars: channel.my_balance,
+                    peer_id: input.peer_id,
+                };
 
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+                info!(
+                    channel_id = %output.channel_id,
+                    deposit_hbar = input.deposit_hbar,
+                    "Channel opened successfully"
+                );
+
+                let json = serde_json::to_string_pretty(&output)
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+                Ok(CallToolResult::success(vec![Content::text(json)]))
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to open channel via Nodalync peer ID");
+                Ok(tool_error(&NodalyncMcpError::Internal(
+                    format!("Failed to open channel: {}. Check that the peer is connected.", e)
+                )))
+            }
+        }
     }
 
     /// Get the current channel and settlement status.
@@ -1242,5 +1562,47 @@ mod tests {
         let input: SearchNetworkInput = serde_json::from_str(json).unwrap();
         assert_eq!(input.query, "test");
         assert_eq!(input.content_type, Some("L0".to_string()));
+    }
+
+    #[test]
+    fn test_tool_error_format() {
+        use crate::error::McpError as NodalyncMcpError;
+
+        let error = NodalyncMcpError::NotFound("test_hash".to_string());
+        let result = tool_error(&error);
+
+        // Should be an error result
+        assert!(result.is_error.unwrap_or(false));
+
+        // Content should be JSON with expected fields
+        if let Some(content) = result.content.first() {
+            if let RawContent::Text(RawTextContent { text, .. }) = &content.raw {
+                let json: serde_json::Value = serde_json::from_str(text).unwrap();
+                assert_eq!(json["error"], "NOT_FOUND");
+                assert_eq!(json["code"], 1);
+                assert!(json["message"].as_str().unwrap().contains("not found"));
+                assert!(json["suggestion"].is_string());
+            }
+        }
+    }
+
+    #[test]
+    fn test_tool_error_budget_exceeded() {
+        use crate::error::McpError as NodalyncMcpError;
+
+        let error = NodalyncMcpError::BudgetExceeded {
+            cost: 1_000_000,
+            remaining: 500_000,
+        };
+        let result = tool_error(&error);
+
+        assert!(result.is_error.unwrap_or(false));
+
+        if let Some(content) = result.content.first() {
+            if let RawContent::Text(RawTextContent { text, .. }) = &content.raw {
+                let json: serde_json::Value = serde_json::from_str(text).unwrap();
+                assert_eq!(json["error"], "INSUFFICIENT_BALANCE");
+            }
+        }
     }
 }

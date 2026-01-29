@@ -223,6 +223,14 @@ pub struct QueryErrorPayload {
     pub error_code: ErrorCode,
     /// Optional human-readable message
     pub message: Option<String>,
+    /// When error_code is ChannelNotFound, this contains the server's Nodalync peer ID
+    /// that the client should open a channel with before retrying.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_channel_peer_id: Option<PeerId>,
+    /// When error_code is ChannelNotFound, this contains the server's libp2p peer ID
+    /// for direct connection. Base58 encoded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_channel_libp2p_peer: Option<String>,
 }
 
 // =============================================================================
@@ -632,10 +640,36 @@ mod tests {
             hash: test_hash(b"content"),
             error_code: ErrorCode::NotFound,
             message: Some("Content not found".to_string()),
+            required_channel_peer_id: None,
+            required_channel_libp2p_peer: None,
         };
 
         let json = serde_json::to_string(&payload).unwrap();
         let deserialized: QueryErrorPayload = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.error_code, ErrorCode::NotFound);
+    }
+
+    #[test]
+    fn test_query_error_with_channel_info() {
+        use nodalync_crypto::PeerId;
+
+        let peer_id = PeerId([1u8; 20]);
+        let payload = QueryErrorPayload {
+            hash: test_hash(b"content"),
+            error_code: ErrorCode::ChannelNotFound,
+            message: Some("Payment channel required".to_string()),
+            required_channel_peer_id: Some(peer_id),
+            required_channel_libp2p_peer: Some(
+                "12D3KooWLvP5fP18r2B1xLV21eq9JyMzkySxvdTdWvuaxzVcs289".to_string(),
+            ),
+        };
+
+        let mut cbor_buf = Vec::new();
+        ciborium::into_writer(&payload, &mut cbor_buf).unwrap();
+        let decoded: QueryErrorPayload = ciborium::from_reader(&cbor_buf[..]).unwrap();
+
+        assert_eq!(decoded.error_code, ErrorCode::ChannelNotFound);
+        assert_eq!(decoded.required_channel_peer_id, Some(peer_id));
+        assert!(decoded.required_channel_libp2p_peer.is_some());
     }
 }

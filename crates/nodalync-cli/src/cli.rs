@@ -289,6 +289,35 @@ pub enum Commands {
     Settle,
 
     // =========================================================================
+    // Channel Commands
+    // =========================================================================
+    /// Open a payment channel with a peer.
+    ///
+    /// Creates a new payment channel for off-chain micropayments.
+    /// The deposit is locked until the channel is closed.
+    OpenChannel {
+        /// Peer ID to open channel with (hex or base58).
+        peer_id: String,
+
+        /// Deposit amount in HBAR.
+        #[arg(short, long)]
+        deposit: f64,
+    },
+
+    /// Close a payment channel with a peer.
+    ///
+    /// Settles the final balances and closes the channel.
+    CloseChannel {
+        /// Peer ID of the channel to close.
+        peer_id: String,
+    },
+
+    /// List all payment channels.
+    ///
+    /// Shows all channels with their states and balances.
+    ListChannels,
+
+    // =========================================================================
     // Node Management Commands
     // =========================================================================
     /// Start the Nodalync node.

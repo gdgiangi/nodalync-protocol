@@ -1,7 +1,7 @@
 //! Error types for the MCP server.
 
 use nodalync_ops::OpsError;
-use nodalync_types::Amount;
+use nodalync_types::{Amount, ErrorCode};
 use thiserror::Error;
 
 /// Result type for MCP operations.
@@ -44,5 +44,19 @@ impl McpError {
     /// Create a new internal error.
     pub fn internal(msg: impl Into<String>) -> Self {
         Self::Internal(msg.into())
+    }
+
+    /// Get the protocol error code for this error.
+    ///
+    /// Maps MCP errors to the appropriate `ErrorCode` from spec Appendix C.
+    pub fn error_code(&self) -> ErrorCode {
+        match self {
+            Self::BudgetExceeded { .. } => ErrorCode::InsufficientBalance,
+            Self::NotFound(_) => ErrorCode::NotFound,
+            Self::InvalidHash(_) => ErrorCode::InvalidHash,
+            Self::Ops(e) => e.error_code(),
+            Self::Serialization(_) => ErrorCode::InvalidManifest,
+            Self::Internal(_) => ErrorCode::InternalError,
+        }
     }
 }

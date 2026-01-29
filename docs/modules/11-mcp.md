@@ -145,12 +145,24 @@ Returns the content directly. Payment is handled automatically from session budg
 │ Desktop      │     MCP        │ mcp-server      │
 └──────────────┘                └────────┬────────┘
                                          │
-                                         ▼
-                                ┌─────────────────┐
-                                │ nodalync-store  │
-                                │ (local node)    │
-                                └─────────────────┘
+                        ┌────────────────┼────────────────┐
+                        │                │                │
+                        ▼                ▼                ▼
+                ┌─────────────┐  ┌─────────────┐  ┌─────────────┐
+                │ nodalync-   │  │ nodalync-   │  │ Event Loop  │
+                │ store       │  │ net         │  │ (background)│
+                │ (local)     │  │ (P2P)       │  │             │
+                └─────────────┘  └─────────────┘  └─────────────┘
 ```
+
+### Event Processing
+
+When `--enable-network` is used, the MCP server spawns a background event loop that processes incoming network events (e.g., `ChannelAccept` messages). This enables full payment channel lifecycle support:
+
+1. **Channel Open**: Server sends `ChannelOpen` to peer
+2. **Event Loop**: Receives `ChannelAccept` from peer
+3. **State Transition**: Channel moves from `Opening` → `Open`
+4. **Payments**: Channel is ready for micropayments
 
 ## Budget System
 

@@ -122,6 +122,71 @@ impl ErrorCode {
     pub fn code(&self) -> u16 {
         *self as u16
     }
+
+    /// Get a user-friendly suggestion for recovering from this error.
+    ///
+    /// Returns actionable hints that help users understand what went wrong
+    /// and how to fix it.
+    pub fn suggestion(&self) -> Option<&'static str> {
+        match self {
+            // Query errors
+            Self::NotFound => Some("Verify the content hash. Use 'nodalync search' to find content."),
+            Self::AccessDenied => Some("Content is private or restricted. Contact the owner for access."),
+            Self::PaymentRequired => Some("Open a payment channel with 'nodalync channel open'."),
+            Self::PaymentInvalid => Some("Check payment amount, signature, or channel state."),
+            Self::RateLimited => Some("Wait before retrying. Consider reducing query frequency."),
+            Self::VersionNotFound => Some("The requested version doesn't exist. Use 'nodalync versions' to list available versions."),
+
+            // Channel errors
+            Self::ChannelNotFound => Some("Open a channel first with 'nodalync channel open'."),
+            Self::ChannelClosed => Some("Channel is closed. Open a new channel to continue."),
+            Self::InsufficientBalance => Some("Deposit more funds with 'nodalync deposit'."),
+            Self::InvalidNonce => Some("Payment nonce must increase. This may indicate a replay attempt."),
+            Self::InvalidSignature => Some("Signature verification failed. Check your keys."),
+
+            // Validation errors
+            Self::InvalidHash => Some("Content hash doesn't match. The content may be corrupted."),
+            Self::InvalidProvenance => Some("Provenance chain is invalid. Check source references."),
+            Self::InvalidVersion => Some("Version constraints violated. Check version numbering."),
+            Self::InvalidManifest => Some("Manifest validation failed. Check required fields."),
+            Self::ContentTooLarge => Some("Content exceeds size limit. Split into smaller pieces."),
+
+            // L2 errors
+            Self::L2InvalidStructure => Some("L2 entity graph structure is invalid. Check entity and relationship formats."),
+            Self::L2MissingSource => Some("L2 is missing required source content. Query sources first."),
+            Self::L2EntityLimit => Some("L2 exceeds maximum entity count. Split into multiple graphs."),
+            Self::L2RelationshipLimit => Some("L2 exceeds maximum relationship count. Simplify the graph."),
+            Self::L2InvalidEntityRef => Some("L2 contains an invalid entity reference. Check entity IDs."),
+            Self::L2CycleDetected => Some("L2 entity graph contains a cycle. Remove circular references."),
+            Self::L2InvalidUri => Some("L2 contains an invalid URI. Check URI syntax."),
+            Self::L2CannotPublish => Some("L2 content must remain private. Set visibility to Private."),
+
+            // Network errors
+            Self::PeerNotFound => Some("Peer not found. Check peer ID or wait for network discovery."),
+            Self::ConnectionFailed => Some("Check network connectivity. Run 'nodalync status' to verify."),
+            Self::Timeout => Some("Operation timed out. Try again or check network status."),
+
+            // Internal error
+            Self::InternalError => Some("An internal error occurred. Please report this issue."),
+        }
+    }
+
+    /// Get the error category name.
+    ///
+    /// Returns a human-readable category based on the error code range.
+    pub fn category(&self) -> &'static str {
+        if self.is_query_error() {
+            "Query"
+        } else if self.is_channel_error() {
+            "Channel"
+        } else if self.is_validation_error() {
+            "Validation"
+        } else if self.is_network_error() {
+            "Network"
+        } else {
+            "Internal"
+        }
+    }
 }
 
 impl std::fmt::Display for ErrorCode {
@@ -379,5 +444,47 @@ mod tests {
         let code = ErrorCode::NotFound;
         let code_copy = code; // Copy
         assert_eq!(code, code_copy);
+    }
+
+    #[test]
+    fn test_error_code_suggestion() {
+        // All error codes should have suggestions
+        assert!(ErrorCode::NotFound.suggestion().is_some());
+        assert!(ErrorCode::AccessDenied.suggestion().is_some());
+        assert!(ErrorCode::PaymentRequired.suggestion().is_some());
+        assert!(ErrorCode::ChannelNotFound.suggestion().is_some());
+        assert!(ErrorCode::InvalidHash.suggestion().is_some());
+        assert!(ErrorCode::L2InvalidStructure.suggestion().is_some());
+        assert!(ErrorCode::ConnectionFailed.suggestion().is_some());
+        assert!(ErrorCode::InternalError.suggestion().is_some());
+
+        // Check suggestion content
+        let suggestion = ErrorCode::NotFound.suggestion().unwrap();
+        assert!(suggestion.contains("search"));
+
+        let suggestion = ErrorCode::InsufficientBalance.suggestion().unwrap();
+        assert!(suggestion.contains("deposit"));
+    }
+
+    #[test]
+    fn test_error_code_category() {
+        // Query errors
+        assert_eq!(ErrorCode::NotFound.category(), "Query");
+        assert_eq!(ErrorCode::PaymentRequired.category(), "Query");
+
+        // Channel errors
+        assert_eq!(ErrorCode::ChannelNotFound.category(), "Channel");
+        assert_eq!(ErrorCode::InsufficientBalance.category(), "Channel");
+
+        // Validation errors
+        assert_eq!(ErrorCode::InvalidHash.category(), "Validation");
+        assert_eq!(ErrorCode::L2InvalidStructure.category(), "Validation");
+
+        // Network errors
+        assert_eq!(ErrorCode::ConnectionFailed.category(), "Network");
+        assert_eq!(ErrorCode::Timeout.category(), "Network");
+
+        // Internal error
+        assert_eq!(ErrorCode::InternalError.category(), "Internal");
     }
 }

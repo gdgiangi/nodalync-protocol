@@ -6,20 +6,72 @@
 //! Run with:
 //!   cargo test -p nodalync-settle --test hedera_connectivity --features hedera-sdk -- --nocapture
 //!
-//! Environment variables:
-//!   HEDERA_ACCOUNT_ID - Testnet account ID (e.g., 0.0.7703962)
-//!   HEDERA_PRIVATE_KEY - Hex-encoded private key (with or without 0x prefix)
+//! Credentials are loaded from (in order of priority):
+//!   1. Environment variables: HEDERA_ACCOUNT_ID, HEDERA_PRIVATE_KEY
+//!   2. .env file at project root
+//!   3. ~/.nodalync/hedera.key (for private key only)
+//!
+//! If no credentials are found, tests are skipped gracefully.
 
 #![cfg(feature = "hedera-sdk")]
 
 use hedera::{AccountBalanceQuery, AccountId, Client, PrivateKey};
 use std::env;
+use std::path::PathBuf;
 use std::str::FromStr;
 
-/// Get test credentials from environment or use defaults for CI skip
+/// Try to load .env file from project root
+fn try_load_dotenv() {
+    // Find project root by looking for Cargo.toml
+    if let Ok(manifest_dir) = env::var("CARGO_MANIFEST_DIR") {
+        let mut path = PathBuf::from(manifest_dir);
+        // Go up to project root (from crates/nodalync-settle to root)
+        path.pop(); // crates
+        path.pop(); // root
+        path.push(".env");
+
+        if path.exists() {
+            // Read and parse .env file manually (no external dependency)
+            if let Ok(contents) = std::fs::read_to_string(&path) {
+                for line in contents.lines() {
+                    let line = line.trim();
+                    if line.is_empty() || line.starts_with('#') {
+                        continue;
+                    }
+                    if let Some((key, value)) = line.split_once('=') {
+                        let key = key.trim();
+                        let value = value.trim().trim_matches('"').trim_matches('\'');
+                        // Only set if not already set
+                        if env::var(key).is_err() {
+                            env::set_var(key, value);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Try to load private key from ~/.nodalync/hedera.key
+fn try_load_key_file() -> Option<String> {
+    let home = env::var("HOME").ok()?;
+    let key_path = PathBuf::from(home).join(".nodalync").join("hedera.key");
+    std::fs::read_to_string(key_path).ok().map(|s| s.trim().to_string())
+}
+
+/// Get test credentials from environment, .env file, or key file
 fn get_credentials() -> Option<(String, String)> {
+    // First try loading .env file
+    try_load_dotenv();
+
+    // Get account ID from environment
     let account_id = env::var("HEDERA_ACCOUNT_ID").ok()?;
-    let private_key = env::var("HEDERA_PRIVATE_KEY").ok()?;
+
+    // Get private key - try env var first, then key file
+    let private_key = env::var("HEDERA_PRIVATE_KEY")
+        .ok()
+        .or_else(try_load_key_file)?;
+
     Some((account_id, private_key))
 }
 

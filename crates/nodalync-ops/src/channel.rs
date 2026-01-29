@@ -81,6 +81,90 @@ where
         Ok(channel)
     }
 
+    /// Open a new payment channel with a peer using their libp2p peer ID directly.
+    ///
+    /// This is useful when you have the libp2p peer ID (from an announcement)
+    /// but don't have the Nodalync peer ID mapping yet. The channel will be
+    /// stored using the remote peer's Nodalync peer ID extracted from the response.
+    ///
+    /// Returns the created channel and the remote's Nodalync peer ID.
+    pub async fn open_payment_channel_to_libp2p(
+        &mut self,
+        libp2p_peer: nodalync_net::PeerId,
+        deposit: Amount,
+    ) -> OpsResult<(Channel, PeerId)> {
+        let timestamp = current_timestamp();
+
+        // Validate minimum deposit
+        if deposit < self.config.channel.min_deposit {
+            return Err(OpsError::invalid_operation(format!(
+                "deposit {} below minimum {}",
+                deposit, self.config.channel.min_deposit
+            )));
+        }
+
+        let Some(network) = self.network().cloned() else {
+            return Err(OpsError::invalid_operation("network not available"));
+        };
+
+        // Generate a temporary channel ID (will be finalized after response)
+        let nonce: u64 = rand::thread_rng().gen();
+        // Use our own peer ID as placeholder for channel ID generation
+        let channel_id = self.generate_channel_id(&self.peer_id(), nonce);
+
+        let payload = ChannelOpenPayload {
+            channel_id,
+            initial_balance: deposit,
+            funding_tx: None,
+        };
+
+        // Send ChannelOpen and get response
+        let response = network
+            .send_channel_open(libp2p_peer, payload)
+            .await
+            .map_err(|e| OpsError::invalid_operation(format!("channel open failed: {}", e)))?;
+
+        // Extract the remote's Nodalync peer ID from the response message
+        let remote_nodalync_id = response.sender;
+
+        // Register the peer ID mapping so future lookups work
+        network.register_peer_mapping(libp2p_peer, remote_nodalync_id);
+
+        // Check if channel already exists with this peer
+        if self.state.channels.get(&remote_nodalync_id)?.is_some() {
+            return Err(OpsError::ChannelAlreadyExists);
+        }
+
+        // Decode the ChannelAccept payload
+        let accept: nodalync_wire::ChannelAcceptPayload =
+            nodalync_wire::decode_payload(&response.payload)
+                .map_err(|e| OpsError::invalid_operation(format!("decode error: {}", e)))?;
+
+        // Create the channel in Open state (since we received Accept)
+        let channel = Channel::accepted(
+            accept.channel_id,
+            remote_nodalync_id,
+            accept.initial_balance,
+            deposit,
+            timestamp,
+        );
+
+        // Store the channel keyed by the remote's Nodalync peer ID
+        self.state
+            .channels
+            .create(&remote_nodalync_id, channel.clone())?;
+
+        tracing::info!(
+            channel_id = %channel_id,
+            remote_peer = %remote_nodalync_id,
+            our_deposit = deposit,
+            their_deposit = accept.initial_balance,
+            "Payment channel opened via libp2p"
+        );
+
+        Ok((channel, remote_nodalync_id))
+    }
+
     /// Accept an incoming channel open request.
     ///
     /// Spec §7.3.2:

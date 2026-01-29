@@ -8,7 +8,7 @@ use nodalync_cli::{
     cli::{Cli, Commands},
     commands,
     config::{default_config_path, CliConfig},
-    error::CliResult,
+    error::{CliError, CliResult},
     output::OutputFormat,
 };
 
@@ -25,7 +25,7 @@ fn main() {
     {
         // Handle daemon mode synchronously before any async runtime exists
         if let Err(e) = handle_daemon_start(&cli, *health, *health_port) {
-            eprintln!("{}: {}", "Error".red().bold(), e);
+            print_error(&e);
             std::process::exit(e.exit_code());
         }
         return;
@@ -53,8 +53,26 @@ async fn async_main(cli: Cli) {
 
     // Run the command
     if let Err(e) = run(cli).await {
-        eprintln!("{}: {}", "Error".red().bold(), e);
+        print_error(&e);
         std::process::exit(e.exit_code());
+    }
+}
+
+/// Print a user-friendly error message with error code and recovery hint.
+fn print_error(e: &CliError) {
+    let code = e.error_code();
+
+    // Error line with code
+    eprintln!(
+        "{} [{}]: {}",
+        "Error".red().bold(),
+        code.to_string().yellow(),
+        e
+    );
+
+    // Suggestion if available
+    if let Some(suggestion) = code.suggestion() {
+        eprintln!("{}: {}", "Hint".cyan(), suggestion);
     }
 }
 
@@ -190,6 +208,17 @@ async fn run(cli: Cli) -> CliResult<()> {
         Commands::Withdraw { amount } => commands::withdraw(config, format, amount).await?,
 
         Commands::Settle => commands::settle(config, format).await?,
+
+        // Channel commands
+        Commands::OpenChannel { peer_id, deposit } => {
+            commands::open_channel(config, format, &peer_id, deposit).await?
+        }
+
+        Commands::CloseChannel { peer_id } => {
+            commands::close_channel(config, format, &peer_id).await?
+        }
+
+        Commands::ListChannels => commands::list_channels(config, format)?,
 
         // Node management commands
         Commands::Start {

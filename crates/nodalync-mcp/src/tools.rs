@@ -45,6 +45,14 @@ pub struct QueryKnowledgeOutput {
 
     /// Remaining session budget in HBAR.
     pub remaining_budget_hbar: f64,
+
+    /// Whether a new payment channel was opened for this query.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_opened: Option<bool>,
+
+    /// Peer ID of the content provider.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_peer_id: Option<String>,
 }
 
 // ============================================================================
@@ -87,6 +95,11 @@ pub struct SourceInfo {
 
     /// Primary topics.
     pub topics: Vec<String>,
+
+    /// Peer ID of the content provider (for opening payment channels).
+    /// May be None for locally-owned content or if provider is unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peer_id: Option<String>,
 }
 
 /// Output from the `list_sources` tool.
@@ -232,9 +245,18 @@ pub struct DepositHbarOutput {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct OpenChannelInput {
     /// Peer ID to open channel with.
+    /// Can be either:
+    /// - A libp2p peer ID (starts with "12D3Koo", from list_sources)
+    /// - A Nodalync peer ID (starts with "ndl", 20 bytes base58)
     pub peer_id: String,
-    /// Initial deposit in HBAR.
+    /// Initial deposit in HBAR (default: 100.0, minimum: 100.0).
+    /// The deposit is locked in the channel until it's closed.
+    #[serde(default = "default_deposit")]
     pub deposit_hbar: f64,
+}
+
+fn default_deposit() -> f64 {
+    100.0
 }
 
 /// Output from the `open_channel` tool.

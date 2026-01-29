@@ -1,5 +1,6 @@
 //! CLI error types.
 
+use nodalync_types::ErrorCode;
 use thiserror::Error;
 
 /// CLI result type.
@@ -115,6 +116,39 @@ impl CliError {
             Self::Io(_) => 9,
             // JSON/format errors: 10
             Self::Json(_) | Self::InvalidHash(_) => 10,
+        }
+    }
+
+    /// Get the protocol error code for this error.
+    ///
+    /// Maps CLI errors to the appropriate `ErrorCode` from spec Appendix C.
+    pub fn error_code(&self) -> ErrorCode {
+        match self {
+            // Content errors
+            Self::NotFound(_) | Self::FileNotFound(_) => ErrorCode::NotFound,
+            Self::InvalidHash(_) => ErrorCode::InvalidHash,
+
+            // Payment/channel errors
+            Self::InsufficientBalance { .. } => ErrorCode::InsufficientBalance,
+
+            // Identity/config errors
+            Self::IdentityNotInitialized | Self::IdentityExists => ErrorCode::InvalidManifest,
+            Self::Config(_) | Self::Toml(_) | Self::Json(_) => ErrorCode::InvalidManifest,
+
+            // Node state errors
+            Self::NodeNotRunning | Self::NodeAlreadyRunning => ErrorCode::ConnectionFailed,
+
+            // Network errors
+            Self::Network(_) => ErrorCode::ConnectionFailed,
+
+            // Delegated errors
+            Self::Ops(e) => e.error_code(),
+            Self::Settlement(_) => ErrorCode::InternalError,
+            Self::Store(_) => ErrorCode::InternalError,
+            Self::Io(_) => ErrorCode::InternalError,
+
+            // User-facing errors are generic
+            Self::User(_) => ErrorCode::InternalError,
         }
     }
 }

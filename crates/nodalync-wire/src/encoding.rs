@@ -27,8 +27,8 @@ use crate::error::{DecodeError, EncodeError, FormatError};
 use crate::message::{Message, MessageType};
 use crate::payload::ChannelBalances;
 
-/// Minimum message size: magic(1) + version(1) + type(2) + length(4) + signature(64) = 72 bytes
-const MIN_MESSAGE_SIZE: usize = 1 + 1 + 2 + 4 + 64;
+/// Minimum message size: magic(1) + version(1) + type(2) + timestamp(8) + sender(20) + length(4) + signature(64) = 100 bytes
+const MIN_MESSAGE_SIZE: usize = 1 + 1 + 2 + 8 + 20 + 4 + 64;
 
 /// Domain separator for content hashing
 const DOMAIN_CONTENT: u8 = 0x00;
@@ -121,18 +121,21 @@ pub fn decode_payload<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, DecodeErro
 
 /// Encode a message to wire format.
 ///
-/// Wire format:
+/// Wire format (v2 - includes sender and timestamp):
 /// ```text
 /// [0x00]                  # Protocol magic byte
 /// [version: u8]           # Protocol version
 /// [type: u16 BE]          # Message type
+/// [timestamp: u64 BE]     # Message timestamp (millis since epoch)
+/// [sender: 20 bytes]      # Sender's Nodalync peer ID
 /// [length: u32 BE]        # Payload length
 /// [payload: bytes]        # CBOR-encoded payload
 /// [signature: 64 bytes]   # Ed25519 signature
 /// ```
 pub fn encode_message(msg: &Message) -> Result<Vec<u8>, EncodeError> {
     let payload_len = msg.payload.len();
-    let total_len = MIN_MESSAGE_SIZE + payload_len;
+    // Header: magic(1) + version(1) + type(2) + timestamp(8) + sender(20) + length(4) + signature(64) = 100
+    let total_len = 100 + payload_len;
 
     let mut buf = Vec::with_capacity(total_len);
 
@@ -144,6 +147,12 @@ pub fn encode_message(msg: &Message) -> Result<Vec<u8>, EncodeError> {
 
     // Message type (big-endian)
     buf.extend_from_slice(&msg.message_type.to_u16().to_be_bytes());
+
+    // Timestamp (big-endian)
+    buf.extend_from_slice(&msg.timestamp.to_be_bytes());
+
+    // Sender peer ID (20 bytes)
+    buf.extend_from_slice(&msg.sender.0);
 
     // Payload length (big-endian)
     buf.extend_from_slice(&(payload_len as u32).to_be_bytes());
@@ -158,6 +167,18 @@ pub fn encode_message(msg: &Message) -> Result<Vec<u8>, EncodeError> {
 }
 
 /// Decode a message from wire format.
+///
+/// Wire format (v2 - includes sender and timestamp):
+/// ```text
+/// [0x00]                  # Protocol magic byte
+/// [version: u8]           # Protocol version
+/// [type: u16 BE]          # Message type
+/// [timestamp: u64 BE]     # Message timestamp (millis since epoch)
+/// [sender: 20 bytes]      # Sender's Nodalync peer ID
+/// [length: u32 BE]        # Payload length
+/// [payload: bytes]        # CBOR-encoded payload
+/// [signature: 64 bytes]   # Ed25519 signature
+/// ```
 pub fn decode_message(bytes: &[u8]) -> Result<Message, DecodeError> {
     // Check minimum size
     if bytes.len() < MIN_MESSAGE_SIZE {
@@ -200,6 +221,28 @@ pub fn decode_message(bytes: &[u8]) -> Result<Message, DecodeError> {
     cursor += 2;
     let message_type = MessageType::from_u16(u16::from_be_bytes(type_bytes))?;
 
+    // Timestamp (big-endian)
+    let ts_bytes: [u8; 8] =
+        bytes[cursor..cursor + 8]
+            .try_into()
+            .map_err(|_| DecodeError::TruncatedMessage {
+                expected: cursor + 8,
+                got: bytes.len(),
+            })?;
+    cursor += 8;
+    let timestamp = u64::from_be_bytes(ts_bytes);
+
+    // Sender peer ID (20 bytes)
+    let sender_bytes: [u8; 20] =
+        bytes[cursor..cursor + 20]
+            .try_into()
+            .map_err(|_| DecodeError::TruncatedMessage {
+                expected: cursor + 20,
+                got: bytes.len(),
+            })?;
+    cursor += 20;
+    let sender = PeerId::from_bytes(sender_bytes);
+
     // Payload length (big-endian)
     let len_bytes: [u8; 4] =
         bytes[cursor..cursor + 4]
@@ -234,35 +277,8 @@ pub fn decode_message(bytes: &[u8]) -> Result<Message, DecodeError> {
             })?;
     let signature = Signature::from_bytes(sig_bytes);
 
-    // Decode the message ID and other fields from payload
-    // For now, we extract these from the payload if it contains them,
-    // or compute them if needed. The actual id, timestamp, sender
-    // need to be decoded from the payload structure.
-    //
-    // Note: The wire format as specified doesn't include id/timestamp/sender
-    // in the header - they're part of the payload. We need to decode the
-    // payload to get them.
-    //
-    // Actually looking at the spec more carefully, the Message struct has
-    // these fields, but the wire format only has:
-    // magic | version | type | length | payload | signature
-    //
-    // The id, timestamp, and sender must be extracted from the payload
-    // or computed. Let's decode a minimal envelope payload to get these.
-
-    // For now, create a placeholder - the actual fields will need to be
-    // extracted by the caller who knows the payload type
-    // This is a limitation of the current design - we need additional
-    // envelope data in the payload
-
     // Compute message ID as hash of the header + payload
     let id = compute_message_id(version, message_type, &payload);
-
-    // For timestamp and sender, they should be in an envelope wrapper
-    // For now we use placeholders - the calling code should validate
-    // these against the actual payload content
-    let timestamp: Timestamp = 0;
-    let sender = PeerId::from_bytes([0u8; 20]);
 
     Ok(Message {
         version,
@@ -455,8 +471,14 @@ mod tests {
 
     #[test]
     fn test_decode_invalid_magic() {
-        let mut bytes = vec![0xFF, 0x01, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00];
-        bytes.extend_from_slice(&[0u8; 64]); // Signature
+        // Format: magic(1) + version(1) + type(2) + timestamp(8) + sender(20) + length(4) + signature(64) = 100
+        let mut bytes = vec![0xFF]; // Invalid magic
+        bytes.push(0x01); // version
+        bytes.extend_from_slice(&[0x07, 0x00]); // type
+        bytes.extend_from_slice(&[0u8; 8]); // timestamp
+        bytes.extend_from_slice(&[0u8; 20]); // sender
+        bytes.extend_from_slice(&[0u8; 4]); // length
+        bytes.extend_from_slice(&[0u8; 64]); // signature
 
         let result = decode_message(&bytes);
         assert!(matches!(result, Err(DecodeError::InvalidMagic { .. })));
@@ -464,8 +486,14 @@ mod tests {
 
     #[test]
     fn test_decode_invalid_version() {
-        let mut bytes = vec![0x00, 0xFF, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00];
-        bytes.extend_from_slice(&[0u8; 64]); // Signature
+        // Format: magic(1) + version(1) + type(2) + timestamp(8) + sender(20) + length(4) + signature(64) = 100
+        let mut bytes = vec![0x00]; // magic
+        bytes.push(0xFF); // Invalid version
+        bytes.extend_from_slice(&[0x07, 0x00]); // type
+        bytes.extend_from_slice(&[0u8; 8]); // timestamp
+        bytes.extend_from_slice(&[0u8; 20]); // sender
+        bytes.extend_from_slice(&[0u8; 4]); // length
+        bytes.extend_from_slice(&[0u8; 64]); // signature
 
         let result = decode_message(&bytes);
         assert!(matches!(result, Err(DecodeError::InvalidVersion { .. })));
@@ -481,8 +509,14 @@ mod tests {
 
     #[test]
     fn test_decode_invalid_message_type() {
-        let mut bytes = vec![0x00, 0x01, 0x99, 0x99, 0x00, 0x00, 0x00, 0x00];
-        bytes.extend_from_slice(&[0u8; 64]); // Signature
+        // Format: magic(1) + version(1) + type(2) + timestamp(8) + sender(20) + length(4) + signature(64) = 100
+        let mut bytes = vec![0x00]; // magic
+        bytes.push(0x01); // version
+        bytes.extend_from_slice(&[0x99, 0x99]); // Invalid type
+        bytes.extend_from_slice(&[0u8; 8]); // timestamp
+        bytes.extend_from_slice(&[0u8; 20]); // sender
+        bytes.extend_from_slice(&[0u8; 4]); // length
+        bytes.extend_from_slice(&[0u8; 64]); // signature
 
         let result = decode_message(&bytes);
         assert!(matches!(result, Err(DecodeError::InvalidMessageType(_))));

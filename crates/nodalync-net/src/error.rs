@@ -79,6 +79,25 @@ pub enum NetworkError {
     /// IO error.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// Payment channel required error from server.
+    /// Contains server's peer IDs so client can open a channel and retry.
+    #[error("payment channel required")]
+    ChannelRequired {
+        /// Server's Nodalync peer ID (20 bytes, for opening channel).
+        nodalync_peer_id: Option<[u8; 20]>,
+        /// Server's libp2p peer ID (base58 string, for dialing).
+        libp2p_peer_id: Option<String>,
+    },
+
+    /// Query error returned by server.
+    #[error("query error: {code:?} - {message}")]
+    QueryError {
+        /// Error code from server.
+        code: nodalync_types::ErrorCode,
+        /// Error message from server.
+        message: String,
+    },
 }
 
 /// Result type alias using NetworkError.

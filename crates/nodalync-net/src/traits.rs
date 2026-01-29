@@ -181,6 +181,12 @@ pub trait Network: Send + Sync {
 
     /// Get the libp2p peer ID for a Nodalync peer ID.
     fn libp2p_peer_id(&self, nodalync_peer: &NodalyncPeerId) -> Option<libp2p::PeerId>;
+
+    /// Register a peer ID mapping.
+    ///
+    /// This is used when we learn a peer's Nodalync ID from a message
+    /// (e.g., from a ChannelAccept response).
+    fn register_peer_mapping(&self, libp2p_peer: libp2p::PeerId, nodalync_peer: NodalyncPeerId);
 }
 
 #[cfg(test)]

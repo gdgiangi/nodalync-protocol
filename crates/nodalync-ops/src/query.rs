@@ -4,7 +4,9 @@
 //! as specified in Protocol Specification §7.2 and §7.4.
 
 use nodalync_crypto::{content_hash, Hash, PeerId, Signature, UNKNOWN_PEER_ID};
-use nodalync_store::{CacheStore, CachedContent, ContentStore, ManifestFilter, ManifestStore};
+use nodalync_store::{
+    CacheStore, CachedContent, ChannelStore, ContentStore, ManifestFilter, ManifestStore,
+};
 use nodalync_types::{Amount, ContentType, L1Summary, Manifest, Payment, Visibility};
 use nodalync_valid::Validator;
 use nodalync_wire::{
@@ -102,15 +104,33 @@ where
             let l1_summary = self.extract_l1_summary(hash)?;
 
             // 5. Return response
+            // If manifest.owner is UNKNOWN_PEER_ID, this is cached content from a network query
+            // We need to check for an announcement to get the provider's peer ID
+            let provider_peer_id = if manifest.owner == UNKNOWN_PEER_ID {
+                self.state
+                    .get_announcement(hash)
+                    .and_then(|a| a.publisher_peer_id)
+            } else {
+                None // We own this content, no remote provider needed
+            };
+
             return Ok(PreviewResponse {
                 manifest,
                 l1_summary,
+                provider_peer_id,
             });
         }
 
         // If not local, check if we have an announcement from a remote node
         if let Some(announcement) = self.state.get_announcement(hash) {
+            tracing::debug!(
+                hash = %hash,
+                publisher_peer_id = ?announcement.publisher_peer_id,
+                "Found announcement for hash"
+            );
             return Ok(Self::announcement_to_preview(announcement));
+        } else {
+            tracing::debug!(hash = %hash, "No announcement found for hash");
         }
 
         // If not in local announcements, try DHT lookup
@@ -151,6 +171,9 @@ where
         PreviewResponse {
             manifest,
             l1_summary: announcement.l1_summary,
+            // Preserve the publisher peer ID from the announcement
+            // This is the libp2p peer ID of the node that can serve the content
+            provider_peer_id: announcement.publisher_peer_id,
         }
     }
 
@@ -453,24 +476,45 @@ where
         let timestamp = current_timestamp();
         let payment_id = content_hash(&[hash.0.as_slice(), &timestamp.to_be_bytes()].concat());
 
-        // Get Nodalync peer ID if we have a mapping, otherwise use placeholder
+        // Get Nodalync peer ID from mapping
         let recipient = network
             .nodalync_peer_id(&libp2p_peer)
             .unwrap_or(UNKNOWN_PEER_ID);
 
+        // Get channel ID and provenance if we have a channel with this peer
+        let (channel_id, provenance, payment_nonce) =
+            if let Some(channel) = self.state.channels.get(&recipient)? {
+                // Get provenance from announcement or local manifest
+                let prov = if let Some(announce) = self.state.get_announcement(hash) {
+                    // For announcements, build provenance from the hash
+                    vec![nodalync_types::ProvenanceEntry::new(
+                        announce.hash,
+                        UNKNOWN_PEER_ID,
+                        Visibility::Shared,
+                    )]
+                } else if let Some(manifest) = self.state.manifests.load(hash)? {
+                    manifest.provenance.root_l0l1.clone()
+                } else {
+                    vec![]
+                };
+                (channel.channel_id, prov, channel.nonce + 1)
+            } else {
+                // No channel - use placeholders (validation will be lenient for free content)
+                (Hash([0u8; 32]), vec![], 1u64)
+            };
+
         let payment = Payment::new(
             payment_id,
-            Hash([0u8; 32]),
+            channel_id,
             payment_amount,
             recipient,
             *hash,
-            vec![],
+            provenance,
             timestamp,
             Signature::from_bytes([0u8; 64]),
         );
 
-        // Placeholder nonce for MVP
-        let payment_nonce = 1u64;
+        let payment_nonce = payment_nonce;
 
         let request = QueryRequestPayload {
             hash: *hash,
@@ -503,6 +547,22 @@ where
                         receipt: response.payment_receipt,
                     }));
                 }
+            }
+            Err(nodalync_net::NetworkError::ChannelRequired {
+                nodalync_peer_id,
+                libp2p_peer_id,
+            }) => {
+                // Convert to OpsError with peer info so client can open channel and retry
+                tracing::debug!(
+                    "Server {} requires payment channel, peer info: nodalync={:?}, libp2p={:?}",
+                    libp2p_peer,
+                    nodalync_peer_id,
+                    libp2p_peer_id
+                );
+                return Err(OpsError::ChannelRequiredWithPeerInfo {
+                    nodalync_peer_id: nodalync_peer_id.map(nodalync_crypto::PeerId),
+                    libp2p_peer_id,
+                });
             }
             Err(e) => {
                 tracing::debug!("Failed to query peer {}: {}", libp2p_peer, e);
@@ -589,6 +649,7 @@ where
                     l1_summary,
                     total_queries: manifest.economics.total_queries,
                     source: SearchSource::Local,
+                    publisher_peer_id: None, // Local content, no remote peer
                 });
             }
         }
@@ -606,6 +667,7 @@ where
                     l1_summary: announce.l1_summary.clone(),
                     total_queries: 0,
                     source: SearchSource::Cached,
+                    publisher_peer_id: announce.publisher_peer_id.clone(),
                 });
             }
         }
@@ -649,6 +711,7 @@ where
                                     l1_summary: result.l1_summary.clone(),
                                     total_queries: result.total_queries,
                                     source: SearchSource::Peer,
+                                    publisher_peer_id: Some(peer.to_string()),
                                 });
                             }
                         }
@@ -707,6 +770,9 @@ pub struct NetworkSearchResult {
     pub total_queries: u64,
     /// Where this result came from.
     pub source: SearchSource,
+    /// Publisher peer ID (libp2p format, for dialing).
+    /// Available for announcements; None for local content.
+    pub publisher_peer_id: Option<String>,
 }
 
 /// Extract primary topics from mentions.

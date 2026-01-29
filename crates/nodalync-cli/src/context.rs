@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use nodalync_crypto::{PeerId, PrivateKey, PublicKey};
 use nodalync_net::{Network, NetworkConfig, NetworkNode};
-use nodalync_ops::{DefaultNodeOperations, OpsConfig};
+use nodalync_ops::DefaultNodeOperations;
 use nodalync_settle::{AccountId, MockSettlement, Settlement};
 use nodalync_store::{NodeState, NodeStateConfig};
 
@@ -251,18 +251,19 @@ impl NodeContext {
         // Create settlement based on config
         let settlement = create_settlement(&config).await?;
 
-        // Create operations with optional network
-        let ops = if let Some(ref net) = network {
-            DefaultNodeOperations::with_network(
+        // Create operations with network and/or settlement
+        let ops = match &network {
+            Some(net) => DefaultNodeOperations::with_defaults_network_and_settlement(
                 state,
-                nodalync_valid::DefaultValidator::new(),
-                nodalync_ops::RuleBasedExtractor::new(),
-                OpsConfig::default(),
                 peer_id,
                 Arc::clone(net) as Arc<dyn Network>,
-            )
-        } else {
-            DefaultNodeOperations::with_defaults(state, peer_id)
+                Arc::clone(&settlement),
+            ),
+            None => DefaultNodeOperations::with_defaults_and_settlement(
+                state,
+                peer_id,
+                Arc::clone(&settlement),
+            ),
         };
 
         Ok(Self {

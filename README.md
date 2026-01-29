@@ -80,7 +80,7 @@ cd nodalync-protocol
 # Build all crates
 cargo build --workspace
 
-# Run tests (776+ tests)
+# Run tests (834+ tests)
 cargo test --workspace
 
 # Build CLI with Hedera settlement support (requires protoc)
@@ -113,6 +113,11 @@ nodalync query <hash>
 
 # Check earnings
 nodalync earnings
+
+# Payment channel management
+nodalync open-channel <peer-id> --deposit 1.0
+nodalync list-channels
+nodalync close-channel <peer-id>
 ```
 
 ### Running a Node

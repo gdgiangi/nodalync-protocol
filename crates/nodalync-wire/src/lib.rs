@@ -220,10 +220,12 @@ mod tests {
     /// Test that invalid magic byte is rejected
     #[test]
     fn test_reject_invalid_magic() {
-        // Create valid message then corrupt magic byte
+        // Wire format: magic(1) + version(1) + type(2) + timestamp(8) + sender(20) + length(4) + signature(64) = 100
         let mut bytes = vec![0xFF]; // Wrong magic
         bytes.push(0x01); // Version
         bytes.extend_from_slice(&[0x07, 0x00]); // Ping type
+        bytes.extend_from_slice(&[0u8; 8]); // Timestamp
+        bytes.extend_from_slice(&[0u8; 20]); // Sender
         bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Length 0
         bytes.extend_from_slice(&[0u8; 64]); // Signature
 
@@ -240,9 +242,12 @@ mod tests {
     /// Test that invalid version is rejected
     #[test]
     fn test_reject_invalid_version() {
+        // Wire format: magic(1) + version(1) + type(2) + timestamp(8) + sender(20) + length(4) + signature(64) = 100
         let mut bytes = vec![0x00]; // Correct magic
         bytes.push(0xFF); // Wrong version
         bytes.extend_from_slice(&[0x07, 0x00]); // Ping type
+        bytes.extend_from_slice(&[0u8; 8]); // Timestamp
+        bytes.extend_from_slice(&[0u8; 20]); // Sender
         bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Length 0
         bytes.extend_from_slice(&[0u8; 64]); // Signature
 

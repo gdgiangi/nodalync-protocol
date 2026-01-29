@@ -2,6 +2,7 @@
 
 pub mod balance;
 pub mod build_l2;
+pub mod channel;
 pub mod completions;
 pub mod delete;
 pub mod deposit;
@@ -29,6 +30,7 @@ pub mod withdraw;
 // Re-export command handlers
 pub use balance::balance;
 pub use build_l2::build_l2;
+pub use channel::{close_channel, list_channels, open_channel};
 pub use completions::completions;
 pub use delete::delete;
 pub use deposit::deposit;
