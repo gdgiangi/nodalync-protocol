@@ -5,9 +5,9 @@ edition.workspace = true
 
 [dependencies]
 # Nodalync crates
-nodalync-crypto = { path = "../nodalync-crypto" }
-nodalync-types = { path = "../nodalync-types" }
-nodalync-wire = { path = "../nodalync-wire" }
+nodalync-crypto = { workspace = true }
+nodalync-types = { workspace = true }
+nodalync-wire = { workspace = true }
 
 # libp2p with required features
 libp2p = { version = "0.54", features = [
@@ -43,7 +43,7 @@ sha2 = "0.10"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "test-util"] }
-nodalync-ops = { path = "../nodalync-ops" }
-nodalync-store = { path = "../nodalync-store" }
-nodalync-econ = { path = "../nodalync-econ" }
+nodalync-ops = { workspace = true }
+nodalync-store = { workspace = true }
+nodalync-econ = { workspace = true }
 tempfile = "3.10"

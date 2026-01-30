@@ -50,12 +50,11 @@ tarpaulin-report.html
 # Development/planning files (not part of release)
 CLAUDE.md
 WHATS_NEXT.md
-/deploy/azure/DEPLOYMENT_LOG.md
+/infra/azure/DEPLOYMENT_LOG.md
 .claude/
-/data/
 
 # Deployment secrets (never commit)
-deploy/**/config.env
-deploy/**/*.env
-!deploy/**/*.env.example
+infra/**/config.env
+infra/**/*.env
+!infra/**/*.env.example
 .env

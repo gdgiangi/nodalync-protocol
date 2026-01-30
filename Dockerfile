@@ -12,30 +12,32 @@ RUN apt-get update && apt-get install -y \
 
 # Copy only Cargo files first for dependency caching
 COPY Cargo.toml Cargo.lock ./
-COPY crates/nodalync-crypto/Cargo.toml crates/nodalync-crypto/Cargo.toml
-COPY crates/nodalync-types/Cargo.toml crates/nodalync-types/Cargo.toml
-COPY crates/nodalync-wire/Cargo.toml crates/nodalync-wire/Cargo.toml
-COPY crates/nodalync-store/Cargo.toml crates/nodalync-store/Cargo.toml
-COPY crates/nodalync-valid/Cargo.toml crates/nodalync-valid/Cargo.toml
-COPY crates/nodalync-econ/Cargo.toml crates/nodalync-econ/Cargo.toml
-COPY crates/nodalync-net/Cargo.toml crates/nodalync-net/Cargo.toml
-COPY crates/nodalync-ops/Cargo.toml crates/nodalync-ops/Cargo.toml
-COPY crates/nodalync-settle/Cargo.toml crates/nodalync-settle/Cargo.toml
-COPY crates/nodalync-mcp/Cargo.toml crates/nodalync-mcp/Cargo.toml
-COPY crates/nodalync-cli/Cargo.toml crates/nodalync-cli/Cargo.toml
+COPY crates/protocol/nodalync-crypto/Cargo.toml crates/protocol/nodalync-crypto/Cargo.toml
+COPY crates/protocol/nodalync-types/Cargo.toml crates/protocol/nodalync-types/Cargo.toml
+COPY crates/protocol/nodalync-wire/Cargo.toml crates/protocol/nodalync-wire/Cargo.toml
+COPY crates/protocol/nodalync-store/Cargo.toml crates/protocol/nodalync-store/Cargo.toml
+COPY crates/protocol/nodalync-valid/Cargo.toml crates/protocol/nodalync-valid/Cargo.toml
+COPY crates/protocol/nodalync-econ/Cargo.toml crates/protocol/nodalync-econ/Cargo.toml
+COPY crates/protocol/nodalync-net/Cargo.toml crates/protocol/nodalync-net/Cargo.toml
+COPY crates/protocol/nodalync-ops/Cargo.toml crates/protocol/nodalync-ops/Cargo.toml
+COPY crates/protocol/nodalync-settle/Cargo.toml crates/protocol/nodalync-settle/Cargo.toml
+COPY crates/apps/nodalync-mcp/Cargo.toml crates/apps/nodalync-mcp/Cargo.toml
+COPY crates/apps/nodalync-cli/Cargo.toml crates/apps/nodalync-cli/Cargo.toml
+COPY crates/nodalync/Cargo.toml crates/nodalync/Cargo.toml
 
 # Create dummy source files to build dependencies
-RUN mkdir -p crates/nodalync-crypto/src && echo "pub fn dummy() {}" > crates/nodalync-crypto/src/lib.rs && \
-    mkdir -p crates/nodalync-types/src && echo "pub fn dummy() {}" > crates/nodalync-types/src/lib.rs && \
-    mkdir -p crates/nodalync-wire/src && echo "pub fn dummy() {}" > crates/nodalync-wire/src/lib.rs && \
-    mkdir -p crates/nodalync-store/src && echo "pub fn dummy() {}" > crates/nodalync-store/src/lib.rs && \
-    mkdir -p crates/nodalync-valid/src && echo "pub fn dummy() {}" > crates/nodalync-valid/src/lib.rs && \
-    mkdir -p crates/nodalync-econ/src && echo "pub fn dummy() {}" > crates/nodalync-econ/src/lib.rs && \
-    mkdir -p crates/nodalync-net/src && echo "pub fn dummy() {}" > crates/nodalync-net/src/lib.rs && \
-    mkdir -p crates/nodalync-ops/src && echo "pub fn dummy() {}" > crates/nodalync-ops/src/lib.rs && \
-    mkdir -p crates/nodalync-settle/src && echo "pub fn dummy() {}" > crates/nodalync-settle/src/lib.rs && \
-    mkdir -p crates/nodalync-mcp/src && echo "pub fn dummy() {}" > crates/nodalync-mcp/src/lib.rs && \
-    mkdir -p crates/nodalync-cli/src && echo "fn main() {}" > crates/nodalync-cli/src/main.rs
+RUN mkdir -p crates/protocol/nodalync-crypto/src && echo "pub fn dummy() {}" > crates/protocol/nodalync-crypto/src/lib.rs && \
+    mkdir -p crates/protocol/nodalync-types/src && echo "pub fn dummy() {}" > crates/protocol/nodalync-types/src/lib.rs && \
+    mkdir -p crates/protocol/nodalync-wire/src && echo "pub fn dummy() {}" > crates/protocol/nodalync-wire/src/lib.rs && \
+    mkdir -p crates/protocol/nodalync-store/src && echo "pub fn dummy() {}" > crates/protocol/nodalync-store/src/lib.rs && \
+    mkdir -p crates/protocol/nodalync-valid/src && echo "pub fn dummy() {}" > crates/protocol/nodalync-valid/src/lib.rs && \
+    mkdir -p crates/protocol/nodalync-econ/src && echo "pub fn dummy() {}" > crates/protocol/nodalync-econ/src/lib.rs && \
+    mkdir -p crates/protocol/nodalync-net/src && echo "pub fn dummy() {}" > crates/protocol/nodalync-net/src/lib.rs && \
+    mkdir -p crates/protocol/nodalync-ops/src && echo "pub fn dummy() {}" > crates/protocol/nodalync-ops/src/lib.rs && \
+    mkdir -p crates/protocol/nodalync-settle/src && echo "pub fn dummy() {}" > crates/protocol/nodalync-settle/src/lib.rs && \
+    mkdir -p crates/apps/nodalync-mcp/src && echo "pub fn dummy() {}" > crates/apps/nodalync-mcp/src/lib.rs && \
+    mkdir -p crates/apps/nodalync-cli/src && echo "fn main() {}" > crates/apps/nodalync-cli/src/main.rs && \
+    mkdir -p crates/nodalync/src && echo "pub fn dummy() {}" > crates/nodalync/src/lib.rs
 
 # Build dependencies only (this layer is cached)
 RUN cargo build --release --features hedera-sdk -p nodalync-cli 2>/dev/null || true

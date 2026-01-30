@@ -2,17 +2,17 @@
 resolver = "2"
 members = [
     "crates/nodalync",
-    "crates/nodalync-crypto",
-    "crates/nodalync-types",
-    "crates/nodalync-wire",
-    "crates/nodalync-store",
-    "crates/nodalync-valid",
-    "crates/nodalync-econ",
-    "crates/nodalync-ops",
-    "crates/nodalync-net",
-    "crates/nodalync-settle",
-    "crates/nodalync-cli",
-    "crates/nodalync-mcp",
+    "crates/protocol/nodalync-crypto",
+    "crates/protocol/nodalync-types",
+    "crates/protocol/nodalync-wire",
+    "crates/protocol/nodalync-store",
+    "crates/protocol/nodalync-valid",
+    "crates/protocol/nodalync-econ",
+    "crates/protocol/nodalync-ops",
+    "crates/protocol/nodalync-net",
+    "crates/protocol/nodalync-settle",
+    "crates/apps/nodalync-cli",
+    "crates/apps/nodalync-mcp",
 ]
 
 [workspace.package]
@@ -73,16 +73,16 @@ serde_json = "1.0"
 prometheus = { version = "0.13", default-features = false }
 
 # Internal crates (use path for local development)
-nodalync-crypto = { path = "crates/nodalync-crypto" }
-nodalync-types = { path = "crates/nodalync-types" }
-nodalync-wire = { path = "crates/nodalync-wire" }
-nodalync-store = { path = "crates/nodalync-store" }
-nodalync-valid = { path = "crates/nodalync-valid" }
-nodalync-econ = { path = "crates/nodalync-econ" }
-nodalync-ops = { path = "crates/nodalync-ops" }
-nodalync-net = { path = "crates/nodalync-net" }
-nodalync-settle = { path = "crates/nodalync-settle" }
-nodalync-mcp = { path = "crates/nodalync-mcp" }
+nodalync-crypto = { path = "crates/protocol/nodalync-crypto" }
+nodalync-types = { path = "crates/protocol/nodalync-types" }
+nodalync-wire = { path = "crates/protocol/nodalync-wire" }
+nodalync-store = { path = "crates/protocol/nodalync-store" }
+nodalync-valid = { path = "crates/protocol/nodalync-valid" }
+nodalync-econ = { path = "crates/protocol/nodalync-econ" }
+nodalync-ops = { path = "crates/protocol/nodalync-ops" }
+nodalync-net = { path = "crates/protocol/nodalync-net" }
+nodalync-settle = { path = "crates/protocol/nodalync-settle" }
+nodalync-mcp = { path = "crates/apps/nodalync-mcp" }
 
 [profile.release]
 lto = true

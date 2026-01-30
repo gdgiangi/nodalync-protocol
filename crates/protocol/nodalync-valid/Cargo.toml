@@ -6,9 +6,9 @@ description = "Validation rules for the Nodalync protocol"
 license.workspace = true
 
 [dependencies]
-nodalync-types = { path = "../nodalync-types" }
-nodalync-crypto = { path = "../nodalync-crypto" }
-nodalync-wire = { path = "../nodalync-wire" }
+nodalync-types = { workspace = true }
+nodalync-crypto = { workspace = true }
+nodalync-wire = { workspace = true }
 thiserror = "1.0"
 
 [dev-dependencies]

@@ -253,7 +253,7 @@ Now Claude can:
 For testing or running multiple nodes:
 
 ```bash
-cd docker/
+cd infra/local/
 docker compose up -d
 
 # View logs
