@@ -45,6 +45,11 @@ RUN cargo build --release --features hedera-sdk -p nodalync-cli 2>/dev/null || t
 # Now copy actual source code
 COPY crates ./crates
 
+# Touch all source files to ensure cargo detects changes from dummy builds.
+# This is necessary because Docker layer caching can preserve timestamps that
+# make cargo think the dummy lib.rs files are still valid.
+RUN find crates -name "*.rs" -exec touch {} +
+
 # Build release binary with Hedera SDK support
 RUN cargo build --release --features hedera-sdk -p nodalync-cli
 
