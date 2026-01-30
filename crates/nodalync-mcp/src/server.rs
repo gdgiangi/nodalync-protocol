@@ -94,7 +94,10 @@ impl Default for McpServerConfig {
                 .map(|d| d.data_dir().to_path_buf())
                 .unwrap_or_else(|| std::path::PathBuf::from("~/.nodalync")),
             enable_network: false,
-            bootstrap_nodes: DEFAULT_BOOTSTRAP_NODES.iter().map(|s| s.to_string()).collect(),
+            bootstrap_nodes: DEFAULT_BOOTSTRAP_NODES
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             hedera: None,
         }
     }
@@ -211,10 +214,10 @@ impl NodalyncMcpServer {
                     let settlement = nodalync_settle::HederaSettlement::new(hedera_config)
                         .await
                         .map_err(|e| {
-                            std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                format!("Failed to initialize Hedera settlement: {}", e),
-                            )
+                            std::io::Error::other(format!(
+                                "Failed to initialize Hedera settlement: {}",
+                                e
+                            ))
                         })?;
 
                     info!("Hedera settlement initialized successfully");

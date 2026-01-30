@@ -61,12 +61,12 @@ impl CliConfig {
         }
         let contents = std::fs::read_to_string(path)?;
         let mut config: Self = toml::from_str(&contents)?;
-        
+
         // Expand environment variables in webhook URLs
         for webhook in &mut config.alerting.webhooks {
             webhook.url = expand_env_vars(&webhook.url);
         }
-        
+
         Ok(config)
     }
 
@@ -355,7 +355,7 @@ pub fn format_ndl(units: u64) -> String {
 // =============================================================================
 
 /// Alerting configuration for webhook-based notifications.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AlertingConfig {
     /// Whether alerting is enabled.
@@ -372,20 +372,6 @@ pub struct AlertingConfig {
     pub rate_limit: RateLimitConfig,
     /// Heartbeat configuration (periodic health pings).
     pub heartbeat: Option<HeartbeatConfig>,
-}
-
-impl Default for AlertingConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            node_name: None,
-            region: None,
-            webhooks: Vec::new(),
-            conditions: AlertConditions::default(),
-            rate_limit: RateLimitConfig::default(),
-            heartbeat: None,
-        }
-    }
 }
 
 /// Webhook configuration for a single endpoint.
@@ -521,21 +507,21 @@ mod tests {
     #[test]
     fn test_expand_env_vars() {
         std::env::set_var("TEST_WEBHOOK_URL", "https://example.com/webhook");
-        
+
         let input = "${TEST_WEBHOOK_URL}";
         let result = super::expand_env_vars(input);
         assert_eq!(result, "https://example.com/webhook");
-        
+
         // Unset variable should remain as-is
         let input_unset = "${NONEXISTENT_VAR_12345}";
         let result_unset = super::expand_env_vars(input_unset);
         assert_eq!(result_unset, "${NONEXISTENT_VAR_12345}");
-        
+
         // Mixed content
         let mixed = "prefix_${TEST_WEBHOOK_URL}_suffix";
         let result_mixed = super::expand_env_vars(mixed);
         assert_eq!(result_mixed, "prefix_https://example.com/webhook_suffix");
-        
+
         std::env::remove_var("TEST_WEBHOOK_URL");
     }
 }
