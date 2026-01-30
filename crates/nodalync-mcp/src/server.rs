@@ -78,8 +78,12 @@ pub struct HederaConfig {
     pub network: String,
 }
 
-/// Default bootstrap node address.
-const DEFAULT_BOOTSTRAP_NODE: &str = "/dns4/nodalync-bootstrap.eastus.azurecontainer.io/tcp/9000/p2p/12D3KooWMqrUmZm4e1BJTRMWqKHCe1TSX9Vu83uJLEyCGr2dUjYm";
+/// Default bootstrap node addresses (US, EU, Asia).
+const DEFAULT_BOOTSTRAP_NODES: &[&str] = &[
+    "/dns4/nodalync-bootstrap.eastus.azurecontainer.io/tcp/9000/p2p/12D3KooWMqrUmZm4e1BJTRMWqKHCe1TSX9Vu83uJLEyCGr2dUjYm",
+    "/dns4/nodalync-eu.northeurope.azurecontainer.io/tcp/9000/p2p/12D3KooWQiK8uHf877wena9MAPHHprXkmGRhAmXAYakRsMfdnk7P",
+    "/dns4/nodalync-asia.southeastasia.azurecontainer.io/tcp/9000/p2p/12D3KooWFojioE6LXFs3qqBdKQeCFuMr2obsMrvXGY69jmhheLfk",
+];
 
 impl Default for McpServerConfig {
     fn default() -> Self {
@@ -90,7 +94,7 @@ impl Default for McpServerConfig {
                 .map(|d| d.data_dir().to_path_buf())
                 .unwrap_or_else(|| std::path::PathBuf::from("~/.nodalync")),
             enable_network: false,
-            bootstrap_nodes: vec![DEFAULT_BOOTSTRAP_NODE.to_string()],
+            bootstrap_nodes: DEFAULT_BOOTSTRAP_NODES.iter().map(|s| s.to_string()).collect(),
             hedera: None,
         }
     }

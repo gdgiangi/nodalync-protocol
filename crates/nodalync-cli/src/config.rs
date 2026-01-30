@@ -1,9 +1,21 @@
 //! CLI configuration.
 
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::error::{CliError, CliResult};
+
+/// Expand environment variables in a string.
+/// Supports `${VAR_NAME}` syntax.
+fn expand_env_vars(input: &str) -> String {
+    let re = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").unwrap();
+    re.replace_all(input, |caps: &regex::Captures| {
+        let var_name = &caps[1];
+        std::env::var(var_name).unwrap_or_else(|_| caps[0].to_string())
+    })
+    .to_string()
+}
 
 /// CLI configuration loaded from TOML.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,6 +33,8 @@ pub struct CliConfig {
     pub economics: EconomicsConfig,
     /// Display configuration.
     pub display: DisplayConfig,
+    /// Alerting configuration.
+    pub alerting: AlertingConfig,
 }
 
 impl Default for CliConfig {
@@ -33,18 +47,26 @@ impl Default for CliConfig {
             settlement: SettlementConfig::default(),
             economics: EconomicsConfig::default(),
             display: DisplayConfig::default(),
+            alerting: AlertingConfig::default(),
         }
     }
 }
 
 impl CliConfig {
     /// Load configuration from a file.
+    /// Environment variables in `${VAR}` format are expanded in webhook URLs.
     pub fn load(path: &Path) -> CliResult<Self> {
         if !path.exists() {
             return Ok(Self::default());
         }
         let contents = std::fs::read_to_string(path)?;
-        let config: Self = toml::from_str(&contents)?;
+        let mut config: Self = toml::from_str(&contents)?;
+        
+        // Expand environment variables in webhook URLs
+        for webhook in &mut config.alerting.webhooks {
+            webhook.url = expand_env_vars(&webhook.url);
+        }
+        
         Ok(config)
     }
 
@@ -160,15 +182,22 @@ fn default_gossipsub_propagation_wait() -> u64 {
     5
 }
 
-/// Default bootstrap node address.
-const DEFAULT_BOOTSTRAP_NODE: &str = "/dns4/nodalync-bootstrap.eastus.azurecontainer.io/tcp/9000/p2p/12D3KooWMqrUmZm4e1BJTRMWqKHCe1TSX9Vu83uJLEyCGr2dUjYm";
+/// Default bootstrap node addresses (US, EU, Asia).
+const DEFAULT_BOOTSTRAP_NODES: &[&str] = &[
+    "/dns4/nodalync-bootstrap.eastus.azurecontainer.io/tcp/9000/p2p/12D3KooWMqrUmZm4e1BJTRMWqKHCe1TSX9Vu83uJLEyCGr2dUjYm",
+    "/dns4/nodalync-eu.northeurope.azurecontainer.io/tcp/9000/p2p/12D3KooWQiK8uHf877wena9MAPHHprXkmGRhAmXAYakRsMfdnk7P",
+    "/dns4/nodalync-asia.southeastasia.azurecontainer.io/tcp/9000/p2p/12D3KooWFojioE6LXFs3qqBdKQeCFuMr2obsMrvXGY69jmhheLfk",
+];
 
 impl Default for NetworkConfigSection {
     fn default() -> Self {
         Self {
             enabled: true,
             listen_addresses: vec!["/ip4/0.0.0.0/tcp/9000".to_string()],
-            bootstrap_nodes: vec![DEFAULT_BOOTSTRAP_NODE.to_string()],
+            bootstrap_nodes: DEFAULT_BOOTSTRAP_NODES
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             gossipsub_propagation_wait: default_gossipsub_propagation_wait(),
         }
     }
@@ -321,6 +350,135 @@ pub fn format_ndl(units: u64) -> String {
     format_hbar(units)
 }
 
+// =============================================================================
+// Alerting Configuration
+// =============================================================================
+
+/// Alerting configuration for webhook-based notifications.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AlertingConfig {
+    /// Whether alerting is enabled.
+    pub enabled: bool,
+    /// Human-readable name for this node (used in alerts).
+    pub node_name: Option<String>,
+    /// Region identifier (used in alerts).
+    pub region: Option<String>,
+    /// Webhook configurations.
+    pub webhooks: Vec<WebhookConfig>,
+    /// Alert trigger conditions.
+    pub conditions: AlertConditions,
+    /// Rate limiting configuration.
+    pub rate_limit: RateLimitConfig,
+    /// Heartbeat configuration (periodic health pings).
+    pub heartbeat: Option<HeartbeatConfig>,
+}
+
+impl Default for AlertingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            node_name: None,
+            region: None,
+            webhooks: Vec::new(),
+            conditions: AlertConditions::default(),
+            rate_limit: RateLimitConfig::default(),
+            heartbeat: None,
+        }
+    }
+}
+
+/// Webhook configuration for a single endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookConfig {
+    /// Webhook URL.
+    pub url: String,
+    /// Webhook format type.
+    #[serde(default)]
+    pub webhook_type: WebhookType,
+    /// Optional authorization header value (e.g., "Bearer token").
+    pub auth_header: Option<String>,
+    /// Alert types to send to this webhook (empty = all).
+    #[serde(default)]
+    pub alert_types: Vec<String>,
+    /// Request timeout in seconds.
+    #[serde(default = "default_webhook_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_webhook_timeout() -> u64 {
+    10
+}
+
+/// Webhook format types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum WebhookType {
+    /// Raw JSON payload.
+    #[default]
+    Generic,
+    /// Slack Incoming Webhook format.
+    Slack,
+    /// Discord Webhook format.
+    Discord,
+    /// PagerDuty Events API v2 format.
+    Pagerduty,
+}
+
+/// Alert trigger conditions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AlertConditions {
+    /// Seconds with zero peers before triggering no_peers alert.
+    pub no_peers_threshold_secs: u64,
+    /// Minimum peer count before triggering low_peer_count alert.
+    pub min_peer_count: Option<u32>,
+    /// Whether to send an alert on node startup.
+    pub alert_on_startup: bool,
+    /// Whether to send an alert on graceful shutdown.
+    pub alert_on_shutdown: bool,
+}
+
+impl Default for AlertConditions {
+    fn default() -> Self {
+        Self {
+            no_peers_threshold_secs: 60,
+            min_peer_count: None,
+            alert_on_startup: true,
+            alert_on_shutdown: true,
+        }
+    }
+}
+
+/// Rate limiting configuration for alerts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RateLimitConfig {
+    /// Minimum seconds between alerts of the same type.
+    pub min_interval_secs: u64,
+    /// Seconds after recovery before re-alerting.
+    pub recovery_cooldown_secs: u64,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            min_interval_secs: 300, // 5 minutes
+            recovery_cooldown_secs: 60,
+        }
+    }
+}
+
+/// Heartbeat configuration for periodic health pings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeartbeatConfig {
+    /// Heartbeat interval in seconds.
+    pub interval_secs: u64,
+    /// Whether to include metrics in heartbeat.
+    #[serde(default)]
+    pub include_metrics: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,5 +516,26 @@ mod tests {
             config.economics.default_price,
             parsed.economics.default_price
         );
+    }
+
+    #[test]
+    fn test_expand_env_vars() {
+        std::env::set_var("TEST_WEBHOOK_URL", "https://example.com/webhook");
+        
+        let input = "${TEST_WEBHOOK_URL}";
+        let result = super::expand_env_vars(input);
+        assert_eq!(result, "https://example.com/webhook");
+        
+        // Unset variable should remain as-is
+        let input_unset = "${NONEXISTENT_VAR_12345}";
+        let result_unset = super::expand_env_vars(input_unset);
+        assert_eq!(result_unset, "${NONEXISTENT_VAR_12345}");
+        
+        // Mixed content
+        let mixed = "prefix_${TEST_WEBHOOK_URL}_suffix";
+        let result_mixed = super::expand_env_vars(mixed);
+        assert_eq!(result_mixed, "prefix_https://example.com/webhook_suffix");
+        
+        std::env::remove_var("TEST_WEBHOOK_URL");
     }
 }

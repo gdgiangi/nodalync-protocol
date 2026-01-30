@@ -76,10 +76,11 @@ pub async fn start(
     // Set up shutdown signal handler
     let shutdown_rx = shutdown_signal();
 
-    // Configure health endpoint
+    // Configure health endpoint with alerting
     let health_config = HealthConfig {
         enabled: health,
         port: health_port,
+        alerting: config.alerting.clone(),
     };
 
     // Run the event loop with status file updates and health endpoint
@@ -191,10 +192,11 @@ pub fn start_daemon_sync(
                 // Set up shutdown signal handler
                 let shutdown_rx = shutdown_signal();
 
-                // Configure health endpoint
+                // Configure health endpoint with alerting
                 let health_config = HealthConfig {
                     enabled: health,
                     port: health_port,
+                    alerting: config.alerting.clone(),
                 };
 
                 // Run the event loop with status file updates and health endpoint

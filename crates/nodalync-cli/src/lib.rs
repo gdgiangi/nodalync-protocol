@@ -37,6 +37,7 @@
 //!
 //! Configuration is loaded from `~/.nodalync/config.toml`. Override with `--config`.
 
+pub mod alerting;
 pub mod cli;
 pub mod commands;
 pub mod config;

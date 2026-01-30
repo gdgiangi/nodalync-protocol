@@ -1785,6 +1785,7 @@ dependencies = [
  "tokio",
  "tokio-rustls 0.26.4",
  "tower-service",
+ "webpki-roots 1.0.5",
 ]
 
 [[package]]
@@ -3199,11 +3200,11 @@ dependencies = [
 
 [[package]]
 name = "nodalync"
-version = "0.7.0"
+version = "0.8.0"
 
 [[package]]
 name = "nodalync-cli"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "ciborium",
  "clap",
@@ -3227,6 +3228,8 @@ dependencies = [
  "nodalync-valid",
  "nodalync-wire",
  "prometheus",
+ "regex",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",
@@ -3263,7 +3266,7 @@ dependencies = [
 
 [[package]]
 name = "nodalync-mcp"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "bs58",
  "directories",
@@ -4215,6 +4218,8 @@ dependencies = [
  "native-tls",
  "percent-encoding",
  "pin-project-lite",
+ "quinn",
+ "rustls 0.23.36",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -4222,6 +4227,7 @@ dependencies = [
  "sync_wrapper 1.0.2",
  "tokio",
  "tokio-native-tls",
+ "tokio-rustls 0.26.4",
  "tower 0.5.3",
  "tower-http",
  "tower-service",
@@ -4229,6 +4235,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "webpki-roots 1.0.5",
 ]
 
 [[package]]

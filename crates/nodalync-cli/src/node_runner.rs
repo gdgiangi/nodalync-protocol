@@ -15,6 +15,8 @@ use tokio::sync::watch;
 use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
+use crate::alerting::AlertManager;
+use crate::config::AlertingConfig;
 use crate::context::NodeContext;
 use crate::error::{CliError, CliResult};
 use crate::metrics::{Metrics, SharedMetrics};
@@ -228,6 +230,8 @@ pub struct HealthConfig {
     pub enabled: bool,
     /// Port to listen on.
     pub port: u16,
+    /// Alerting configuration.
+    pub alerting: AlertingConfig,
 }
 
 impl Default for HealthConfig {
@@ -235,6 +239,7 @@ impl Default for HealthConfig {
         Self {
             enabled: false,
             port: 8080,
+            alerting: AlertingConfig::default(),
         }
     }
 }
@@ -317,6 +322,52 @@ pub async fn run_event_loop_with_health(
         .with_label_values(&[version, &peer_id])
         .set(1);
 
+    // Create alert manager
+    let alert_manager = Arc::new(AlertManager::new(
+        health_config.alerting.clone(),
+        peer_id.clone(),
+    ));
+
+    // Send startup alert
+    let initial_peer_count = network.connected_peers().len() as u32;
+    alert_manager.send_startup_alert(initial_peer_count).await;
+
+    // Spawn heartbeat task if configured
+    let heartbeat_shutdown_tx = if let Some(interval_duration) = alert_manager.heartbeat_interval()
+    {
+        let (tx, mut rx) = watch::channel(false);
+        let alert_manager_clone = Arc::clone(&alert_manager);
+        let network_clone = Arc::clone(network);
+
+        tokio::spawn(async move {
+            let mut heartbeat_interval = interval(interval_duration);
+            // Skip first tick (immediate)
+            heartbeat_interval.tick().await;
+
+            loop {
+                tokio::select! {
+                    result = rx.changed() => {
+                        if result.is_err() || *rx.borrow() {
+                            break;
+                        }
+                    }
+                    _ = heartbeat_interval.tick() => {
+                        let peer_count = network_clone.connected_peers().len() as u32;
+                        alert_manager_clone.send_heartbeat(peer_count).await;
+                    }
+                }
+            }
+        });
+
+        info!(
+            "Heartbeat alerting enabled with {:?} interval",
+            interval_duration
+        );
+        Some(tx)
+    } else {
+        None
+    };
+
     // Spawn health server if enabled
     let health_shutdown_tx = if health_config.enabled {
         let (tx, rx) = watch::channel(false);
@@ -371,9 +422,12 @@ pub async fn run_event_loop_with_health(
                 }
             }
 
-            // Periodic status update
+            // Periodic status update and health check
             _ = status_interval.tick() => {
+                let peer_count = network.connected_peers().len() as u32;
                 write_status(network, &status_path);
+                // Check health periodically even without peer events
+                alert_manager.check_health(peer_count).await;
             }
 
             // Process network events
@@ -414,9 +468,11 @@ pub async fn run_event_loop_with_health(
                             warn!("Error handling event: {}", e);
                         }
 
-                        // Update status immediately on peer changes
+                        // Update status and check health on peer changes
                         if peer_change {
+                            let peer_count = network.connected_peers().len() as u32;
                             write_status(network, &status_path);
+                            alert_manager.check_health(peer_count).await;
                         }
                     }
                     Err(e) => {
@@ -427,6 +483,15 @@ pub async fn run_event_loop_with_health(
                 }
             }
         }
+    }
+
+    // Send shutdown alert
+    let final_peer_count = network.connected_peers().len() as u32;
+    alert_manager.send_shutdown_alert(final_peer_count).await;
+
+    // Signal heartbeat task to shutdown
+    if let Some(tx) = heartbeat_shutdown_tx {
+        let _ = tx.send(true);
     }
 
     // Signal health server to shutdown

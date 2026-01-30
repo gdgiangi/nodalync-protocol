@@ -1,6 +1,6 @@
 [package]
 name = "nodalync-cli"
-version = "0.7.0"
+version = "0.8.0"
 edition.workspace = true
 description = "Command-line interface for the Nodalync protocol"
 license.workspace = true
@@ -38,11 +38,17 @@ serde_json = "1"
 toml = "0.8"
 ciborium.workspace = true
 
+# Environment variable expansion
+regex = "1"
+
 # Config and paths
 directories.workspace = true
 
 # Error handling
 thiserror.workspace = true
+
+# HTTP client for webhooks
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # Logging
 tracing.workspace = true

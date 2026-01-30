@@ -39,7 +39,7 @@ Get your node running in under 5 minutes: **[QUICKSTART.md](./QUICKSTART.md)**
 
 ### Status
 
-**Protocol v0.4.0** · **CLI v0.7.0**
+**Protocol v0.4.0** · **CLI v0.8.0**
 
 | Layer | Crate | Version | Description |
 |-------|-------|---------|-------------|
@@ -52,8 +52,8 @@ Get your node running in under 5 minutes: **[QUICKSTART.md](./QUICKSTART.md)**
 | Protocol | `nodalync-ops` | 0.4.0 | CREATE, DERIVE, BUILD_L2, MERGE_L2, QUERY |
 | Protocol | `nodalync-net` | 0.4.0 | libp2p (TCP/Noise/yamux), Kademlia DHT, GossipSub |
 | Protocol | `nodalync-settle` | 0.4.0 | Hedera settlement, smart contract deployed to testnet |
-| App | `nodalync-cli` | 0.7.0 | Full CLI with daemon mode, health endpoints |
-| App | `nodalync-mcp` | 0.7.0 | MCP server for AI agent integration |
+| App | `nodalync-cli` | 0.8.0 | Full CLI with daemon mode, health endpoints, alerting |
+| App | `nodalync-mcp` | 0.8.0 | MCP server for AI agent integration |
 
 **Hedera Testnet:**
 
@@ -199,9 +199,9 @@ This repository uses **split versioning** to distinguish protocol stability from
 **Application crates** (`nodalync-cli`, `nodalync-mcp`):
 - Version tracks CLI/MCP features
 - Independent release cadence
-- Tag `v0.7.0` → builds binaries for all platforms + Docker images
+- Tag `v0.8.0` → builds binaries for all platforms + Docker images
 
-**For users:** Download releases tagged `v*` (e.g., `v0.7.0`). This is the CLI version.
+**For users:** Download releases tagged `v*` (e.g., `v0.8.0`). This is the CLI version.
 
 **For developers:** Protocol crate versions indicate wire compatibility. Same `0.4.x` = compatible.
 

@@ -1,0 +1,25 @@
+# Bootstrap Node Configuration Template
+# Copy this file and replace PLACEHOLDER values for each region
+
+[alerting]
+enabled = true
+node_name = "PLACEHOLDER"
+region = "PLACEHOLDER"
+
+[[alerting.webhooks]]
+url = "${DISCORD_WEBHOOK_URL}"
+webhook_type = "discord"
+
+[alerting.conditions]
+no_peers_threshold_secs = 60
+min_peer_count = 1
+alert_on_startup = true
+alert_on_shutdown = true
+
+[alerting.rate_limit]
+min_interval_secs = 300
+recovery_cooldown_secs = 60
+
+[alerting.heartbeat]
+interval_secs = 900
+include_metrics = true
