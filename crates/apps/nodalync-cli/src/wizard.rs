@@ -1,6 +1,8 @@
 //! Interactive setup wizard for CLI configuration.
 
-use dialoguer::{Confirm, Input, Select};
+use std::path::PathBuf;
+
+use dialoguer::{Confirm, Input, Password, Select};
 
 use crate::config::CliConfig;
 use crate::error::{CliError, CliResult};
@@ -102,6 +104,7 @@ pub fn run_wizard(mut config: CliConfig) -> CliResult<CliConfig> {
         }
         SettlementOption::Testnet => {
             config.settlement.network = "hedera-testnet".to_string();
+            configure_hedera_credentials(&mut config, "testnet")?;
         }
         SettlementOption::Mainnet => {
             config.settlement.network = "hedera-mainnet".to_string();
@@ -115,6 +118,9 @@ pub fn run_wizard(mut config: CliConfig) -> CliResult<CliConfig> {
             if !confirmed {
                 config.settlement.network = "hedera-testnet".to_string();
                 println!("Switched to testnet for safety.");
+                configure_hedera_credentials(&mut config, "testnet")?;
+            } else {
+                configure_hedera_credentials(&mut config, "mainnet")?;
             }
         }
     }
@@ -161,6 +167,95 @@ pub fn run_wizard(mut config: CliConfig) -> CliResult<CliConfig> {
     }
 
     Ok(config)
+}
+
+/// Configure Hedera credentials for testnet or mainnet.
+fn configure_hedera_credentials(config: &mut CliConfig, network: &str) -> CliResult<()> {
+    println!();
+    println!("Hedera {} Credentials", network);
+    println!("{}", "-".repeat(40));
+
+    // Check if user wants to configure now or later
+    let configure_now = Confirm::new()
+        .with_prompt("Configure Hedera credentials now? (required for payments)")
+        .default(true)
+        .interact()
+        .map_err(|e| CliError::user(format!("Wizard cancelled: {}", e)))?;
+
+    if !configure_now {
+        println!(
+            "Skipped. You can configure later by editing config.toml or re-running init --wizard"
+        );
+        return Ok(());
+    }
+
+    // Account ID
+    let account_id: String = Input::new()
+        .with_prompt("Hedera Account ID (e.g., 0.0.1234567)")
+        .interact_text()
+        .map_err(|e| CliError::user(format!("Wizard cancelled: {}", e)))?;
+
+    config.settlement.account_id = Some(account_id);
+
+    // Private key - use Password for security (doesn't echo)
+    let private_key: String = Password::new()
+        .with_prompt("Hedera Private Key (hex, starts with 0x)")
+        .interact()
+        .map_err(|e| CliError::user(format!("Wizard cancelled: {}", e)))?;
+
+    // Determine key file path using the same logic as config.rs
+    let data_dir = std::env::var("NODALYNC_DATA_DIR")
+        .map(PathBuf::from)
+        .ok()
+        .or_else(|| {
+            directories::ProjectDirs::from("io", "nodalync", "nodalync")
+                .map(|dirs| dirs.data_dir().to_path_buf())
+        })
+        .unwrap_or_else(|| PathBuf::from(".nodalync"));
+    let key_path = data_dir.join("hedera.key");
+
+    // Create directory if needed
+    if let Some(parent) = key_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| CliError::config(format!("Failed to create directory: {}", e)))?;
+    }
+
+    // Write key file with secure permissions
+    std::fs::write(&key_path, private_key.trim())
+        .map_err(|e| CliError::config(format!("Failed to write key file: {}", e)))?;
+
+    // Set file permissions to owner-only (Unix)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        std::fs::set_permissions(&key_path, perms)
+            .map_err(|e| CliError::config(format!("Failed to set key file permissions: {}", e)))?;
+    }
+
+    config.settlement.key_path = Some(key_path.clone());
+
+    // Contract ID - use default for testnet
+    let default_contract = if network == "testnet" {
+        "0.0.7729011"
+    } else {
+        ""
+    };
+
+    let contract_id: String = Input::new()
+        .with_prompt("Settlement Contract ID")
+        .default(default_contract.to_string())
+        .interact_text()
+        .map_err(|e| CliError::user(format!("Wizard cancelled: {}", e)))?;
+
+    if !contract_id.is_empty() {
+        config.settlement.contract_id = Some(contract_id);
+    }
+
+    println!("✓ Hedera credentials configured");
+    println!("  Key saved to: {}", key_path.display());
+
+    Ok(())
 }
 
 #[cfg(test)]
