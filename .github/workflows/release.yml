@@ -111,7 +111,7 @@ jobs:
             ${{ runner.os }}-${{ matrix.target }}-cargo-
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }} -p nodalync-cli
+        run: cargo build --release --target ${{ matrix.target }} -p nodalync-cli --all-features
 
       - name: Prepare artifact (Unix)
         if: runner.os != 'Windows'

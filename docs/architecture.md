@@ -5,30 +5,32 @@ This document defines the module structure, dependencies, and implementation ord
 ## Module Dependency Graph
 
 ```
-                         ┌──────────────────┐
-                         │  nodalync-cli    │
-                         │  (binary crate)  │
-                         └────────┬─────────┘
-                                  │
-          ┌───────────────────────┼───────────────────────┐
-          │                       │                       │
-          ▼                       │                       ▼
-   ┌─────────────┐                │                ┌──────────────┐
-   │ nodalync-net│                │                │nodalync-settle│
-   │  (P2P/DHT)  │                │                │   (chain)    │
-   └──────┬──────┘                │                └──────┬───────┘
-          │                       │                       │
-          │        ┌──────────────┘                       │
-          │        │                                      │
-          │        ▼                                      │
-          │ ┌─────────────┐                               │
-          ├─│ nodalync-ops│                               │
-          │ │ (operations)│                               │
-          │ └──────┬──────┘                               │
-          │        │                                      │
-          │ ┌──────┴──────┐                               │
-          │ │             │                               │
-          ▼ ▼             ▼                               ▼
+                  ┌──────────────────┐     ┌──────────────────┐
+                  │  nodalync-cli    │     │  nodalync-mcp    │
+                  │  (binary crate)  │     │  (MCP server)    │
+                  └────────┬─────────┘     └────────┬─────────┘
+                           │                        │
+                           └───────────┬────────────┘
+                                       │
+          ┌────────────────────────────┼────────────────────────┐
+          │                            │                        │
+          ▼                            │                        ▼
+   ┌─────────────┐                     │                 ┌──────────────┐
+   │ nodalync-net│                     │                 │nodalync-settle│
+   │  (P2P/DHT)  │                     │                 │   (chain)    │
+   └──────┬──────┘                     │                 └──────┬───────┘
+          │                            │                        │
+          │        ┌───────────────────┘                        │
+          │        │                                            │
+          │        ▼                                            │
+          │ ┌─────────────┐                                     │
+          ├─│ nodalync-ops│                                     │
+          │ │ (operations)│                                     │
+          │ └──────┬──────┘                                     │
+          │        │                                            │
+          │ ┌──────┴──────┐                                     │
+          │ │             │                                     │
+          ▼ ▼             ▼                                     ▼
    ┌─────────────┐  ┌───────────┐ ┌───────────┐  ┌───────────┐
    │nodalync-wire│  │nodalync-  │ │nodalync-  │  │nodalync-  │
    │(serialization)│ │  store   │ │  valid    │  │   econ    │
@@ -65,6 +67,7 @@ This document defines the module structure, dependencies, and implementation ord
 | `nodalync-net` | P2P networking, DHT | §11 | wire, ops |
 | `nodalync-settle` | Blockchain settlement | §12 | econ, types |
 | `nodalync-cli` | Command-line interface | — | all |
+| `nodalync-mcp` | MCP server for AI agents | — | ops, store, net, settle |
 
 ## Key Interfaces (Traits)
 

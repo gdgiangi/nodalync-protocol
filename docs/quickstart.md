@@ -14,6 +14,8 @@ curl -fsSL https://raw.githubusercontent.com/gdgiangi/nodalync-protocol/main/ins
 
 This auto-detects your platform (macOS, Linux, Windows) and installs the latest binary.
 
+> **Note:** Pre-built binaries do not include Hedera settlement support. If you want to use Hedera testnet/mainnet settlement, use [Option C: Build from Source](#option-c-build-from-source) with the `--features hedera` flag. For testing without on-chain settlement, the pre-built binary works fine.
+
 ### Option B: Docker
 
 ```bash
@@ -43,13 +45,16 @@ Requires Rust 1.85+:
 git clone https://github.com/gdgiangi/nodalync-protocol.git
 cd nodalync-protocol
 
-# Build release binary
+# Build release binary with Hedera support (default, requires protoc)
 cargo build --release -p nodalync-cli
 
-# Build with Hedera settlement support (requires protoc)
-cargo build --release -p nodalync-cli --features hedera-sdk
+# Or build without Hedera support (smaller binary)
+cargo build --release -p nodalync-cli --no-default-features
 
-# Add to PATH (or move binary to /usr/local/bin)
+# Install to /usr/local/bin
+sudo cp target/release/nodalync /usr/local/bin/
+
+# Or add to PATH
 export PATH="$PWD/target/release:$PATH"
 ```
 
