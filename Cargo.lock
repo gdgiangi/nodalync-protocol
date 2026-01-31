@@ -3200,11 +3200,11 @@ dependencies = [
 
 [[package]]
 name = "nodalync"
-version = "0.9.1"
+version = "0.9.2"
 
 [[package]]
 name = "nodalync-cli"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "ciborium",
  "clap",
@@ -3266,7 +3266,7 @@ dependencies = [
 
 [[package]]
 name = "nodalync-mcp"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "bs58",
  "directories",

@@ -52,8 +52,8 @@ creates perpetual economic participation in all derivative work.
 | Protocol | `nodalync-ops` | 0.5.0 | CREATE, DERIVE, BUILD_L2, MERGE_L2, QUERY |
 | Protocol | `nodalync-net` | 0.5.0 | libp2p (TCP/Noise/yamux), Kademlia DHT, GossipSub |
 | Protocol | `nodalync-settle` | 0.5.0 | Hedera settlement, smart contract deployed to testnet |
-| App | `nodalync-cli` | 0.9.1 | Full CLI with daemon mode, health endpoints, alerting |
-| App | `nodalync-mcp` | 0.9.1 | MCP server for AI agent integration |
+| App | `nodalync-cli` | 0.9.2 | Full CLI with daemon mode, health endpoints, alerting |
+| App | `nodalync-mcp` | 0.9.2 | MCP server for AI agent integration |
 
 **Hedera Testnet:**
 
