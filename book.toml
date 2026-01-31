@@ -1,0 +1,30 @@
+[book]
+title = "Nodalync Protocol Documentation"
+authors = ["Gabriel Giangi"]
+description = "A protocol for fair knowledge economics in the age of AI"
+src = "docs"
+language = "en"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/gdgiangi/nodalync-protocol"
+edit-url-template = "https://github.com/gdgiangi/nodalync-protocol/edit/main/{path}"
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.playground]
+editable = false
+copyable = true
+copy-js = true
+
+[output.html.search]
+enable = true
+limit-results = 30
+teaser-word-count = 30
+copy-js = true

@@ -46,6 +46,7 @@ tarpaulin-report.html
 
 # Documentation build
 /doc/
+/book/
 
 # Development/planning files (not part of release)
 CLAUDE.md

@@ -25,21 +25,21 @@ creates perpetual economic participation in all derivative work.
 
 ---
 
-### Read the Paper
+### Documentation
 
-📄 **[Nodalync Protocol (PDF)](./docs/whitepaper.pdf)**
+📚 **[Read the Docs](https://gdgiangi.github.io/nodalync-protocol/)** — Full documentation, guides, and API reference
 
----
+📄 **[Whitepaper](https://gdgiangi.github.io/nodalync-protocol/papers/whitepaper.html)** — Protocol design and economics
 
-### Quick Start
+🚀 **[Quick Start](https://gdgiangi.github.io/nodalync-protocol/quickstart.html)** — Get your node running in under 5 minutes
 
-Get your node running in under 5 minutes: **[QUICKSTART.md](./QUICKSTART.md)**
+💬 **[Discord](https://discord.gg/hYVrEAM6)** — Join the community
 
 ---
 
 ### Status
 
-**Protocol v0.4.0** · **CLI v0.8.0**
+**Protocol v0.5.0** · **CLI v0.9.0**
 
 | Layer | Crate | Version | Description |
 |-------|-------|---------|-------------|
@@ -68,7 +68,7 @@ Get your node running in under 5 minutes: **[QUICKSTART.md](./QUICKSTART.md)**
 ### Building
 
 **Prerequisites:**
-- Rust 1.75+ (with cargo)
+- Rust 1.85+ (with cargo)
 - SQLite development headers
 - (Optional) `protoc` for Hedera SDK feature
 
@@ -187,14 +187,14 @@ This repository uses **split versioning** to distinguish protocol stability from
 
 | Component | Version | Stability | Tag Pattern | Release Contents |
 |-----------|---------|-----------|-------------|------------------|
-| **Protocol crates** | `0.4.x` | Stable, spec-driven | `protocol-v*` | GitHub release only |
-| **Application crates** | `0.7.x` | Feature releases | `v*` | Binaries + Docker |
+| **Protocol crates** | `0.5.x` | Stable, spec-driven | `protocol-v*` | GitHub release only |
+| **Application crates** | `0.9.x` | Feature releases | `v*` | Binaries + Docker |
 
 **Protocol crates** (`nodalync-crypto`, `nodalync-types`, `nodalync-wire`, `nodalync-store`, `nodalync-valid`, `nodalync-econ`, `nodalync-ops`, `nodalync-net`, `nodalync-settle`):
-- Version tracks the [protocol specification](./docs/spec.md) (currently v0.4.0)
+- Version tracks the [protocol specification](./docs/spec.md) (currently v0.5.0)
 - Changes are rare and require spec updates
 - Breaking changes require major version bump
-- Tag `protocol-v0.4.0` → creates GitHub release (libraries, no binaries)
+- Tag `protocol-v0.5.0` → creates GitHub release (libraries, no binaries)
 
 **Application crates** (`nodalync-cli`, `nodalync-mcp`):
 - Version tracks CLI/MCP features
@@ -207,11 +207,22 @@ This repository uses **split versioning** to distinguish protocol stability from
 
 ---
 
+### Documentation
+
+- [Protocol Specification](https://gdgiangi.github.io/nodalync-protocol/spec.html)
+- [Architecture](https://gdgiangi.github.io/nodalync-protocol/architecture.html)
+- [FAQ](https://gdgiangi.github.io/nodalync-protocol/FAQ.html)
+- [CLI Reference](https://gdgiangi.github.io/nodalync-protocol/modules/10-cli.html)
+- [MCP Server](https://gdgiangi.github.io/nodalync-protocol/modules/11-mcp.html)
+
+---
+
 ### Contact
 
 **Gabriel Giangi**  
 gabegiangi@gmail.com  
-DMs open on X: @GabrielGia29751
+DMs open on X: @GabrielGia29751  
+Discord: [discord.gg/hYVrEAM6](https://discord.gg/hYVrEAM6)
 
 ---
 

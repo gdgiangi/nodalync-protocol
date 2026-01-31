@@ -347,6 +347,7 @@ nodalync init --wizard
 
 ## Next Steps
 
-- Read the [Protocol Spec](docs/spec.md) to understand how Nodalync works
-- Check [WHATS_NEXT.md](WHATS_NEXT.md) for roadmap and current progress
-- Join the network and start publishing your knowledge!
+- Read the [Protocol Spec](./spec.md) to understand how Nodalync works
+- Explore the [Architecture](./architecture.md) for module details
+- Check the [FAQ](./FAQ.md) for common questions
+- Join the [Discord](https://discord.gg/hYVrEAM6) community!

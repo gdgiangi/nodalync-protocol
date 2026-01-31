@@ -1,12 +1,15 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>On Knowing and Being Known — Nodalync</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,300;0,8..60,400;0,8..60,500;0,8..60,600;1,8..60,300;1,8..60,400;1,8..60,500&display=swap" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,300;0,8..60,400;0,8..60,500;0,8..60,600;1,8..60,300;1,8..60,400;1,8..60,500&display=swap"
+        rel="stylesheet">
     <style>
         :root {
             --cream: #FFFEF8;
@@ -555,14 +558,15 @@
         }
     </style>
 </head>
+
 <body>
     <nav id="nav">
-        <a href="/" class="logo">Nodalync</a>
+        <a href="https://github.com/gdgiangi/nodalync-protocol" class="logo">Nodalync</a>
         <ul class="nav-links">
             <li><a href="#paths">Paths</a></li>
             <li><a href="#protocol">Protocol</a></li>
-            <li><a href="https://docs.nodalync.io">Documentation</a></li>
-            <li><a href="https://github.com/nodalync">GitHub</a></li>
+            <li><a href="https://gdgiangi.github.io/nodalync-protocol/">Documentation</a></li>
+            <li><a href="https://github.com/gdgiangi/nodalync-protocol">GitHub</a></li>
         </ul>
     </nav>
 
@@ -575,65 +579,74 @@
         <div class="section-divider"></div>
 
         <section>
-            <p class="lead">You write something. A paper, a note, an observation that took years to form. It goes out into the world. Someone reads it, builds on it, transforms it into something new. That work travels further still.</p>
-            
-            <p>You never know where it lands. The connection between you and everything that grew from your thinking—severed at the moment of publication. You are the root of a tree you cannot see.</p>
+            <p class="lead">You write something. A paper, a note, an observation that took years to form. It goes out
+                into the world. Someone reads it, builds on it, transforms it into something new. That work travels
+                further still.</p>
+
+            <p>You never know where it lands. The connection between you and everything that grew from your
+                thinking—severed at the moment of publication. You are the root of a tree you cannot see.</p>
 
             <div class="illustration">
                 <svg viewBox="0 0 400 200" fill="none">
                     <!-- Root node -->
-                    <circle cx="60" cy="100" r="4" class="dot"/>
+                    <circle cx="60" cy="100" r="4" class="dot" />
                     <text x="60" y="130" text-anchor="middle" class="label">you</text>
-                    
+
                     <!-- First branch -->
-                    <path d="M 64 100 Q 120 100 140 60" class="line"/>
-                    <circle cx="140" cy="60" r="3" class="dot-hollow"/>
-                    
+                    <path d="M 64 100 Q 120 100 140 60" class="line" />
+                    <circle cx="140" cy="60" r="3" class="dot-hollow" />
+
                     <!-- Second branch -->
-                    <path d="M 64 100 Q 120 100 140 100" class="line"/>
-                    <circle cx="140" cy="100" r="3" class="dot-hollow"/>
-                    
+                    <path d="M 64 100 Q 120 100 140 100" class="line" />
+                    <circle cx="140" cy="100" r="3" class="dot-hollow" />
+
                     <!-- Third branch -->
-                    <path d="M 64 100 Q 120 100 140 140" class="line"/>
-                    <circle cx="140" cy="140" r="3" class="dot-hollow"/>
-                    
+                    <path d="M 64 100 Q 120 100 140 140" class="line" />
+                    <circle cx="140" cy="140" r="3" class="dot-hollow" />
+
                     <!-- Further branches - fading -->
-                    <path d="M 143 60 Q 180 50 200 30" class="line-light"/>
-                    <path d="M 143 60 Q 180 70 200 70" class="line-light"/>
-                    <circle cx="200" cy="30" r="2" class="dot-hollow"/>
-                    <circle cx="200" cy="70" r="2" class="dot-hollow"/>
-                    
-                    <path d="M 143 100 Q 180 90 200 85" class="line-light"/>
-                    <path d="M 143 100 Q 180 110 200 115" class="line-light"/>
-                    <circle cx="200" cy="85" r="2" class="dot-hollow"/>
-                    <circle cx="200" cy="115" r="2" class="dot-hollow"/>
-                    
-                    <path d="M 143 140 Q 180 145 200 150" class="line-light"/>
-                    <circle cx="200" cy="150" r="2" class="dot-hollow"/>
-                    
+                    <path d="M 143 60 Q 180 50 200 30" class="line-light" />
+                    <path d="M 143 60 Q 180 70 200 70" class="line-light" />
+                    <circle cx="200" cy="30" r="2" class="dot-hollow" />
+                    <circle cx="200" cy="70" r="2" class="dot-hollow" />
+
+                    <path d="M 143 100 Q 180 90 200 85" class="line-light" />
+                    <path d="M 143 100 Q 180 110 200 115" class="line-light" />
+                    <circle cx="200" cy="85" r="2" class="dot-hollow" />
+                    <circle cx="200" cy="115" r="2" class="dot-hollow" />
+
+                    <path d="M 143 140 Q 180 145 200 150" class="line-light" />
+                    <circle cx="200" cy="150" r="2" class="dot-hollow" />
+
                     <!-- Dashed lines to unknown -->
-                    <path d="M 204 30 L 280 20" class="line-dashed"/>
-                    <path d="M 204 70 L 280 65" class="line-dashed"/>
-                    <path d="M 204 85 L 280 90" class="line-dashed"/>
-                    <path d="M 204 115 L 280 120" class="line-dashed"/>
-                    <path d="M 204 150 L 280 160" class="line-dashed"/>
-                    
+                    <path d="M 204 30 L 280 20" class="line-dashed" />
+                    <path d="M 204 70 L 280 65" class="line-dashed" />
+                    <path d="M 204 85 L 280 90" class="line-dashed" />
+                    <path d="M 204 115 L 280 120" class="line-dashed" />
+                    <path d="M 204 150 L 280 160" class="line-dashed" />
+
                     <!-- Question marks / unknown -->
                     <text x="300" y="95" class="label" font-style="italic">?</text>
                 </svg>
             </div>
 
-            <p>This is how knowledge has always worked. Ideas flow outward, transformed and recombined, losing their connection to origin. We accept this as natural—the price of contribution.</p>
+            <p>This is how knowledge has always worked. Ideas flow outward, transformed and recombined, losing their
+                connection to origin. We accept this as natural—the price of contribution.</p>
         </section>
 
         <section>
             <h2>The current reality</h2>
-            
-            <p>Now consider what is actually happening. AI systems are trained on the sum of human knowledge—your papers, your writing, your thinking. The models learn patterns from work you spent years developing. They generate responses shaped by your contributions.</p>
-            
-            <p>You receive nothing. No attribution. No compensation. No knowledge of whether your work mattered at all.</p>
-            
-            <p>Researchers cite each other, but citations are symbolic. They don't pay rent. Platforms host your writing and capture the value of aggregation. Journals charge readers for access to work you gave away. The infrastructure of knowledge was built to serve institutions, not contributors.</p>
+
+            <p>Now consider what is actually happening. AI systems are trained on the sum of human knowledge—your
+                papers, your writing, your thinking. The models learn patterns from work you spent years developing.
+                They generate responses shaped by your contributions.</p>
+
+            <p>You receive nothing. No attribution. No compensation. No knowledge of whether your work mattered at all.
+            </p>
+
+            <p>Researchers cite each other, but citations are symbolic. They don't pay rent. Platforms host your writing
+                and capture the value of aggregation. Journals charge readers for access to work you gave away. The
+                infrastructure of knowledge was built to serve institutions, not contributors.</p>
 
             <div class="expandable">
                 <div class="expandable-header" onclick="toggleExpand(this.parentElement)">
@@ -645,10 +658,16 @@
                 </div>
                 <div class="expandable-content">
                     <div class="expandable-inner">
-                        <p>Consider the path of a research paper. You spend months—perhaps years—developing an insight. You write it up, submit it to a journal. The journal charges readers $30 to access it. Or perhaps it's open access, and your institution pays $3,000 for publication.</p>
-                        <p>Your paper is cited by others. Those citations help their careers, help the journal's impact factor, help the platforms that index everything. Someone trains a language model on your field. Your precise formulations become part of its weights.</p>
-                        <p>At each step, value is created. At no step do you participate in it beyond the initial transaction—which often costs you money.</p>
-                        <p>This isn't a bug. It's the architecture. Current systems have no mechanism to trace value back to origin, so they don't. The infrastructure wasn't built for attribution at scale.</p>
+                        <p>Consider the path of a research paper. You spend months—perhaps years—developing an insight.
+                            You write it up, submit it to a journal. The journal charges readers $30 to access it. Or
+                            perhaps it's open access, and your institution pays $3,000 for publication.</p>
+                        <p>Your paper is cited by others. Those citations help their careers, help the journal's impact
+                            factor, help the platforms that index everything. Someone trains a language model on your
+                            field. Your precise formulations become part of its weights.</p>
+                        <p>At each step, value is created. At no step do you participate in it beyond the initial
+                            transaction—which often costs you money.</p>
+                        <p>This isn't a bug. It's the architecture. Current systems have no mechanism to trace value
+                            back to origin, so they don't. The infrastructure wasn't built for attribution at scale.</p>
                     </div>
                 </div>
             </div>
@@ -656,62 +675,68 @@
 
         <section>
             <h2>What if knowledge remembered its origins?</h2>
-            
-            <p>Imagine a different architecture. Every piece of knowledge carries with it the complete chain of what it built upon. Not as metadata that can be stripped away, but as cryptographic structure—inseparable from the content itself.</p>
-            
-            <p>When someone queries that knowledge, payment flows backward through the entire chain. Automatically. To everyone who contributed to making it possible.</p>
+
+            <p>Imagine a different architecture. Every piece of knowledge carries with it the complete chain of what it
+                built upon. Not as metadata that can be stripped away, but as cryptographic structure—inseparable from
+                the content itself.</p>
+
+            <p>When someone queries that knowledge, payment flows backward through the entire chain. Automatically. To
+                everyone who contributed to making it possible.</p>
 
             <div class="illustration illustration-wide">
                 <svg viewBox="0 0 600 240" fill="none">
                     <!-- L0 nodes -->
-                    <circle cx="80" cy="80" r="5" class="dot"/>
+                    <circle cx="80" cy="80" r="5" class="dot" />
                     <text x="80" y="105" text-anchor="middle" class="label-strong">L0</text>
                     <text x="80" y="120" text-anchor="middle" class="label">source</text>
-                    
-                    <circle cx="80" cy="180" r="5" class="dot"/>
+
+                    <circle cx="80" cy="180" r="5" class="dot" />
                     <text x="80" y="205" text-anchor="middle" class="label-strong">L0</text>
                     <text x="80" y="220" text-anchor="middle" class="label">source</text>
-                    
+
                     <!-- L1 node -->
-                    <path d="M 85 80 Q 140 100 175 120" class="line"/>
-                    <path d="M 85 180 Q 140 160 175 140" class="line"/>
-                    <circle cx="180" cy="130" r="5" class="dot"/>
+                    <path d="M 85 80 Q 140 100 175 120" class="line" />
+                    <path d="M 85 180 Q 140 160 175 140" class="line" />
+                    <circle cx="180" cy="130" r="5" class="dot" />
                     <text x="180" y="155" text-anchor="middle" class="label-strong">L1</text>
                     <text x="180" y="170" text-anchor="middle" class="label">facts</text>
-                    
+
                     <!-- L2 node (dashed border - private) -->
-                    <path d="M 185 130 L 265 130" class="line"/>
-                    <circle cx="280" cy="130" r="8" class="dot-hollow" stroke-dasharray="3 2"/>
+                    <path d="M 185 130 L 265 130" class="line" />
+                    <circle cx="280" cy="130" r="8" class="dot-hollow" stroke-dasharray="3 2" />
                     <text x="280" y="155" text-anchor="middle" class="label-strong">L2</text>
                     <text x="280" y="170" text-anchor="middle" class="label">private</text>
-                    
+
                     <!-- L3 node -->
-                    <path d="M 288 130 L 365 130" class="line"/>
-                    <circle cx="380" cy="130" r="6" class="dot"/>
+                    <path d="M 288 130 L 365 130" class="line" />
+                    <circle cx="380" cy="130" r="6" class="dot" />
                     <text x="380" y="155" text-anchor="middle" class="label-strong">L3</text>
                     <text x="380" y="170" text-anchor="middle" class="label">insight</text>
-                    
+
                     <!-- Query arrow -->
-                    <path d="M 480 130 L 400 130" class="line" marker-end="url(#arrowhead)"/>
+                    <path d="M 480 130 L 400 130" class="line" marker-end="url(#arrowhead)" />
                     <text x="490" y="125" class="label">query</text>
                     <text x="490" y="140" class="label" font-style="italic">payment</text>
-                    
+
                     <!-- Payment flow back -->
-                    <path d="M 375 115 Q 340 80 300 80 Q 200 80 85 80" class="line-dashed"/>
-                    <path d="M 375 145 Q 340 180 300 180 Q 200 180 85 180" class="line-dashed"/>
-                    
+                    <path d="M 375 115 Q 340 80 300 80 Q 200 80 85 80" class="line-dashed" />
+                    <path d="M 375 145 Q 340 180 300 180 Q 200 180 85 180" class="line-dashed" />
+
                     <!-- Arrow definition -->
                     <defs>
                         <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-                            <polygon points="0 0, 10 3.5, 0 7" fill="#1a1a18"/>
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#1a1a18" />
                         </marker>
                     </defs>
                 </svg>
             </div>
 
-            <p>This is not a platform you upload to. It's a protocol that runs locally—on your machine, under your control. Your second brain, actually yours.</p>
-            
-            <p>You decide what to share. You can participate in the network while keeping everything private. You can query others' knowledge without contributing your own. Or you can publish your foundational work and earn perpetually as others build upon it.</p>
+            <p>This is not a platform you upload to. It's a protocol that runs locally—on your machine, under your
+                control. Your second brain, actually yours.</p>
+
+            <p>You decide what to share. You can participate in the network while keeping everything private. You can
+                query others' knowledge without contributing your own. Or you can publish your foundational work and
+                earn perpetually as others build upon it.</p>
 
             <div class="expandable">
                 <div class="expandable-header" onclick="toggleExpand(this.parentElement)">
@@ -723,10 +748,16 @@
                 </div>
                 <div class="expandable-content">
                     <div class="expandable-inner">
-                        <p>Every platform asks you to trust them with your data. They promise to keep it safe, to use it responsibly, to let you delete it when you want. These promises are architectural lies—the data lives on their servers, governed by their incentives.</p>
-                        <p>A local-first protocol inverts this. Your knowledge lives on your machine. The network is a communication layer, not a storage layer. When you share something, you're serving it directly. When you stop, it stops.</p>
-                        <p>This changes everything about what "sharing" means. You're not giving something away to be held by others. You're opening a door that you can close.</p>
-                        <p>The protocol doesn't require trust in any central party. Cryptographic proofs replace institutional promises. The math doesn't change its terms of service.</p>
+                        <p>Every platform asks you to trust them with your data. They promise to keep it safe, to use it
+                            responsibly, to let you delete it when you want. These promises are architectural lies—the
+                            data lives on their servers, governed by their incentives.</p>
+                        <p>A local-first protocol inverts this. Your knowledge lives on your machine. The network is a
+                            communication layer, not a storage layer. When you share something, you're serving it
+                            directly. When you stop, it stops.</p>
+                        <p>This changes everything about what "sharing" means. You're not giving something away to be
+                            held by others. You're opening a door that you can close.</p>
+                        <p>The protocol doesn't require trust in any central party. Cryptographic proofs replace
+                            institutional promises. The math doesn't change its terms of service.</p>
                     </div>
                 </div>
             </div>
@@ -734,129 +765,139 @@
 
         <section>
             <h2>The layers of knowing</h2>
-            
-            <p>Knowledge isn't flat. It has structure—not layers stacked on top of each other, but a graph at the center with contributions flowing in and insights flowing out. The protocol makes this structure explicit.</p>
-            
-            <p><strong>L2</strong> is the core: your personal knowledge graph. Entities and relationships, RDF-compatible, pluggable into the semantic web. This is where understanding actually lives—the mesh of connections between concepts, people, ideas. Always private, always yours.</p>
-            
-            <p><strong>L0</strong> and <strong>L3</strong> are peers that interface with your graph from opposite directions. L0 is contribution—documents, notes, research that feed into your understanding. L3 is synthesis—insights that emerge from it, crystallizations of what you've learned that others might build upon.</p>
-            
-            <p><strong>L1</strong> extends outward from both. Extracted facts, claims, statistics that make your sources and insights searchable, quotable, verifiable. The tendrils that let others find what you've created.</p>
+
+            <p>Knowledge isn't flat. It has structure—not layers stacked on top of each other, but a graph at the center
+                with contributions flowing in and insights flowing out. The protocol makes this structure explicit.</p>
+
+            <p><strong>L2</strong> is the core: your personal knowledge graph. Entities and relationships,
+                RDF-compatible, pluggable into the semantic web. This is where understanding actually lives—the mesh of
+                connections between concepts, people, ideas. Always private, always yours.</p>
+
+            <p><strong>L0</strong> and <strong>L3</strong> are peers that interface with your graph from opposite
+                directions. L0 is contribution—documents, notes, research that feed into your understanding. L3 is
+                synthesis—insights that emerge from it, crystallizations of what you've learned that others might build
+                upon.</p>
+
+            <p><strong>L1</strong> extends outward from both. Extracted facts, claims, statistics that make your sources
+                and insights searchable, quotable, verifiable. The tendrils that let others find what you've created.
+            </p>
 
             <div class="illustration illustration-wide">
                 <svg viewBox="0 0 680 260" fill="none">
                     <!-- L0 cluster (left side) -->
-                    <circle cx="85" cy="100" r="5" class="dot"/>
-                    <circle cx="70" cy="130" r="4" class="dot"/>
-                    <circle cx="95" cy="155" r="4" class="dot"/>
-                    <circle cx="60" cy="165" r="3" class="dot"/>
+                    <circle cx="85" cy="100" r="5" class="dot" />
+                    <circle cx="70" cy="130" r="4" class="dot" />
+                    <circle cx="95" cy="155" r="4" class="dot" />
+                    <circle cx="60" cy="165" r="3" class="dot" />
                     <!-- L0 internal connections -->
-                    <path d="M 85 105 Q 78 115 70 126" class="line-light"/>
-                    <path d="M 74 130 Q 85 140 92 151" class="line-light"/>
-                    <path d="M 67 134 Q 62 150 60 162" class="line-light"/>
+                    <path d="M 85 105 Q 78 115 70 126" class="line-light" />
+                    <path d="M 74 130 Q 85 140 92 151" class="line-light" />
+                    <path d="M 67 134 Q 62 150 60 162" class="line-light" />
                     <!-- L0 label -->
                     <text x="75" y="200" text-anchor="middle" class="label-strong">L0</text>
                     <text x="75" y="215" text-anchor="middle" class="label">sources</text>
-                    
+
                     <!-- L1 tendrils off L0 (extending left) -->
-                    <path d="M 80 100 L 45 85" class="line-light"/>
-                    <path d="M 66 130 L 35 125" class="line-light"/>
-                    <path d="M 57 165 L 30 175" class="line-light"/>
-                    <circle cx="45" cy="85" r="2" class="dot-hollow"/>
-                    <circle cx="35" cy="125" r="2" class="dot-hollow"/>
-                    <circle cx="30" cy="175" r="2" class="dot-hollow"/>
+                    <path d="M 80 100 L 45 85" class="line-light" />
+                    <path d="M 66 130 L 35 125" class="line-light" />
+                    <path d="M 57 165 L 30 175" class="line-light" />
+                    <circle cx="45" cy="85" r="2" class="dot-hollow" />
+                    <circle cx="35" cy="125" r="2" class="dot-hollow" />
+                    <circle cx="30" cy="175" r="2" class="dot-hollow" />
                     <!-- L1 label left -->
                     <text x="25" y="135" text-anchor="middle" class="label" font-style="italic">L1</text>
-                    
+
                     <!-- Flow arrows L0 → L2 -->
-                    <path d="M 100 100 Q 140 105 175 110" class="line"/>
-                    <path d="M 100 155 Q 140 150 175 140" class="line"/>
-                    <path d="M 100 130 L 175 125" class="line"/>
-                    
+                    <path d="M 100 100 Q 140 105 175 110" class="line" />
+                    <path d="M 100 155 Q 140 150 175 140" class="line" />
+                    <path d="M 100 130 L 175 125" class="line" />
+
                     <!-- L2 central mesh (the graph) -->
                     <!-- Nodes -->
-                    <circle cx="220" cy="95" r="4" class="dot-hollow" stroke-dasharray="2 2"/>
-                    <circle cx="260" cy="80" r="3" class="dot-hollow" stroke-dasharray="2 2"/>
-                    <circle cx="300" cy="90" r="4" class="dot-hollow" stroke-dasharray="2 2"/>
-                    <circle cx="340" cy="75" r="3" class="dot-hollow" stroke-dasharray="2 2"/>
-                    <circle cx="200" cy="125" r="3" class="dot-hollow" stroke-dasharray="2 2"/>
-                    <circle cx="245" cy="120" r="4" class="dot-hollow" stroke-dasharray="2 2"/>
-                    <circle cx="290" cy="125" r="3" class="dot-hollow" stroke-dasharray="2 2"/>
-                    <circle cx="330" cy="115" r="4" class="dot-hollow" stroke-dasharray="2 2"/>
-                    <circle cx="370" cy="105" r="3" class="dot-hollow" stroke-dasharray="2 2"/>
-                    <circle cx="215" cy="155" r="4" class="dot-hollow" stroke-dasharray="2 2"/>
-                    <circle cx="260" cy="150" r="3" class="dot-hollow" stroke-dasharray="2 2"/>
-                    <circle cx="305" cy="160" r="4" class="dot-hollow" stroke-dasharray="2 2"/>
-                    <circle cx="350" cy="145" r="3" class="dot-hollow" stroke-dasharray="2 2"/>
-                    <circle cx="235" cy="180" r="3" class="dot-hollow" stroke-dasharray="2 2"/>
-                    <circle cx="285" cy="185" r="3" class="dot-hollow" stroke-dasharray="2 2"/>
-                    <circle cx="335" cy="175" r="4" class="dot-hollow" stroke-dasharray="2 2"/>
-                    
+                    <circle cx="220" cy="95" r="4" class="dot-hollow" stroke-dasharray="2 2" />
+                    <circle cx="260" cy="80" r="3" class="dot-hollow" stroke-dasharray="2 2" />
+                    <circle cx="300" cy="90" r="4" class="dot-hollow" stroke-dasharray="2 2" />
+                    <circle cx="340" cy="75" r="3" class="dot-hollow" stroke-dasharray="2 2" />
+                    <circle cx="200" cy="125" r="3" class="dot-hollow" stroke-dasharray="2 2" />
+                    <circle cx="245" cy="120" r="4" class="dot-hollow" stroke-dasharray="2 2" />
+                    <circle cx="290" cy="125" r="3" class="dot-hollow" stroke-dasharray="2 2" />
+                    <circle cx="330" cy="115" r="4" class="dot-hollow" stroke-dasharray="2 2" />
+                    <circle cx="370" cy="105" r="3" class="dot-hollow" stroke-dasharray="2 2" />
+                    <circle cx="215" cy="155" r="4" class="dot-hollow" stroke-dasharray="2 2" />
+                    <circle cx="260" cy="150" r="3" class="dot-hollow" stroke-dasharray="2 2" />
+                    <circle cx="305" cy="160" r="4" class="dot-hollow" stroke-dasharray="2 2" />
+                    <circle cx="350" cy="145" r="3" class="dot-hollow" stroke-dasharray="2 2" />
+                    <circle cx="235" cy="180" r="3" class="dot-hollow" stroke-dasharray="2 2" />
+                    <circle cx="285" cy="185" r="3" class="dot-hollow" stroke-dasharray="2 2" />
+                    <circle cx="335" cy="175" r="4" class="dot-hollow" stroke-dasharray="2 2" />
+
                     <!-- L2 mesh connections (relations) -->
-                    <path d="M 220 99 L 245 116" class="line-dashed"/>
-                    <path d="M 224 95 L 257 82" class="line-dashed"/>
-                    <path d="M 263 80 L 296 88" class="line-dashed"/>
-                    <path d="M 304 90 L 337 77" class="line-dashed"/>
-                    <path d="M 203 125 L 220 97" class="line-dashed"/>
-                    <path d="M 249 120 L 287 125" class="line-dashed"/>
-                    <path d="M 293 125 L 326 117" class="line-dashed"/>
-                    <path d="M 334 115 L 367 107" class="line-dashed"/>
-                    <path d="M 245 124 L 258 148" class="line-dashed"/>
-                    <path d="M 219 155 L 235 178" class="line-dashed"/>
-                    <path d="M 263 150 L 302 158" class="line-dashed"/>
-                    <path d="M 309 160 L 347 147" class="line-dashed"/>
-                    <path d="M 290 128 L 303 157" class="line-dashed"/>
-                    <path d="M 238 180 L 282 185" class="line-dashed"/>
-                    <path d="M 288 185 L 332 176" class="line-dashed"/>
-                    <path d="M 330 118 L 335 142" class="line-dashed"/>
-                    <path d="M 338 175 L 352 148" class="line-dashed"/>
-                    <path d="M 260 83 L 245 117" class="line-dashed"/>
-                    <path d="M 300 93 L 290 122" class="line-dashed"/>
-                    <path d="M 215 128 L 215 152" class="line-dashed"/>
-                    
+                    <path d="M 220 99 L 245 116" class="line-dashed" />
+                    <path d="M 224 95 L 257 82" class="line-dashed" />
+                    <path d="M 263 80 L 296 88" class="line-dashed" />
+                    <path d="M 304 90 L 337 77" class="line-dashed" />
+                    <path d="M 203 125 L 220 97" class="line-dashed" />
+                    <path d="M 249 120 L 287 125" class="line-dashed" />
+                    <path d="M 293 125 L 326 117" class="line-dashed" />
+                    <path d="M 334 115 L 367 107" class="line-dashed" />
+                    <path d="M 245 124 L 258 148" class="line-dashed" />
+                    <path d="M 219 155 L 235 178" class="line-dashed" />
+                    <path d="M 263 150 L 302 158" class="line-dashed" />
+                    <path d="M 309 160 L 347 147" class="line-dashed" />
+                    <path d="M 290 128 L 303 157" class="line-dashed" />
+                    <path d="M 238 180 L 282 185" class="line-dashed" />
+                    <path d="M 288 185 L 332 176" class="line-dashed" />
+                    <path d="M 330 118 L 335 142" class="line-dashed" />
+                    <path d="M 338 175 L 352 148" class="line-dashed" />
+                    <path d="M 260 83 L 245 117" class="line-dashed" />
+                    <path d="M 300 93 L 290 122" class="line-dashed" />
+                    <path d="M 215 128 L 215 152" class="line-dashed" />
+
                     <!-- L2 label -->
                     <text x="285" y="225" text-anchor="middle" class="label-strong">L2</text>
                     <text x="285" y="240" text-anchor="middle" class="label" font-style="italic">graph · private</text>
-                    
+
                     <!-- Flow arrows L2 → L3 -->
-                    <path d="M 375 105 Q 420 110 470 105" class="line"/>
-                    <path d="M 355 145 Q 420 145 470 140" class="line"/>
-                    <path d="M 340 175 Q 420 170 470 155" class="line"/>
-                    
+                    <path d="M 375 105 Q 420 110 470 105" class="line" />
+                    <path d="M 355 145 Q 420 145 470 140" class="line" />
+                    <path d="M 340 175 Q 420 170 470 155" class="line" />
+
                     <!-- L3 cluster (right side) -->
-                    <circle cx="505" cy="105" r="5" class="dot"/>
-                    <circle cx="520" cy="135" r="4" class="dot"/>
-                    <circle cx="495" cy="160" r="4" class="dot"/>
-                    <circle cx="530" cy="165" r="3" class="dot"/>
+                    <circle cx="505" cy="105" r="5" class="dot" />
+                    <circle cx="520" cy="135" r="4" class="dot" />
+                    <circle cx="495" cy="160" r="4" class="dot" />
+                    <circle cx="530" cy="165" r="3" class="dot" />
                     <!-- L3 internal connections -->
-                    <path d="M 505 110 Q 512 120 517 131" class="line-light"/>
-                    <path d="M 517 139 Q 505 150 498 156" class="line-light"/>
-                    <path d="M 524 139 Q 528 150 530 162" class="line-light"/>
+                    <path d="M 505 110 Q 512 120 517 131" class="line-light" />
+                    <path d="M 517 139 Q 505 150 498 156" class="line-light" />
+                    <path d="M 524 139 Q 528 150 530 162" class="line-light" />
                     <!-- L3 label -->
                     <text x="515" y="200" text-anchor="middle" class="label-strong">L3</text>
                     <text x="515" y="215" text-anchor="middle" class="label">insights</text>
-                    
+
                     <!-- L1 tendrils off L3 (extending right) -->
-                    <path d="M 510 105 L 555 90" class="line-light"/>
-                    <path d="M 524 135 L 565 130" class="line-light"/>
-                    <path d="M 534 165 L 570 175" class="line-light"/>
-                    <circle cx="555" cy="90" r="2" class="dot-hollow"/>
-                    <circle cx="565" cy="130" r="2" class="dot-hollow"/>
-                    <circle cx="570" cy="175" r="2" class="dot-hollow"/>
+                    <path d="M 510 105 L 555 90" class="line-light" />
+                    <path d="M 524 135 L 565 130" class="line-light" />
+                    <path d="M 534 165 L 570 175" class="line-light" />
+                    <circle cx="555" cy="90" r="2" class="dot-hollow" />
+                    <circle cx="565" cy="130" r="2" class="dot-hollow" />
+                    <circle cx="570" cy="175" r="2" class="dot-hollow" />
                     <!-- L1 label right -->
                     <text x="580" y="140" text-anchor="middle" class="label" font-style="italic">L1</text>
-                    
+
                     <!-- Small arrow hints on the flow lines -->
-                    <polygon points="175,110 168,106 168,114" fill="#1a1a18"/>
-                    <polygon points="175,140 168,136 168,144" fill="#1a1a18"/>
-                    <polygon points="175,125 168,121 168,129" fill="#1a1a18"/>
-                    <polygon points="470,105 463,101 463,109" fill="#1a1a18"/>
-                    <polygon points="470,140 463,136 463,144" fill="#1a1a18"/>
-                    <polygon points="470,155 463,151 463,159" fill="#1a1a18"/>
+                    <polygon points="175,110 168,106 168,114" fill="#1a1a18" />
+                    <polygon points="175,140 168,136 168,144" fill="#1a1a18" />
+                    <polygon points="175,125 168,121 168,129" fill="#1a1a18" />
+                    <polygon points="470,105 463,101 463,109" fill="#1a1a18" />
+                    <polygon points="470,140 463,136 463,144" fill="#1a1a18" />
+                    <polygon points="470,155 463,151 463,159" fill="#1a1a18" />
                 </svg>
             </div>
 
-            <p>Every contribution and synthesis maintains cryptographic links through the graph. When you create an L3 insight, the sources that shaped your understanding are permanently, verifiably part of its provenance. The chain traces back through your graph to every foundational contribution.</p>
+            <p>Every contribution and synthesis maintains cryptographic links through the graph. When you create an L3
+                insight, the sources that shaped your understanding are permanently, verifiably part of its provenance.
+                The chain traces back through your graph to every foundational contribution.</p>
 
             <div class="expandable">
                 <div class="expandable-header" onclick="toggleExpand(this.parentElement)">
@@ -868,10 +909,16 @@
                 </div>
                 <div class="expandable-content">
                     <div class="expandable-inner">
-                        <p>Your L2 represents how you understand the world—which entities you consider important, how you resolve ambiguities, what relationships you see that others might not. This is valuable intellectual work, but it's personal.</p>
-                        <p>Two people reading the same papers will build different graphs. These differences are features, not bugs. They represent genuine intellectual diversity.</p>
-                        <p>The protocol keeps L2 private by design. It never leaves your machine, is never queryable by others. Its value surfaces only when you create L3 insights—and then it's the insight that's shared, not the underlying structure of your thinking.</p>
-                        <p>This is how synthesis actually works. You don't share your entire mental model; you share the conclusions you've drawn from it.</p>
+                        <p>Your L2 represents how you understand the world—which entities you consider important, how
+                            you resolve ambiguities, what relationships you see that others might not. This is valuable
+                            intellectual work, but it's personal.</p>
+                        <p>Two people reading the same papers will build different graphs. These differences are
+                            features, not bugs. They represent genuine intellectual diversity.</p>
+                        <p>The protocol keeps L2 private by design. It never leaves your machine, is never queryable by
+                            others. Its value surfaces only when you create L3 insights—and then it's the insight that's
+                            shared, not the underlying structure of your thinking.</p>
+                        <p>This is how synthesis actually works. You don't share your entire mental model; you share the
+                            conclusions you've drawn from it.</p>
                     </div>
                 </div>
             </div>
@@ -879,25 +926,33 @@
 
         <section id="paths">
             <h2>The paths</h2>
-            
-            <p>The protocol doesn't prescribe how you participate. It provides infrastructure; you decide what to build on it.</p>
+
+            <p>The protocol doesn't prescribe how you participate. It provides infrastructure; you decide what to build
+                on it.</p>
 
             <div class="paths-grid">
                 <div class="path-item">
                     <h3 class="path-title">Contribute foundations</h3>
-                    <p class="path-desc">Publish your research, writing, or domain expertise. Earn perpetually as others build upon your work. The protocol routes value backward through derivation chains—you don't need to keep producing to keep earning.</p>
+                    <p class="path-desc">Publish your research, writing, or domain expertise. Earn perpetually as others
+                        build upon your work. The protocol routes value backward through derivation chains—you don't
+                        need to keep producing to keep earning.</p>
                 </div>
                 <div class="path-item">
                     <h3 class="path-title">Synthesize privately</h3>
-                    <p class="path-desc">Build your own understanding without sharing anything. Query others' knowledge, construct your L2 graph, develop insights—all locally, all private. Participate in the network as a consumer.</p>
+                    <p class="path-desc">Build your own understanding without sharing anything. Query others' knowledge,
+                        construct your L2 graph, develop insights—all locally, all private. Participate in the network
+                        as a consumer.</p>
                 </div>
                 <div class="path-item">
                     <h3 class="path-title">Build applications</h3>
-                    <p class="path-desc">Create tools that interact with the protocol. Search interfaces, visualization layers, specialized extractors. The network becomes infrastructure for knowledge applications.</p>
+                    <p class="path-desc">Create tools that interact with the protocol. Search interfaces, visualization
+                        layers, specialized extractors. The network becomes infrastructure for knowledge applications.
+                    </p>
                 </div>
                 <div class="path-item">
                     <h3 class="path-title">Deploy agents</h3>
-                    <p class="path-desc">Connect AI systems that query knowledge and pay for access. Every query triggers payment through the provenance chain. Your agents participate in fair exchange.</p>
+                    <p class="path-desc">Connect AI systems that query knowledge and pay for access. Every query
+                        triggers payment through the provenance chain. Your agents participate in fair exchange.</p>
                 </div>
             </div>
 
@@ -911,11 +966,18 @@
                 </div>
                 <div class="expandable-content">
                     <div class="expandable-inner">
-                        <p>Consider what this enables. You have years of expertise in a domain. You've published papers, developed frameworks, accumulated knowledge that took a career to build.</p>
-                        <p>Today, that knowledge feeds AI systems that compete with you. You're training your replacement.</p>
-                        <p>On the protocol, you publish your knowledge with provenance. AI agents that want to use your domain expertise query it—and pay. Your years of work become infrastructure that generates value continuously.</p>
-                        <p>You can build agents of your own that combine your knowledge with others'. You can negotiate with organizations about shared research. You can see exactly how your work is being used and by whom.</p>
-                        <p>This isn't about working harder. It's about building something once that participates in all derivative value. A different relationship between effort and outcome.</p>
+                        <p>Consider what this enables. You have years of expertise in a domain. You've published papers,
+                            developed frameworks, accumulated knowledge that took a career to build.</p>
+                        <p>Today, that knowledge feeds AI systems that compete with you. You're training your
+                            replacement.</p>
+                        <p>On the protocol, you publish your knowledge with provenance. AI agents that want to use your
+                            domain expertise query it—and pay. Your years of work become infrastructure that generates
+                            value continuously.</p>
+                        <p>You can build agents of your own that combine your knowledge with others'. You can negotiate
+                            with organizations about shared research. You can see exactly how your work is being used
+                            and by whom.</p>
+                        <p>This isn't about working harder. It's about building something once that participates in all
+                            derivative value. A different relationship between effort and outcome.</p>
                     </div>
                 </div>
             </div>
@@ -923,31 +985,41 @@
 
         <section>
             <h2>The agentic future</h2>
-            
-            <p>AI systems will proliferate. They will query vast amounts of knowledge, synthesize constantly, create derivative works at machine speed. This is not speculation; it's already happening.</p>
-            
-            <p>The question is whether you're part of that exchange or outside it. Whether the knowledge you've developed participates in what agents create, or simply gets absorbed without attribution.</p>
-            
-            <p>The protocol provides standard infrastructure for AI-human knowledge exchange. Every query triggers payment to all contributors in the provenance chain. Agents become participants in a fair economy, not extractors from a commons.</p>
+
+            <p>AI systems will proliferate. They will query vast amounts of knowledge, synthesize constantly, create
+                derivative works at machine speed. This is not speculation; it's already happening.</p>
+
+            <p>The question is whether you're part of that exchange or outside it. Whether the knowledge you've
+                developed participates in what agents create, or simply gets absorbed without attribution.</p>
+
+            <p>The protocol provides standard infrastructure for AI-human knowledge exchange. Every query triggers
+                payment to all contributors in the provenance chain. Agents become participants in a fair economy, not
+                extractors from a commons.</p>
 
             <div class="callout">
                 <p>Not extraction without attribution, but transaction with fair compensation.</p>
             </div>
 
-            <p>This creates alignment. AI systems benefit from high-quality human knowledge. Humans benefit from AI consumption of their work. The protocol mediates between them—ensuring that value flows both ways.</p>
+            <p>This creates alignment. AI systems benefit from high-quality human knowledge. Humans benefit from AI
+                consumption of their work. The protocol mediates between them—ensuring that value flows both ways.</p>
         </section>
 
         <section>
             <h2>The deeper implication</h2>
-            
+
             <p>What's really at stake is a model of work.</p>
-            
-            <p>Today, you're paid for what your knowledge is worth in the moment—or more accurately, for what someone will pay for it in the moment. A paper's value is its publication fee. A book's value is its advance. Consulting is hourly.</p>
-            
-            <p>But knowledge generates value over time, through chains of derivation you cannot see. Your foundational insight becomes part of someone's synthesis, which becomes part of an AI's training, which shapes decisions you'll never know about.</p>
-            
-            <p>The protocol makes this value legible—and capturable. Contribute something foundational, and participate in every derivative work, proportionally, forever.</p>
-            
+
+            <p>Today, you're paid for what your knowledge is worth in the moment—or more accurately, for what someone
+                will pay for it in the moment. A paper's value is its publication fee. A book's value is its advance.
+                Consulting is hourly.</p>
+
+            <p>But knowledge generates value over time, through chains of derivation you cannot see. Your foundational
+                insight becomes part of someone's synthesis, which becomes part of an AI's training, which shapes
+                decisions you'll never know about.</p>
+
+            <p>The protocol makes this value legible—and capturable. Contribute something foundational, and participate
+                in every derivative work, proportionally, forever.</p>
+
             <p>This is not passive income. It's structural participation in the knowledge economy you helped build.</p>
 
             <div class="expandable">
@@ -960,10 +1032,18 @@
                 </div>
                 <div class="expandable-content">
                     <div class="expandable-inner">
-                        <p>When someone queries an L3 insight, payment flows through the provenance chain. The synthesizer who created the L3 keeps 5%—a fee for the work of synthesis. The remaining 95% flows to foundational contributors: everyone whose L0 or L1 content was used.</p>
-                        <p>This ratio is a design choice, enforced by the protocol. It cannot be negotiated away, cannot be altered by platforms, cannot be captured by intermediaries. The math ensures that foundational work is valued.</p>
-                        <p>If your L0 document was used by three different sources that contributed to an L3, you receive proportional payment from all three paths. If your work appears multiple times in a provenance chain, your share increases accordingly.</p>
-                        <p>The synthesizer still benefits—they receive the 5% fee plus any foundational shares they hold. Creating valuable synthesis is rewarded. But not at the expense of those who made synthesis possible.</p>
+                        <p>When someone queries an L3 insight, payment flows through the provenance chain. The
+                            synthesizer who created the L3 keeps 5%—a fee for the work of synthesis. The remaining 95%
+                            flows to foundational contributors: everyone whose L0 or L1 content was used.</p>
+                        <p>This ratio is a design choice, enforced by the protocol. It cannot be negotiated away, cannot
+                            be altered by platforms, cannot be captured by intermediaries. The math ensures that
+                            foundational work is valued.</p>
+                        <p>If your L0 document was used by three different sources that contributed to an L3, you
+                            receive proportional payment from all three paths. If your work appears multiple times in a
+                            provenance chain, your share increases accordingly.</p>
+                        <p>The synthesizer still benefits—they receive the 5% fee plus any foundational shares they
+                            hold. Creating valuable synthesis is rewarded. But not at the expense of those who made
+                            synthesis possible.</p>
                     </div>
                 </div>
             </div>
@@ -975,9 +1055,12 @@
                 <h2 class="protocol-title">Nodalync</h2>
             </div>
 
-            <p>Everything described above is implemented in a protocol specification and reference implementation. Open source, cryptographically verifiable, running on Hedera for settlement.</p>
-            
-            <p>The protocol is infrastructure. It specifies content addressing, provenance chains, payment channels, and settlement—the minimal structure needed for fair knowledge exchange. Everything else is built on top.</p>
+            <p>Everything described above is implemented in a protocol specification and reference implementation. Open
+                source, cryptographically verifiable, running on Hedera for settlement.</p>
+
+            <p>The protocol is infrastructure. It specifies content addressing, provenance chains, payment channels, and
+                settlement—the minimal structure needed for fair knowledge exchange. Everything else is built on top.
+            </p>
 
             <div class="expandable">
                 <div class="expandable-header" onclick="toggleExpand(this.parentElement)">
@@ -989,11 +1072,16 @@
                 </div>
                 <div class="expandable-content">
                     <div class="expandable-inner">
-                        <p><strong>Content addressing:</strong> All content is referenced by SHA-256 hash. Tamper-proof, verifiable, unique.</p>
-                        <p><strong>Provenance:</strong> Every piece of content maintains a cryptographic chain to its sources. L3 insights carry the complete root_L0L1 array—every foundational contributor.</p>
-                        <p><strong>Local-first:</strong> Content lives on owner nodes. The network is a communication layer (libp2p), not a storage layer. DHT for discovery, direct queries for content.</p>
-                        <p><strong>Payment channels:</strong> Off-chain payment channels for micropayments. Batch settlement to Hedera for finality. Sub-second transactions, fraction-of-a-cent costs.</p>
-                        <p><strong>MCP integration:</strong> Model Context Protocol server for AI agent access. Budget controls, provenance tracking, automatic payment.</p>
+                        <p><strong>Content addressing:</strong> All content is referenced by SHA-256 hash. Tamper-proof,
+                            verifiable, unique.</p>
+                        <p><strong>Provenance:</strong> Every piece of content maintains a cryptographic chain to its
+                            sources. L3 insights carry the complete root_L0L1 array—every foundational contributor.</p>
+                        <p><strong>Local-first:</strong> Content lives on owner nodes. The network is a communication
+                            layer (libp2p), not a storage layer. DHT for discovery, direct queries for content.</p>
+                        <p><strong>Payment channels:</strong> Off-chain payment channels for micropayments. Batch
+                            settlement to Hedera for finality. Sub-second transactions, fraction-of-a-cent costs.</p>
+                        <p><strong>MCP integration:</strong> Model Context Protocol server for AI agent access. Budget
+                            controls, provenance tracking, automatic payment.</p>
                     </div>
                 </div>
             </div>
@@ -1008,10 +1096,18 @@
                 </div>
                 <div class="expandable-content">
                     <div class="expandable-inner">
-                        <p><strong>No native token:</strong> The protocol uses HBAR directly. This eliminates token bootstrapping complexity, leverages existing liquidity, and avoids regulatory ambiguity. The focus is on proving the knowledge economics model, not creating a speculative asset.</p>
-                        <p><strong>L2 is always private:</strong> Your knowledge graph never leaves your machine. This isn't a limitation—it's protection. Your unique perspective on how knowledge connects is yours alone.</p>
-                        <p><strong>95/5 split is protocol-enforced:</strong> The distribution ratio isn't a setting or a negotiation. It's cryptographic structure. This prevents value capture by intermediaries and ensures foundational contributors always receive the majority.</p>
-                        <p><strong>Discovery is application-layer:</strong> The protocol provides hash-based lookup, not search. Search engines, directories, and recommendation systems are built on top. This keeps the protocol minimal and focused.</p>
+                        <p><strong>No native token:</strong> The protocol uses HBAR directly. This eliminates token
+                            bootstrapping complexity, leverages existing liquidity, and avoids regulatory ambiguity. The
+                            focus is on proving the knowledge economics model, not creating a speculative asset.</p>
+                        <p><strong>L2 is always private:</strong> Your knowledge graph never leaves your machine. This
+                            isn't a limitation—it's protection. Your unique perspective on how knowledge connects is
+                            yours alone.</p>
+                        <p><strong>95/5 split is protocol-enforced:</strong> The distribution ratio isn't a setting or a
+                            negotiation. It's cryptographic structure. This prevents value capture by intermediaries and
+                            ensures foundational contributors always receive the majority.</p>
+                        <p><strong>Discovery is application-layer:</strong> The protocol provides hash-based lookup, not
+                            search. Search engines, directories, and recommendation systems are built on top. This keeps
+                            the protocol minimal and focused.</p>
                     </div>
                 </div>
             </div>
@@ -1026,9 +1122,12 @@
                 </div>
                 <div class="expandable-content">
                     <div class="expandable-inner">
-                        <p>Protocol specification v0.2.1 is complete. Reference implementation in Rust. CLI for publishing, querying, and synthesis. MCP server for AI agent integration.</p>
-                        <p>Settlement contract deployed on Hedera testnet. Payment channels operational. Provenance verification working end-to-end.</p>
-                        <p>What's next: mainnet deployment, improved L1 extraction (currently rule-based, AI extractors planned), expanded documentation, community tooling.</p>
+                        <p>Protocol specification v0.2.1 is complete. Reference implementation in Rust. CLI for
+                            publishing, querying, and synthesis. MCP server for AI agent integration.</p>
+                        <p>Settlement contract deployed on Hedera testnet. Payment channels operational. Provenance
+                            verification working end-to-end.</p>
+                        <p>What's next: mainnet deployment, improved L1 extraction (currently rule-based, AI extractors
+                            planned), expanded documentation, community tooling.</p>
                     </div>
                 </div>
             </div>
@@ -1038,8 +1137,9 @@
             <h2>Join the network</h2>
             <p>The infrastructure for fair knowledge exchange is ready. What you build on it is up to you.</p>
             <div class="cta-buttons">
-                <a href="https://docs.nodalync.io" class="btn btn-primary">Read the documentation</a>
-                <a href="https://github.com/nodalync" class="btn btn-secondary">View on GitHub</a>
+                <a href="https://gdgiangi.github.io/nodalync-protocol/" class="btn btn-primary">Read the
+                    documentation</a>
+                <a href="https://github.com/gdgiangi/nodalync-protocol" class="btn btn-secondary">View on GitHub</a>
             </div>
         </section>
 
@@ -1053,24 +1153,30 @@
                     <div class="footer-column">
                         <h4>Protocol</h4>
                         <ul>
-                            <li><a href="#">Specification</a></li>
-                            <li><a href="#">Whitepaper</a></li>
-                            <li><a href="#">Architecture</a></li>
+                            <li><a href="https://gdgiangi.github.io/nodalync-protocol/spec.html">Specification</a></li>
+                            <li><a
+                                    href="https://gdgiangi.github.io/nodalync-protocol/papers/whitepaper.html">Whitepaper</a>
+                            </li>
+                            <li><a
+                                    href="https://gdgiangi.github.io/nodalync-protocol/architecture.html">Architecture</a>
+                            </li>
                         </ul>
                     </div>
                     <div class="footer-column">
                         <h4>Developers</h4>
                         <ul>
-                            <li><a href="#">Documentation</a></li>
-                            <li><a href="#">CLI Reference</a></li>
-                            <li><a href="#">MCP Server</a></li>
+                            <li><a href="https://gdgiangi.github.io/nodalync-protocol/">Documentation</a></li>
+                            <li><a href="https://gdgiangi.github.io/nodalync-protocol/modules/10-cli.html">CLI
+                                    Reference</a></li>
+                            <li><a href="https://gdgiangi.github.io/nodalync-protocol/modules/11-mcp.html">MCP
+                                    Server</a></li>
                         </ul>
                     </div>
                     <div class="footer-column">
                         <h4>Community</h4>
                         <ul>
-                            <li><a href="#">GitHub</a></li>
-                            <li><a href="#">Discord</a></li>
+                            <li><a href="https://github.com/gdgiangi/nodalync-protocol">GitHub</a></li>
+                            <li><a href="https://discord.gg/hYVrEAM6">Discord</a></li>
                             <li><a href="#">Twitter</a></li>
                         </ul>
                     </div>
@@ -1099,4 +1205,5 @@
         }
     </script>
 </body>
+
 </html>
