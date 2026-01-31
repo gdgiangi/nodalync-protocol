@@ -12,9 +12,7 @@ Choose one of three options:
 curl -fsSL https://raw.githubusercontent.com/gdgiangi/nodalync-protocol/main/install.sh | sh
 ```
 
-This auto-detects your platform (macOS, Linux, Windows) and installs the latest binary.
-
-> **Note:** Pre-built binaries do not include Hedera settlement support. If you want to use Hedera testnet/mainnet settlement, use [Option C: Build from Source](#option-c-build-from-source) with the `--features hedera` flag. For testing without on-chain settlement, the pre-built binary works fine.
+This auto-detects your platform (macOS, Linux, Windows) and installs the latest binary with full Hedera settlement support.
 
 ### Option B: Docker
 
