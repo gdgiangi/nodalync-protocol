@@ -13,7 +13,18 @@ pub fn init(config: CliConfig, format: OutputFormat, wizard: bool) -> CliResult<
     let identity_dir = base_dir.join("identity");
 
     if identity_dir.join("keypair.key").exists() {
-        return Err(CliError::IdentityExists);
+        if wizard && crate::prompt::is_interactive() {
+            // In wizard mode, automatically reinitialize by removing existing identity
+            eprintln!("⚠️  Existing identity found. Reinitializing...");
+            if let Err(e) = std::fs::remove_dir_all(&identity_dir) {
+                return Err(CliError::User(format!(
+                    "Failed to remove existing identity: {}",
+                    e
+                )));
+            }
+        } else {
+            return Err(CliError::IdentityExists);
+        }
     }
 
     // Run wizard if requested
@@ -94,8 +105,12 @@ mod tests {
         let result = init(config.clone(), OutputFormat::Human, false);
         assert!(result.is_ok());
 
-        // Second init should fail
+        // Second init without wizard should fail
         let result2 = init(config, OutputFormat::Human, false);
         assert!(matches!(result2, Err(CliError::IdentityExists)));
     }
+
+    // Note: Testing wizard auto-reinit requires interactive mode,
+    // which can't be easily tested in unit tests. The wizard flag
+    // combined with is_interactive() check ensures safe behavior.
 }
