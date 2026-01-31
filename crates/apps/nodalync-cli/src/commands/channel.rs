@@ -8,6 +8,9 @@ use crate::context::NodeContext;
 use crate::error::{CliError, CliResult};
 use crate::output::{ChannelListOutput, ChannelOutput, ChannelSummary, OutputFormat, Render};
 
+/// Minimum channel deposit in HBAR.
+const MIN_CHANNEL_DEPOSIT_HBAR: f64 = 100.0;
+
 /// Open a payment channel with a peer.
 pub async fn open_channel(
     config: CliConfig,
@@ -15,14 +18,51 @@ pub async fn open_channel(
     peer_id_str: &str,
     deposit_hbar: f64,
 ) -> CliResult<String> {
-    // Parse peer ID from hex string
-    let peer_id = parse_peer_id(peer_id_str)?;
+    // Validate minimum deposit
+    if deposit_hbar < MIN_CHANNEL_DEPOSIT_HBAR {
+        return Err(CliError::User(format!(
+            "Minimum channel deposit is {} HBAR, got {}",
+            MIN_CHANNEL_DEPOSIT_HBAR, deposit_hbar
+        )));
+    }
 
     // Convert HBAR to tinybars (1 HBAR = 100_000_000 tinybars)
     let deposit_tinybars = (deposit_hbar * 100_000_000.0) as u64;
 
     // Initialize context with network
     let mut ctx = NodeContext::with_network(config).await?;
+
+    // Bootstrap to connect to the network
+    ctx.bootstrap().await?;
+
+    // Check if this is a libp2p peer ID (12D3KooW...)
+    if peer_id_str.starts_with("12D3KooW") {
+        // Parse libp2p peer ID
+        let libp2p_peer: nodalync_net::PeerId = peer_id_str
+            .parse()
+            .map_err(|e| CliError::User(format!("Invalid libp2p peer ID: {}", e)))?;
+
+        // Open channel using libp2p peer ID
+        let (channel, nodalync_peer_id) = ctx
+            .ops
+            .open_payment_channel_to_libp2p(libp2p_peer, deposit_tinybars)
+            .await?;
+
+        let output = ChannelOutput {
+            channel_id: channel.channel_id.to_string(),
+            peer_id: nodalync_crypto::peer_id_to_string(&nodalync_peer_id),
+            state: format!("{:?}", channel.state),
+            my_balance: channel.my_balance,
+            their_balance: channel.their_balance,
+            operation: "opened".to_string(),
+            transaction_id: channel.funding_tx_id.clone(),
+        };
+
+        return Ok(output.render(format));
+    }
+
+    // Parse Nodalync peer ID from hex or base58 string
+    let peer_id = parse_peer_id(peer_id_str)?;
 
     // Open the channel
     let channel = ctx
@@ -37,6 +77,7 @@ pub async fn open_channel(
         my_balance: channel.my_balance,
         their_balance: channel.their_balance,
         operation: "opened".to_string(),
+        transaction_id: channel.funding_tx_id.clone(),
     };
 
     Ok(output.render(format))
@@ -64,8 +105,8 @@ pub async fn close_channel(
     let my_balance = channel.my_balance;
     let their_balance = channel.their_balance;
 
-    // Close the channel
-    ctx.ops.close_payment_channel(&peer_id).await?;
+    // Close the channel (returns settlement transaction ID if on-chain)
+    let transaction_id = ctx.ops.close_payment_channel(&peer_id).await?;
 
     let output = ChannelOutput {
         channel_id,
@@ -74,6 +115,7 @@ pub async fn close_channel(
         my_balance,
         their_balance,
         operation: "closed".to_string(),
+        transaction_id,
     };
 
     Ok(output.render(format))
@@ -111,18 +153,25 @@ pub fn list_channels(config: CliConfig, format: OutputFormat) -> CliResult<Strin
     Ok(output.render(format))
 }
 
-/// Parse a peer ID from a hex string.
+/// Parse a peer ID from a string.
 ///
-/// Peer IDs are 20 bytes, displayed as 40 hex characters.
+/// Accepts two formats:
+/// - Base58 format: `ndl1...` (human-readable, e.g., `ndl13zE3otwfgopSgkT17R3yfhcT3sj8`)
+/// - Hex format: 40 hex characters (e.g., `0102030405060708090a0b0c0d0e0f1011121314`)
 fn parse_peer_id(s: &str) -> CliResult<PeerId> {
-    // Remove optional "ndl" prefix if present
+    // Try base58 format first (starts with "ndl1")
+    if s.starts_with("ndl1") {
+        return nodalync_crypto::peer_id_from_string(s)
+            .map_err(|e| CliError::User(format!("Invalid peer ID: {}", e)));
+    }
+
+    // Try hex format (40 hex characters)
     let hex_str = s.strip_prefix("ndl").unwrap_or(s);
 
-    // Must be 40 hex characters (20 bytes)
     if hex_str.len() != 40 {
         return Err(CliError::User(format!(
-            "Peer ID must be 40 hex characters (20 bytes), got {} characters",
-            hex_str.len()
+            "Peer ID must be base58 format (ndl1...) or 40 hex characters, got: {}",
+            s
         )));
     }
 
@@ -155,10 +204,22 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_peer_id_with_prefix() {
+    fn test_parse_peer_id_with_ndl_prefix() {
         let hex = "ndl0102030405060708090a0b0c0d0e0f1011121314";
         let result = parse_peer_id(hex);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_peer_id_base58() {
+        // Generate a valid base58 peer ID
+        let (_, public_key) = nodalync_crypto::generate_identity();
+        let peer_id = nodalync_crypto::peer_id_from_public_key(&public_key);
+        let base58 = nodalync_crypto::peer_id_to_string(&peer_id);
+
+        let result = parse_peer_id(&base58);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().0, peer_id.0);
     }
 
     #[test]

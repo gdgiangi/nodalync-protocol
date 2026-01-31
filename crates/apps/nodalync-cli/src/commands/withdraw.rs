@@ -17,8 +17,16 @@ pub async fn withdraw(
     // Initialize context with network
     let ctx = NodeContext::with_network(config).await?;
 
+    // Get settlement (requires Hedera configuration)
+    let settlement = ctx.settlement.as_ref().ok_or_else(|| {
+        CliError::config(
+            "Hedera settlement not configured. Set HEDERA_ACCOUNT_ID, HEDERA_PRIVATE_KEY, \
+             and HEDERA_CONTRACT_ID environment variables.",
+        )
+    })?;
+
     // Check balance first
-    let current_balance = ctx.settlement.get_balance().await?;
+    let current_balance = settlement.get_balance().await?;
     if amount > current_balance {
         return Err(CliError::InsufficientBalance {
             required: amount,
@@ -27,10 +35,10 @@ pub async fn withdraw(
     }
 
     // Perform withdrawal
-    let tx_id = ctx.settlement.withdraw(amount).await?;
+    let tx_id = settlement.withdraw(amount).await?;
 
     // Get new balance
-    let new_balance = ctx.settlement.get_balance().await?;
+    let new_balance = settlement.get_balance().await?;
 
     let output = TransactionOutput {
         operation: "Withdraw".to_string(),

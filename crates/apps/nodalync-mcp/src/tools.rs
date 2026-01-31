@@ -1,6 +1,11 @@
 //! MCP tool input/output types.
 //!
 //! Defines the request and response types for MCP tools.
+//!
+//! The MCP server abstracts payment complexity from AI agents:
+//! - Agents simply search for content and query by hash
+//! - Channel opening, deposits, and settlements happen automatically
+//! - Transaction confirmations are returned in responses
 
 use nodalync_types::Hash;
 use rmcp::schemars;
@@ -13,7 +18,10 @@ use serde::{Deserialize, Serialize};
 
 /// Input for the `query_knowledge` tool.
 ///
-/// Queries content from the Nodalync network and pays automatically.
+/// Queries content from the Nodalync network. Payment is handled automatically:
+/// - Opens payment channels when needed
+/// - Auto-deposits if settlement balance is insufficient
+/// - Returns transaction confirmations in the response
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct QueryKnowledgeInput {
     /// The query string (natural language or content hash).
@@ -31,7 +39,7 @@ pub struct QueryKnowledgeOutput {
     /// The retrieved content.
     pub content: String,
 
-    /// Content hash.
+    /// Content hash (base58 encoded).
     pub hash: String,
 
     /// Source hashes (L0 content this derives from).
@@ -46,13 +54,45 @@ pub struct QueryKnowledgeOutput {
     /// Remaining session budget in HBAR.
     pub remaining_budget_hbar: f64,
 
-    /// Whether a new payment channel was opened for this query.
+    /// Payment and settlement transaction details.
+    /// Contains all Hedera transactions triggered by this query.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_opened: Option<bool>,
+    pub payment: Option<PaymentDetails>,
+}
+
+/// Details about payment transactions for a query.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct PaymentDetails {
+    /// Whether a new payment channel was opened.
+    pub channel_opened: bool,
+
+    /// Channel ID if a channel was opened or used (base58 encoded).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+
+    /// Hedera transaction ID for channel opening (if channel was opened on-chain).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_tx_id: Option<String>,
+
+    /// Hedera transaction ID for auto-deposit (if deposit was needed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deposit_tx_id: Option<String>,
+
+    /// Amount auto-deposited in HBAR (if deposit was needed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deposit_amount_hbar: Option<f64>,
 
     /// Peer ID of the content provider.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_peer_id: Option<String>,
+
+    /// Payment receipt ID from the content server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payment_receipt_id: Option<String>,
+
+    /// Current Hedera account balance after this query (HBAR).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hedera_balance_hbar: Option<f64>,
 }
 
 // ============================================================================
@@ -113,32 +153,49 @@ pub struct ListSourcesOutput {
 }
 
 // ============================================================================
-// health_status Tool
+// status Tool (unified status)
 // ============================================================================
 
-/// Output from the `health_status` tool.
+/// Output from the unified `status` tool.
+/// Combines health, budget, channel, and Hedera status in one response.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
-pub struct HealthStatusOutput {
+pub struct StatusOutput {
+    // === Network Status ===
     /// Number of connected peers.
     pub connected_peers: u32,
-
     /// Whether the node has bootstrapped to the network.
     pub is_bootstrapped: bool,
-
-    /// Remaining budget for this session in HBAR.
-    pub budget_remaining_hbar: f64,
-
-    /// Total session budget in HBAR.
-    pub budget_total_hbar: f64,
-
-    /// Amount spent in this session in HBAR.
-    pub budget_spent_hbar: f64,
-
+    /// Node's Nodalync peer ID.
+    pub peer_id: String,
     /// Total content items available locally.
     pub local_content_count: u32,
 
-    /// Node peer ID.
-    pub peer_id: String,
+    // === Budget Status ===
+    /// Remaining budget for this session in HBAR.
+    pub budget_remaining_hbar: f64,
+    /// Total session budget in HBAR.
+    pub budget_total_hbar: f64,
+    /// Amount spent in this session in HBAR.
+    pub budget_spent_hbar: f64,
+
+    // === Channel Status ===
+    /// Number of open payment channels.
+    pub open_channels: u32,
+    /// Total balance locked in channels (HBAR).
+    pub channel_balance_hbar: f64,
+
+    // === Hedera Status ===
+    /// Whether Hedera settlement is configured.
+    pub hedera_configured: bool,
+    /// Hedera account ID (if configured).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hedera_account_id: Option<String>,
+    /// Hedera network (testnet/mainnet).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hedera_network: Option<String>,
+    /// On-chain Hedera balance in HBAR (if configured).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hedera_balance_hbar: Option<f64>,
 }
 
 // ============================================================================
@@ -210,19 +267,6 @@ pub struct SearchResultInfo {
 // Hedera Settlement Tools
 // ============================================================================
 
-/// Output from the `get_hedera_balance` tool.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-pub struct GetHederaBalanceOutput {
-    /// Balance in tinybars.
-    pub balance_tinybars: u64,
-    /// Balance in HBAR (8 decimal places).
-    pub balance_hbar: f64,
-    /// Account ID.
-    pub account_id: String,
-    /// Network (testnet, mainnet, previewnet).
-    pub network: String,
-}
-
 /// Input for the `deposit_hbar` tool.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct DepositHbarInput {
@@ -272,17 +316,36 @@ pub struct OpenChannelOutput {
     pub peer_id: String,
 }
 
-/// Output from the `get_channel_status` tool.
+/// Input for the `close_channel` tool.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct CloseChannelInput {
+    /// Peer ID of the channel to close.
+    /// Must be a Nodalync peer ID (starts with "ndl", 20 bytes base58).
+    pub peer_id: String,
+}
+
+/// Output from the `close_channel` tool.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
-pub struct GetChannelStatusOutput {
-    /// Whether Hedera settlement is configured.
-    pub hedera_configured: bool,
-    /// Number of open channels.
-    pub open_channels: u32,
-    /// Total balance across all channels (tinybars).
-    pub total_balance_tinybars: u64,
-    /// Pending settlement amount (tinybars).
-    pub pending_settlement_tinybars: u64,
+pub struct CloseChannelOutput {
+    /// Whether the channel was successfully closed.
+    pub success: bool,
+    /// Hedera transaction ID for settlement (if on-chain settlement occurred).
+    pub transaction_id: Option<String>,
+    /// Final balance returned to you (tinybars).
+    pub final_balance_tinybars: u64,
+    /// Peer ID of the closed channel.
+    pub peer_id: String,
+    /// Updated Hedera balance after settlement (HBAR).
+    pub hedera_balance_hbar: Option<f64>,
+}
+
+/// Output from the `reset_channels` tool.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ResetChannelsOutput {
+    /// Number of channels that were cleared.
+    pub channels_cleared: u32,
+    /// Message describing what was reset.
+    pub message: String,
 }
 
 // ============================================================================

@@ -17,11 +17,19 @@ pub async fn deposit(
     // Initialize context with network
     let ctx = NodeContext::with_network(config).await?;
 
+    // Get settlement (requires Hedera configuration)
+    let settlement = ctx.settlement.as_ref().ok_or_else(|| {
+        crate::error::CliError::config(
+            "Hedera settlement not configured. Set HEDERA_ACCOUNT_ID, HEDERA_PRIVATE_KEY, \
+             and HEDERA_CONTRACT_ID environment variables.",
+        )
+    })?;
+
     // Perform deposit
-    let tx_id = ctx.settlement.deposit(amount).await?;
+    let tx_id = settlement.deposit(amount).await?;
 
     // Get new balance
-    let new_balance = ctx.settlement.get_balance().await?;
+    let new_balance = settlement.get_balance().await?;
 
     let output = TransactionOutput {
         operation: "Deposit".to_string(),

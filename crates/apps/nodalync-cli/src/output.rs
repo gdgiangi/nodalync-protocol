@@ -908,11 +908,14 @@ pub struct ChannelOutput {
     pub my_balance: u64,
     pub their_balance: u64,
     pub operation: String,
+    /// On-chain transaction ID (if settlement was performed)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transaction_id: Option<String>,
 }
 
 impl Render for ChannelOutput {
     fn render_human(&self) -> String {
-        format!(
+        let mut output = format!(
             "{} {}\n{} {}\n{} {}\n{} {}\n{} {}",
             format!("Channel {}:", self.operation).green().bold(),
             short_hash(&self.channel_id),
@@ -924,7 +927,13 @@ impl Render for ChannelOutput {
             format_ndl(self.my_balance),
             "Their Balance:".bold(),
             format_ndl(self.their_balance)
-        )
+        );
+
+        if let Some(ref tx_id) = self.transaction_id {
+            output.push_str(&format!("\n{} {}", "Transaction:".bold(), tx_id));
+        }
+
+        output
     }
 
     fn render_json(&self) -> String {

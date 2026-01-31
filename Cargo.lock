@@ -3200,11 +3200,11 @@ dependencies = [
 
 [[package]]
 name = "nodalync"
-version = "0.8.0"
+version = "0.9.0"
 
 [[package]]
 name = "nodalync-cli"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "ciborium",
  "clap",
@@ -3242,7 +3242,7 @@ dependencies = [
 
 [[package]]
 name = "nodalync-crypto"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bs58",
  "ed25519-dalek",
@@ -3255,7 +3255,7 @@ dependencies = [
 
 [[package]]
 name = "nodalync-econ"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "nodalync-crypto",
  "nodalync-types",
@@ -3266,7 +3266,7 @@ dependencies = [
 
 [[package]]
 name = "nodalync-mcp"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "bs58",
  "directories",
@@ -3288,7 +3288,7 @@ dependencies = [
 
 [[package]]
 name = "nodalync-net"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -3309,7 +3309,7 @@ dependencies = [
 
 [[package]]
 name = "nodalync-ops"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "nodalync-crypto",
@@ -3330,7 +3330,7 @@ dependencies = [
 
 [[package]]
 name = "nodalync-settle"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "hedera",
@@ -3348,7 +3348,7 @@ dependencies = [
 
 [[package]]
 name = "nodalync-store"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -3367,7 +3367,7 @@ dependencies = [
 
 [[package]]
 name = "nodalync-types"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "nodalync-crypto",
  "serde",
@@ -3377,7 +3377,7 @@ dependencies = [
 
 [[package]]
 name = "nodalync-valid"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "nodalync-crypto",
  "nodalync-types",
@@ -3388,7 +3388,7 @@ dependencies = [
 
 [[package]]
 name = "nodalync-wire"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "ciborium",
  "nodalync-crypto",

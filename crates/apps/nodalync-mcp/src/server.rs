@@ -17,16 +17,16 @@ use tracing::{debug, info, warn};
 use nodalync_crypto::{peer_id_from_public_key, PeerId as NodalyncPeerId, UNKNOWN_PEER_ID};
 use nodalync_net::{Multiaddr, Network, NetworkConfig, NetworkNode, PeerId as LibP2pPeerId};
 use nodalync_ops::DefaultNodeOperations;
-use nodalync_store::{ManifestFilter, ManifestStore, NodeState, NodeStateConfig};
+use nodalync_store::{ChannelStore, ManifestFilter, ManifestStore, NodeState, NodeStateConfig};
 use nodalync_types::{ContentType, Visibility};
 
 use crate::budget::{hbar_to_tinybars, tinybars_to_hbar, BudgetTracker};
 use crate::error::McpError as NodalyncMcpError;
 use crate::tools::{
-    hash_to_string, string_to_hash, DepositHbarInput, DepositHbarOutput, GetChannelStatusOutput,
-    GetHederaBalanceOutput, HealthStatusOutput, ListSourcesInput, ListSourcesOutput,
-    OpenChannelInput, OpenChannelOutput, QueryKnowledgeInput, QueryKnowledgeOutput,
-    SearchNetworkInput, SearchNetworkOutput, SearchResultInfo, SourceInfo,
+    hash_to_string, string_to_hash, CloseChannelInput, DepositHbarInput, DepositHbarOutput,
+    ListSourcesInput, ListSourcesOutput, OpenChannelInput, OpenChannelOutput, PaymentDetails,
+    QueryKnowledgeInput, QueryKnowledgeOutput, SearchNetworkInput, SearchNetworkOutput,
+    SearchResultInfo, SourceInfo, StatusOutput,
 };
 
 /// Create a standardized error response for MCP tools.
@@ -313,11 +313,12 @@ impl NodalyncMcpServer {
 
     /// Query knowledge from the Nodalync network.
     ///
-    /// Retrieves content matching the query, pays the content owner,
-    /// and returns the content with provenance information.
-    /// Automatically opens payment channels when needed for paid content.
+    /// Retrieves content matching the query. Payment is fully automated:
+    /// - Auto-deposits HBAR if settlement balance is insufficient
+    /// - Auto-opens payment channels when needed
+    /// - Returns all transaction confirmations in the response
     #[tool(
-        description = "Query knowledge from the Nodalync network. Returns content with provenance and automatically handles payment. Automatically opens payment channels for paid content. Query must be a base58-encoded content hash (use list_sources to discover hashes)."
+        description = "Query knowledge from the Nodalync network. Returns content with provenance and full transaction details. Payment is fully automated - channels are opened and deposits are made as needed. Query by content hash (use search_network to find content first)."
     )]
     async fn query_knowledge(
         &self,
@@ -325,12 +326,24 @@ impl NodalyncMcpServer {
     ) -> Result<CallToolResult, McpError> {
         debug!(query = %input.query, "Processing query_knowledge request");
 
-        // Parse query as hash (natural language search not yet supported)
+        // Parse query as hash
         let hash = match string_to_hash(&input.query) {
             Ok(h) => h,
             Err(e) => {
                 return Ok(tool_error(&NodalyncMcpError::InvalidHash(e)));
             }
+        };
+
+        // Track all payment operations for the response
+        let mut payment_details = PaymentDetails {
+            channel_opened: false,
+            channel_id: None,
+            channel_tx_id: None,
+            deposit_tx_id: None,
+            deposit_amount_hbar: None,
+            provider_peer_id: None,
+            payment_receipt_id: None,
+            hedera_balance_hbar: None,
         };
 
         // Get preview to check price and find provider
@@ -358,129 +371,126 @@ impl NodalyncMcpServer {
             }));
         }
 
-        // Check if auto-approve or needs confirmation
-        let auto_approved = self.budget.can_auto_approve(price);
-        if !auto_approved && !self.budget.can_afford(price) {
+        // Check session budget
+        if !self.budget.can_afford(price) {
             return Ok(tool_error(&NodalyncMcpError::BudgetExceeded {
                 cost: price,
                 remaining: self.budget.remaining(),
             }));
         }
 
-        // For paid content, ensure we have a payment channel with the provider
-        let mut channel_opened = false;
-        let mut provider_peer_id: Option<String> = None;
-
-        // Debug: log preview details
-        info!(
-            hash = %hash_to_string(&hash),
-            price = price,
-            provider_peer_id = ?preview.provider_peer_id,
-            manifest_owner = %peer_id_to_string(&preview.manifest.owner),
-            "Query knowledge: preview details"
-        );
-
+        // === AUTO-DEPOSIT IF NEEDED ===
+        // For paid content, ensure we have enough in settlement contract
         if price > 0 {
-            // Determine which peer to open a channel with:
-            // 1. If we have provider_peer_id from announcement (libp2p format), use that directly
-            // 2. Otherwise fall back to manifest.owner (Nodalync format)
-            if let Some(ref libp2p_peer_str) = preview.provider_peer_id {
-                // Content discovered via announcement - use the provider's libp2p peer ID directly
-                if let Ok(libp2p_peer) = libp2p_peer_str.parse::<LibP2pPeerId>() {
-                    // Check if we already have an open channel with this provider
-                    // We need to check by trying to find via network mapping
-                    let existing_nodalync_id = if let Some(ref network) = self.network {
-                        network.nodalync_peer_id(&libp2p_peer)
-                    } else {
-                        None
-                    };
-
-                    let has_channel = existing_nodalync_id
-                        .map(|id| ops.has_open_channel(&id).unwrap_or(false))
-                        .unwrap_or(false);
-
-                    if has_channel {
-                        provider_peer_id = existing_nodalync_id.map(|p| peer_id_to_string(&p));
-                    } else {
-                        // Auto-open a payment channel with default deposit (1 HBAR)
-                        let default_deposit = hbar_to_tinybars(1.0);
+            if let Some(ref settlement) = self.settlement {
+                // Check current balance
+                if let Ok(balance) = settlement.get_balance().await {
+                    // Minimum deposit: max of (price * 10, 1 HBAR) to avoid frequent deposits
+                    let min_required = (price * 10).max(hbar_to_tinybars(1.0));
+                    if balance < min_required {
+                        let deposit_amount = hbar_to_tinybars(10.0); // Deposit 10 HBAR
                         info!(
-                            provider_libp2p = %libp2p_peer,
-                            deposit_hbar = 1.0,
-                            "Auto-opening payment channel via libp2p peer ID"
+                            current_balance_hbar = tinybars_to_hbar(balance),
+                            deposit_hbar = 10.0,
+                            "Auto-depositing HBAR for payment operations"
                         );
 
-                        // Use the new method that takes libp2p peer ID directly
-                        match ops
-                            .open_payment_channel_to_libp2p(libp2p_peer, default_deposit)
-                            .await
-                        {
-                            Ok((channel, remote_nodalync_id)) => {
-                                info!(
-                                    channel_id = %hash_to_string(&channel.channel_id),
-                                    provider = %peer_id_to_string(&remote_nodalync_id),
-                                    "Payment channel opened successfully"
-                                );
-                                channel_opened = true;
-                                provider_peer_id = Some(peer_id_to_string(&remote_nodalync_id));
+                        match settlement.deposit(deposit_amount).await {
+                            Ok(tx_id) => {
+                                info!(tx_id = %tx_id, "Auto-deposit successful");
+                                payment_details.deposit_tx_id = Some(tx_id.to_string());
+                                payment_details.deposit_amount_hbar = Some(10.0);
                             }
                             Err(e) => {
-                                warn!(
-                                    provider_libp2p = %libp2p_peer,
-                                    error = %e,
-                                    "Failed to open payment channel, continuing anyway"
-                                );
+                                warn!(error = %e, "Auto-deposit failed, continuing anyway");
                             }
                         }
                     }
-                } else {
-                    warn!(
-                        provider_str = %libp2p_peer_str,
-                        "Invalid libp2p peer ID format in announcement"
-                    );
                 }
-            } else if preview.manifest.owner != UNKNOWN_PEER_ID {
-                // Local content with known owner - use the old method
-                let peer = preview.manifest.owner;
-                provider_peer_id = Some(peer_id_to_string(&peer));
-
-                let has_channel = ops.has_open_channel(&peer).unwrap_or(false);
-
-                if !has_channel {
-                    let default_deposit = hbar_to_tinybars(1.0);
-                    info!(
-                        provider = %peer_id_to_string(&peer),
-                        deposit_hbar = 1.0,
-                        "Auto-opening payment channel for paid content"
-                    );
-
-                    match ops.open_payment_channel(&peer, default_deposit).await {
-                        Ok(channel) => {
-                            info!(
-                                channel_id = %hash_to_string(&channel.channel_id),
-                                provider = %peer_id_to_string(&peer),
-                                "Payment channel opened successfully"
-                            );
-                            channel_opened = true;
-
-                            // Give the channel a moment to be accepted by the remote peer
-                            tokio::time::sleep(Duration::from_millis(500)).await;
-                        }
-                        Err(e) => {
-                            warn!(
-                                provider = %peer_id_to_string(&peer),
-                                error = %e,
-                                "Failed to open payment channel, continuing anyway"
-                            );
-                        }
-                    }
-                }
-            } else {
-                warn!("No provider peer ID available for paid content - channel cannot be opened");
             }
         }
 
-        // Reserve budget BEFORE executing query (atomic spend returns None if insufficient)
+        // === AUTO-OPEN PAYMENT CHANNEL IF NEEDED ===
+        if price > 0 {
+            let libp2p_peer_opt = preview
+                .provider_peer_id
+                .as_ref()
+                .and_then(|s| s.parse::<LibP2pPeerId>().ok());
+
+            if let Some(libp2p_peer) = libp2p_peer_opt {
+                // Check if we have an existing channel
+                let existing_nodalync_id = self
+                    .network
+                    .as_ref()
+                    .and_then(|n| n.nodalync_peer_id(&libp2p_peer));
+
+                let has_channel = existing_nodalync_id
+                    .map(|id| ops.has_open_channel(&id).unwrap_or(false))
+                    .unwrap_or(false);
+
+                if !has_channel {
+                    // Open channel with on-chain funding
+                    let channel_deposit = hbar_to_tinybars(1.0);
+                    info!(
+                        provider_libp2p = %libp2p_peer,
+                        deposit_hbar = 1.0,
+                        "Auto-opening payment channel"
+                    );
+
+                    match ops
+                        .open_payment_channel_to_libp2p(libp2p_peer, channel_deposit)
+                        .await
+                    {
+                        Ok((channel, remote_nodalync_id)) => {
+                            info!(
+                                channel_id = %hash_to_string(&channel.channel_id),
+                                provider = %peer_id_to_string(&remote_nodalync_id),
+                                "Payment channel opened successfully"
+                            );
+                            payment_details.channel_opened = true;
+                            payment_details.channel_id = Some(hash_to_string(&channel.channel_id));
+                            payment_details.provider_peer_id =
+                                Some(peer_id_to_string(&remote_nodalync_id));
+
+                            // Get on-chain tx ID if available
+                            if let Some(tx_id) = channel.funding_tx_id {
+                                payment_details.channel_tx_id = Some(tx_id);
+                            }
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Failed to open payment channel");
+                        }
+                    }
+                } else {
+                    payment_details.provider_peer_id =
+                        existing_nodalync_id.map(|p| peer_id_to_string(&p));
+                }
+            } else if preview.manifest.owner != UNKNOWN_PEER_ID {
+                // Fallback to Nodalync peer ID
+                let peer = preview.manifest.owner;
+                payment_details.provider_peer_id = Some(peer_id_to_string(&peer));
+
+                if !ops.has_open_channel(&peer).unwrap_or(false) {
+                    let channel_deposit = hbar_to_tinybars(1.0);
+
+                    match ops.open_payment_channel(&peer, channel_deposit).await {
+                        Ok(channel) => {
+                            payment_details.channel_opened = true;
+                            payment_details.channel_id = Some(hash_to_string(&channel.channel_id));
+                            if let Some(tx_id) = channel.funding_tx_id {
+                                payment_details.channel_tx_id = Some(tx_id);
+                            }
+                            tokio::time::sleep(Duration::from_millis(500)).await;
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Failed to open payment channel");
+                        }
+                    }
+                }
+            }
+        }
+
+        // === RESERVE BUDGET AND EXECUTE QUERY ===
         if price > 0 && self.budget.spend(price).is_none() {
             return Ok(tool_error(&NodalyncMcpError::BudgetExceeded {
                 cost: price,
@@ -488,65 +498,46 @@ impl NodalyncMcpServer {
             }));
         }
 
-        // Execute query (budget already reserved)
-        // If server returns ChannelRequiredWithPeerInfo, open channel and retry
+        // Execute query with automatic retry on channel requirement
         let response = match ops.query_content(&hash, price, None).await {
             Ok(r) => r,
             Err(nodalync_ops::OpsError::ChannelRequiredWithPeerInfo {
                 nodalync_peer_id,
                 libp2p_peer_id,
             }) => {
-                info!(
-                    nodalync_peer_id = ?nodalync_peer_id,
-                    libp2p_peer_id = ?libp2p_peer_id,
-                    "Server requires payment channel - auto-opening"
-                );
+                info!("Server requires payment channel - auto-opening and retrying");
+                let channel_deposit = hbar_to_tinybars(1.0);
 
-                // Try to open channel using the provided peer info
-                let default_deposit = hbar_to_tinybars(1.0);
-
-                // Prefer libp2p peer ID for direct connection
+                // Try libp2p peer ID first
                 if let Some(ref libp2p_str) = libp2p_peer_id {
                     if let Ok(libp2p_peer) = libp2p_str.parse::<LibP2pPeerId>() {
-                        match ops
-                            .open_payment_channel_to_libp2p(libp2p_peer, default_deposit)
+                        if let Ok((channel, remote_id)) = ops
+                            .open_payment_channel_to_libp2p(libp2p_peer, channel_deposit)
                             .await
                         {
-                            Ok((channel, remote_id)) => {
-                                info!(
-                                    channel_id = %hash_to_string(&channel.channel_id),
-                                    provider = %peer_id_to_string(&remote_id),
-                                    "Payment channel opened via libp2p peer ID - retrying query"
-                                );
-                                channel_opened = true;
-                                provider_peer_id = Some(peer_id_to_string(&remote_id));
-                            }
-                            Err(e) => {
-                                warn!(error = %e, "Failed to open channel via libp2p");
+                            payment_details.channel_opened = true;
+                            payment_details.channel_id = Some(hash_to_string(&channel.channel_id));
+                            payment_details.provider_peer_id = Some(peer_id_to_string(&remote_id));
+                            if let Some(tx_id) = channel.funding_tx_id {
+                                payment_details.channel_tx_id = Some(tx_id);
                             }
                         }
                     }
                 } else if let Some(ref nodalync_id) = nodalync_peer_id {
-                    // Fallback to Nodalync peer ID
-                    match ops.open_payment_channel(nodalync_id, default_deposit).await {
-                        Ok(channel) => {
-                            info!(
-                                channel_id = %hash_to_string(&channel.channel_id),
-                                provider = %peer_id_to_string(nodalync_id),
-                                "Payment channel opened via Nodalync peer ID - retrying query"
-                            );
-                            channel_opened = true;
-                            provider_peer_id = Some(peer_id_to_string(nodalync_id));
-                            // Give channel time to be accepted
-                            tokio::time::sleep(Duration::from_millis(500)).await;
+                    if let Ok(channel) =
+                        ops.open_payment_channel(nodalync_id, channel_deposit).await
+                    {
+                        payment_details.channel_opened = true;
+                        payment_details.channel_id = Some(hash_to_string(&channel.channel_id));
+                        payment_details.provider_peer_id = Some(peer_id_to_string(nodalync_id));
+                        if let Some(tx_id) = channel.funding_tx_id {
+                            payment_details.channel_tx_id = Some(tx_id);
                         }
-                        Err(e) => {
-                            warn!(error = %e, "Failed to open channel via Nodalync peer ID");
-                        }
+                        tokio::time::sleep(Duration::from_millis(500)).await;
                     }
                 }
 
-                // Retry the query after opening channel
+                // Retry query
                 match ops.query_content(&hash, price, None).await {
                     Ok(r) => r,
                     Err(e) => {
@@ -558,7 +549,6 @@ impl NodalyncMcpServer {
                 }
             }
             Err(e) => {
-                // Refund budget on failure (best effort - log if this somehow fails)
                 if price > 0 {
                     self.budget.refund(price);
                 }
@@ -566,10 +556,18 @@ impl NodalyncMcpServer {
             }
         };
 
+        // Record payment receipt
+        payment_details.payment_receipt_id = Some(hash_to_string(&response.receipt.payment_id));
+
+        // Get updated Hedera balance
+        if let Some(ref settlement) = self.settlement {
+            if let Ok(balance) = settlement.get_balance().await {
+                payment_details.hedera_balance_hbar = Some(tinybars_to_hbar(balance));
+            }
+        }
+
         // Build output
         let content_str = String::from_utf8_lossy(&response.content).to_string();
-
-        // Sources are the root L0/L1 content this derives from
         let sources: Vec<String> = response
             .manifest
             .provenance
@@ -578,7 +576,6 @@ impl NodalyncMcpServer {
             .map(|e| hash_to_string(&e.hash))
             .collect();
 
-        // Provenance includes both root sources and direct parents
         let mut provenance: Vec<String> = sources.clone();
         for h in &response.manifest.provenance.derived_from {
             let hash_str = hash_to_string(h);
@@ -587,6 +584,13 @@ impl NodalyncMcpServer {
             }
         }
 
+        // Only include payment details if there was a cost
+        let payment = if price > 0 {
+            Some(payment_details)
+        } else {
+            None
+        };
+
         let output = QueryKnowledgeOutput {
             content: content_str,
             hash: hash_to_string(&response.manifest.hash),
@@ -594,15 +598,13 @@ impl NodalyncMcpServer {
             provenance,
             cost_hbar: price_hbar,
             remaining_budget_hbar: self.budget.remaining_hbar(),
-            channel_opened: if channel_opened { Some(true) } else { None },
-            provider_peer_id,
+            payment,
         };
 
         info!(
             hash = %hash_to_string(&hash),
             cost_hbar = price_hbar,
             remaining_hbar = self.budget.remaining_hbar(),
-            channel_opened = channel_opened,
             "Query completed successfully"
         );
 
@@ -762,9 +764,10 @@ impl NodalyncMcpServer {
 
     /// Search the Nodalync network for knowledge sources.
     ///
-    /// Queries local content, cached announcements, AND connected peers in real-time.
+    /// Step 1 of the knowledge query workflow: Find content by searching.
+    /// Step 2: Use query_knowledge with the hash from search results.
     #[tool(
-        description = "Search the Nodalync network for knowledge sources. Queries local content, cached announcements, AND connected peers in real-time. Returns results with source attribution ('local', 'cached', or 'peer'). Use this to discover content before querying. Requires --enable-network flag for live peer search."
+        description = "Search the Nodalync network for knowledge. Returns a list of available content with hashes, titles, prices, and previews. Use the 'hash' field from results to query content with query_knowledge. Supports filtering by content_type (L0=raw documents, L3=synthesized insights)."
     )]
     async fn search_network(
         &self,
@@ -848,101 +851,79 @@ impl NodalyncMcpServer {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
-    /// Get the current budget status.
+    /// Get comprehensive status of the Nodalync node.
+    ///
+    /// Returns network, budget, channel, and Hedera status in a single response.
+    /// This is the recommended way to check node status.
     #[tool(
-        description = "Get the current budget status for this session. Returns JSON with total, spent, remaining, and auto-approve threshold in HBAR."
+        description = "Get comprehensive status of the Nodalync node including network connectivity, session budget, payment channels, and Hedera balance. Use this as the primary status check."
     )]
-    async fn budget_status(&self) -> Result<CallToolResult, McpError> {
-        let status = self.budget.status_json();
-        let json = serde_json::to_string_pretty(&status)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    /// Get the health status of the Nodalync node.
-    #[tool(
-        description = "Get health status of the Nodalync node. Returns connection status, peer count, bootstrap status, budget info, and local content count. Use this for diagnostics."
-    )]
-    async fn health_status(&self) -> Result<CallToolResult, McpError> {
+    async fn status(&self) -> Result<CallToolResult, McpError> {
         let ops = self.ops.lock().await;
 
-        // Count local content
-        let filter = ManifestFilter::new();
-        let local_content_count = match ops.state.manifests.list(filter) {
-            Ok(manifests) => manifests.len() as u32,
-            Err(_) => 0,
-        };
-
-        // Get peer ID from ops
-        let peer_id = ops.peer_id().to_string();
-
-        // Get actual network status if network is enabled
+        // Network status
         let (connected_peers, is_bootstrapped) = if let Some(ref network) = self.network {
             let peers = network.connected_peers().len() as u32;
             (peers, peers > 0)
         } else {
             (0, false)
         };
+        let peer_id = ops.peer_id().to_string();
 
-        let output = HealthStatusOutput {
+        // Local content count
+        let filter = ManifestFilter::new();
+        let local_content_count = match ops.state.manifests.list(filter) {
+            Ok(manifests) => manifests.len() as u32,
+            Err(_) => 0,
+        };
+
+        // Channel status
+        let channels = ops.state.channels.list_open().unwrap_or_default();
+        let open_channels = channels.len() as u32;
+        let channel_balance_tinybars: u64 = channels
+            .iter()
+            .map(|(_, c)| c.my_balance + c.their_balance)
+            .sum();
+
+        // Hedera status
+        let (hedera_account_id, hedera_network, hedera_balance_hbar) =
+            if let (Some(config), Some(settlement)) = (&self.hedera_config, &self.settlement) {
+                let balance = settlement.get_balance().await.ok().map(tinybars_to_hbar);
+                (
+                    Some(config.account_id.clone()),
+                    Some(config.network.clone()),
+                    balance,
+                )
+            } else {
+                (None, None, None)
+            };
+
+        let output = StatusOutput {
+            // Network
             connected_peers,
             is_bootstrapped,
+            peer_id,
+            local_content_count,
+            // Budget
             budget_remaining_hbar: self.budget.remaining_hbar(),
             budget_total_hbar: self.budget.total_budget_hbar(),
             budget_spent_hbar: self.budget.spent_hbar(),
-            local_content_count,
-            peer_id,
+            // Channels
+            open_channels,
+            channel_balance_hbar: tinybars_to_hbar(channel_balance_tinybars),
+            // Hedera
+            hedera_configured: self.settlement.is_some(),
+            hedera_account_id,
+            hedera_network,
+            hedera_balance_hbar,
         };
 
         info!(
-            local_content = local_content_count,
             connected_peers = connected_peers,
-            is_bootstrapped = is_bootstrapped,
+            open_channels = open_channels,
             budget_remaining = output.budget_remaining_hbar,
-            "Health status requested"
-        );
-
-        let json = serde_json::to_string_pretty(&output)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    /// Get the Hedera account balance.
-    ///
-    /// Returns the current balance of the Hedera account used for settlement.
-    #[tool(
-        description = "Get Hedera account balance. Returns the current balance of the Hedera account configured for payment settlement. Requires Hedera to be configured."
-    )]
-    async fn get_hedera_balance(&self) -> Result<CallToolResult, McpError> {
-        let Some(settlement) = &self.settlement else {
-            return Ok(tool_error(&NodalyncMcpError::internal(
-                "Hedera settlement is not configured. Start the MCP server with --hedera-account-id and --hedera-private-key options.",
-            )));
-        };
-
-        let Some(config) = &self.hedera_config else {
-            return Ok(tool_error(&NodalyncMcpError::internal(
-                "Hedera configuration not found.",
-            )));
-        };
-
-        let balance = settlement
-            .get_balance()
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        let output = GetHederaBalanceOutput {
-            balance_tinybars: balance,
-            balance_hbar: tinybars_to_hbar(balance),
-            account_id: config.account_id.clone(),
-            network: config.network.clone(),
-        };
-
-        info!(
-            balance_hbar = output.balance_hbar,
-            account_id = %output.account_id,
-            "Hedera balance requested"
+            hedera_balance = ?output.hedera_balance_hbar,
+            "Status requested"
         );
 
         let json = serde_json::to_string_pretty(&output)
@@ -1066,10 +1047,18 @@ impl NodalyncMcpServer {
                     return Ok(CallToolResult::success(vec![Content::text(json)]));
                 }
                 Err(e) => {
+                    let error_str = e.to_string();
                     warn!(error = %e, "Failed to open channel via libp2p");
-                    return Ok(tool_error(&NodalyncMcpError::Internal(
+
+                    // Provide helpful recovery suggestions
+                    let message = if error_str.contains("already exists") {
+                        "Channel already exists with this peer. This can happen when local and remote state are out of sync. \
+                         Try using `reset_channels` to clear local state, then query content again - channels will re-open automatically.".to_string()
+                    } else {
                         format!("Failed to open channel: {}. Check that the peer is connected and reachable.", e)
-                    )));
+                    };
+
+                    return Ok(tool_error(&NodalyncMcpError::Internal(message)));
                 }
             }
         }
@@ -1130,27 +1119,131 @@ impl NodalyncMcpServer {
         }
     }
 
-    /// Get the current channel and settlement status.
+    /// Close a payment channel and settle on-chain.
+    ///
+    /// Closes an open payment channel with a peer, settling the final balance
+    /// on Hedera. Any remaining funds are returned to your account.
     #[tool(
-        description = "Get the status of payment channels and settlement. Returns whether Hedera is configured, number of open channels, and pending settlement amounts."
+        description = "Close a payment channel and settle the final balance on Hedera. Closes the channel with the specified peer and returns any remaining funds. Use status to see open channels first."
     )]
-    async fn get_channel_status(&self) -> Result<CallToolResult, McpError> {
-        let ops = self.ops.lock().await;
+    async fn close_channel(
+        &self,
+        Parameters(input): Parameters<CloseChannelInput>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::tools::CloseChannelOutput;
 
-        let pending_settlement = ops.get_pending_settlement_total().unwrap_or(0);
-
-        let output = GetChannelStatusOutput {
-            hedera_configured: self.settlement.is_some(),
-            open_channels: 0,          // TODO: Add channel listing to ops
-            total_balance_tinybars: 0, // TODO: Add balance aggregation
-            pending_settlement_tinybars: pending_settlement,
+        // Parse the Nodalync peer ID
+        let peer_bytes = match bs58::decode(&input.peer_id).into_vec() {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                return Ok(tool_error(&NodalyncMcpError::InvalidHash(
+                    "Invalid peer ID format. Use the peer_id from status or a previous open_channel response.".to_string()
+                )));
+            }
         };
 
+        if peer_bytes.len() != 20 {
+            return Ok(tool_error(&NodalyncMcpError::InvalidHash(
+                format!("Invalid peer ID. Expected Nodalync peer ID (20 bytes base58, starts with 'ndl'). Got {} bytes.", peer_bytes.len())
+            )));
+        }
+
+        let mut peer_arr = [0u8; 20];
+        peer_arr.copy_from_slice(&peer_bytes);
+        let peer_id = nodalync_crypto::PeerId(peer_arr);
+
+        let mut ops = self.ops.lock().await;
+
+        // Get channel info before closing
+        let channel_info =
+            ops.state.channels.get(&peer_id).map_err(|e| {
+                McpError::internal_error(format!("Failed to get channel: {}", e), None)
+            })?;
+
+        let final_balance = channel_info.as_ref().map(|c| c.my_balance).unwrap_or(0);
+
         info!(
-            hedera_configured = output.hedera_configured,
-            pending_settlement_hbar = tinybars_to_hbar(pending_settlement),
-            "Channel status requested"
+            peer_id = %peer_id_to_string(&peer_id),
+            balance_tinybars = final_balance,
+            "Closing payment channel"
         );
+
+        match ops.close_payment_channel(&peer_id).await {
+            Ok(tx_id_opt) => {
+                // Get updated Hedera balance after settlement
+                let hedera_balance = if let Some(ref settlement) = self.settlement {
+                    settlement.get_balance().await.ok().map(tinybars_to_hbar)
+                } else {
+                    None
+                };
+
+                let output = CloseChannelOutput {
+                    success: true,
+                    transaction_id: tx_id_opt,
+                    final_balance_tinybars: final_balance,
+                    peer_id: input.peer_id.clone(),
+                    hedera_balance_hbar: hedera_balance,
+                };
+
+                info!(
+                    peer_id = %input.peer_id,
+                    tx_id = ?output.transaction_id,
+                    final_balance_tinybars = final_balance,
+                    hedera_balance_hbar = ?hedera_balance,
+                    "Channel closed successfully"
+                );
+
+                let json = serde_json::to_string_pretty(&output)
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+                Ok(CallToolResult::success(vec![Content::text(json)]))
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to close channel");
+                Ok(tool_error(&NodalyncMcpError::Internal(format!(
+                    "Failed to close channel: {}. Make sure the channel exists and is open.",
+                    e
+                ))))
+            }
+        }
+    }
+
+    /// Reset all payment channels to recover from inconsistent states.
+    ///
+    /// Use this when you encounter "channel already exists" errors or other
+    /// channel-related issues. This clears local channel state without
+    /// affecting on-chain balances.
+    #[tool(
+        description = "Reset all local payment channel state. Use this to recover from 'channel already exists' errors or other channel synchronization issues. This clears local channel records but does not affect your on-chain Hedera balance. After reset, channels will be re-opened automatically when needed."
+    )]
+    async fn reset_channels(&self) -> Result<CallToolResult, McpError> {
+        use crate::tools::ResetChannelsOutput;
+
+        let mut ops = self.ops.lock().await;
+
+        // Count existing channels before clearing
+        let channels = ops.state.channels.list_open().unwrap_or_default();
+        let count = channels.len() as u32;
+
+        // Clear all channels
+        if let Err(e) = ops.state.channels.clear_all() {
+            warn!(error = %e, "Failed to clear channels");
+            return Ok(tool_error(&NodalyncMcpError::Internal(format!(
+                "Failed to reset channels: {}",
+                e
+            ))));
+        }
+
+        info!(channels_cleared = count, "Payment channels reset");
+
+        let output = ResetChannelsOutput {
+            channels_cleared: count,
+            message: if count > 0 {
+                format!("Cleared {} channel(s). Channels will be re-opened automatically when you query content.", count)
+            } else {
+                "No local channels to clear. If you're seeing 'channel already exists' errors, the remote peer may have stale state - try querying content again and channels will sync.".to_string()
+            },
+        };
 
         let json = serde_json::to_string_pretty(&output)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -1450,14 +1543,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_budget_status() {
+    async fn test_status() {
         let temp_dir = TempDir::new().unwrap();
         let config = test_config(&temp_dir);
 
         let server = NodalyncMcpServer::new(config).await.unwrap();
-        let result = server.budget_status().await.unwrap();
+        let result = server.status().await.unwrap();
 
-        // Should return success with budget info
+        // Should return success with status info
         assert!(!result.is_error.unwrap_or(false));
     }
 
@@ -1497,12 +1590,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_health_status_without_network() {
+    async fn test_status_without_network() {
         let temp_dir = TempDir::new().unwrap();
         let config = test_config(&temp_dir);
 
         let server = NodalyncMcpServer::new(config).await.unwrap();
-        let result = server.health_status().await.unwrap();
+        let result = server.status().await.unwrap();
 
         // Should return success
         assert!(!result.is_error.unwrap_or(false));

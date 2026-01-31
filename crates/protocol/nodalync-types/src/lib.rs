@@ -48,6 +48,9 @@
 //! - Use `#[repr(u8)]` or `#[repr(u16)]` for enums with defined wire values
 //! - Use `#[non_exhaustive]` for enums to allow future extension
 
+/// Protocol version (from Cargo.toml).
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub mod channel;
 pub mod constants;
 pub mod content;

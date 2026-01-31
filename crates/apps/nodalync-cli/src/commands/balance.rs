@@ -9,11 +9,21 @@ use crate::output::{BalanceOutput, OutputFormat, Render};
 
 /// Execute the balance command.
 pub async fn balance(config: CliConfig, format: OutputFormat) -> CliResult<String> {
+    use crate::error::CliError;
+
     // Initialize context with network (for settlement)
     let ctx = NodeContext::with_network(config).await?;
 
+    // Get settlement (requires Hedera configuration)
+    let settlement = ctx.settlement.as_ref().ok_or_else(|| {
+        CliError::config(
+            "Hedera settlement not configured. Set HEDERA_ACCOUNT_ID, HEDERA_PRIVATE_KEY, \
+             and HEDERA_CONTRACT_ID environment variables.",
+        )
+    })?;
+
     // Get protocol balance from settlement
-    let protocol_balance = ctx.settlement.get_balance().await?;
+    let protocol_balance = settlement.get_balance().await?;
 
     // Get pending earnings from settlement queue
     let pending_earnings = ctx.ops.state.settlement.get_pending_total()?;

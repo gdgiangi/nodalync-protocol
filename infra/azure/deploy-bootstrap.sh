@@ -292,14 +292,15 @@ deploy_container() {
     # Build environment variables
     local env_vars="RUST_LOG=nodalync=info NODALYNC_PASSWORD=$NODALYNC_PASSWORD"
 
-    if [[ -n "$HEDERA_ACCOUNT_ID" ]]; then
+    # Enable Hedera testnet settlement if credentials are provided
+    if [[ -n "$HEDERA_ACCOUNT_ID" && -n "$HEDERA_PRIVATE_KEY" ]]; then
+        log_info "Hedera credentials detected - enabling testnet settlement"
+        env_vars="$env_vars HEDERA_NETWORK=hedera-testnet"
         env_vars="$env_vars HEDERA_ACCOUNT_ID=$HEDERA_ACCOUNT_ID"
-    fi
-    if [[ -n "$HEDERA_PRIVATE_KEY" ]]; then
         env_vars="$env_vars HEDERA_PRIVATE_KEY=$HEDERA_PRIVATE_KEY"
-    fi
-    if [[ -n "$HEDERA_CONTRACT_ID" ]]; then
-        env_vars="$env_vars HEDERA_CONTRACT_ID=$HEDERA_CONTRACT_ID"
+        env_vars="$env_vars HEDERA_CONTRACT_ID=${HEDERA_CONTRACT_ID:-0.0.7729011}"
+    else
+        log_warn "No Hedera credentials - using mock settlement"
     fi
 
     az container create \

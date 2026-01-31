@@ -151,6 +151,11 @@ pub trait ChannelStore {
     /// Returns tuples of (peer_id, channel) for all open channels.
     fn list_open(&self) -> Result<Vec<(PeerId, Channel)>>;
 
+    /// Clear all channels.
+    ///
+    /// Used for recovery when channel state becomes inconsistent.
+    fn clear_all(&mut self) -> Result<()>;
+
     /// Add a payment to a channel.
     ///
     /// The payment is stored as pending until settlement.

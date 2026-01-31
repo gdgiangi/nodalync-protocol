@@ -18,9 +18,8 @@
 //! nodalync-ops                nodalync-settle
 //! ┌────────────────┐         ┌─────────────────────────┐
 //! │ trigger_settle │ ──────► │ Settlement (trait)      │
-//! │ force_settle   │         │   ├─ MockSettlement     │
-//! └────────────────┘         │   └─ HederaSettlement   │
-//!                            └───────────┬─────────────┘
+//! │ force_settle   │         │   └─ HederaSettlement   │
+//! └────────────────┘         └───────────┬─────────────┘
 //!                                        │
 //!                                        ▼
 //!                            ┌─────────────────────────┐
@@ -30,26 +29,6 @@
 //! ```
 //!
 //! # Usage
-//!
-//! ## With Mock (for testing)
-//!
-//! ```rust
-//! use nodalync_settle::{MockSettlement, Settlement};
-//! use nodalync_settle::types::AccountId;
-//!
-//! # async fn example() -> nodalync_settle::SettleResult<()> {
-//! let mock = MockSettlement::with_balance(AccountId::simple(12345), 1_000_000);
-//!
-//! // Deposit more tokens
-//! mock.deposit(100_000).await?;
-//!
-//! // Check balance
-//! let balance = mock.get_balance().await?;
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ## With Hedera (for production)
 //!
 //! Requires the `hedera-sdk` feature and `protoc` installed:
 //!
@@ -76,9 +55,8 @@
 //!
 //! # Settlement Trait
 //!
-//! The [`Settlement`] trait provides a common interface for all settlement
-//! implementations. This allows code to work with either the mock or real
-//! implementation transparently.
+//! The [`Settlement`] trait provides a common interface for settlement
+//! implementations.
 //!
 //! Key methods:
 //! - `deposit()` / `withdraw()` / `get_balance()` - Balance management
@@ -98,7 +76,6 @@ mod error;
 pub mod faucet;
 #[cfg(feature = "hedera-sdk")]
 mod hedera;
-mod mock;
 mod retry;
 mod traits;
 pub mod types;
@@ -110,7 +87,6 @@ pub use error::{SettleError, SettleResult};
 pub use faucet::{request_testnet_hbar, FaucetConfig, FaucetResult, HederaFaucet};
 #[cfg(feature = "hedera-sdk")]
 pub use hedera::HederaSettlement;
-pub use mock::{MockSettlement, MockSettlementBuilder};
 pub use retry::RetryPolicy;
 pub use traits::Settlement;
 
@@ -120,66 +96,6 @@ pub use types::{AccountId, Attestation, ChannelId, SettlementStatus, Transaction
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nodalync_crypto::{content_hash, generate_identity, peer_id_from_public_key};
-    use nodalync_types::{SettlementBatch, SettlementEntry};
-
-    fn test_peer_id() -> nodalync_crypto::PeerId {
-        let (_, public_key) = generate_identity();
-        peer_id_from_public_key(&public_key)
-    }
-
-    #[tokio::test]
-    async fn test_mock_settlement_integration() {
-        // Create mock with balance
-        let peer1 = test_peer_id();
-        let peer2 = test_peer_id();
-
-        let mock = MockSettlementBuilder::new()
-            .balance(10_000)
-            .peer_account(peer1, AccountId::simple(111))
-            .peer_account(peer2, AccountId::simple(222))
-            .build();
-
-        // Verify initial balance
-        assert_eq!(mock.get_balance().await.unwrap(), 10_000);
-
-        // Create attestation
-        let hash = content_hash(b"test content");
-        let prov_root = content_hash(b"provenance");
-        mock.attest(&hash, &prov_root).await.unwrap();
-
-        let att = mock.get_attestation(&hash).await.unwrap();
-        assert!(att.is_some());
-
-        // Create and settle a batch
-        let batch = SettlementBatch::new(
-            content_hash(b"batch"),
-            vec![
-                SettlementEntry::new(peer1, 3000, vec![], vec![]),
-                SettlementEntry::new(peer2, 2000, vec![], vec![]),
-            ],
-            content_hash(b"merkle"),
-        );
-
-        let tx_id = mock.settle_batch(&batch).await.unwrap();
-        assert!(!tx_id.as_str().is_empty());
-
-        // Balance should be reduced
-        assert_eq!(mock.get_balance().await.unwrap(), 5_000);
-    }
-
-    #[tokio::test]
-    async fn test_settlement_trait_object() {
-        // Verify Settlement can be used as trait object
-        let mock: Box<dyn Settlement> =
-            Box::new(MockSettlement::with_balance(AccountId::simple(1), 1000));
-
-        let balance = mock.get_balance().await.unwrap();
-        assert_eq!(balance, 1000);
-
-        mock.deposit(500).await.unwrap();
-        assert_eq!(mock.get_balance().await.unwrap(), 1500);
-    }
 
     #[test]
     fn test_account_id_roundtrip() {

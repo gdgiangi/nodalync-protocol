@@ -143,10 +143,15 @@ pub struct AlertPayload {
     pub timestamp: u64,
     /// Current metrics.
     pub metrics: AlertMetrics,
+    /// CLI version (e.g., "0.9.0").
+    pub cli_version: String,
+    /// Protocol version (e.g., "0.5.0").
+    pub protocol_version: String,
 }
 
 impl AlertPayload {
     /// Create a new alert payload.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         alert_type: AlertType,
         message: String,
@@ -154,6 +159,8 @@ impl AlertPayload {
         node_name: Option<String>,
         region: Option<String>,
         metrics: AlertMetrics,
+        cli_version: String,
+        protocol_version: String,
     ) -> Self {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -169,6 +176,8 @@ impl AlertPayload {
             region,
             timestamp,
             metrics,
+            cli_version,
+            protocol_version,
         }
     }
 
@@ -219,6 +228,10 @@ pub struct AlertManager {
     config: AlertingConfig,
     /// Peer ID for this node.
     peer_id: String,
+    /// CLI version string.
+    cli_version: String,
+    /// Protocol version string.
+    protocol_version: String,
     /// Node start time.
     start_time: Instant,
     /// Internal state (protected by mutex for async access).
@@ -236,6 +249,8 @@ impl AlertManager {
         Self {
             config,
             peer_id,
+            cli_version: env!("CARGO_PKG_VERSION").to_string(),
+            protocol_version: nodalync_types::VERSION.to_string(),
             start_time: Instant::now(),
             state: Arc::new(Mutex::new(AlertManagerState {
                 health_state: HealthState::Healthy,
@@ -282,6 +297,8 @@ impl AlertManager {
                 connected_peers: peer_count,
                 uptime_secs: self.uptime_secs(),
             },
+            self.cli_version.clone(),
+            self.protocol_version.clone(),
         )
     }
 
@@ -600,6 +617,19 @@ fn format_slack(payload: &AlertPayload) -> String {
         "short": true
     }));
 
+    // Add version information
+    fields.push(serde_json::json!({
+        "title": "CLI Version",
+        "value": &payload.cli_version,
+        "short": true
+    }));
+
+    fields.push(serde_json::json!({
+        "title": "Protocol",
+        "value": &payload.protocol_version,
+        "short": true
+    }));
+
     let slack_payload = serde_json::json!({
         "attachments": [{
             "color": color,
@@ -645,6 +675,19 @@ fn format_discord(payload: &AlertPayload) -> String {
     fields.push(serde_json::json!({
         "name": "Uptime",
         "value": format_duration(payload.metrics.uptime_secs),
+        "inline": true
+    }));
+
+    // Add version information
+    fields.push(serde_json::json!({
+        "name": "CLI Version",
+        "value": &payload.cli_version,
+        "inline": true
+    }));
+
+    fields.push(serde_json::json!({
+        "name": "Protocol",
+        "value": &payload.protocol_version,
         "inline": true
     }));
 
@@ -694,7 +737,9 @@ fn format_pagerduty(payload: &AlertPayload) -> String {
                 "node_name": payload.node_name,
                 "region": payload.region,
                 "connected_peers": payload.metrics.connected_peers,
-                "uptime_secs": payload.metrics.uptime_secs
+                "uptime_secs": payload.metrics.uptime_secs,
+                "cli_version": payload.cli_version,
+                "protocol_version": payload.protocol_version
             }
         }
     });
@@ -851,12 +896,16 @@ mod tests {
                 connected_peers: 5,
                 uptime_secs: 100,
             },
+            "0.9.0".to_string(),
+            "0.5.0".to_string(),
         );
 
         assert_eq!(payload.alert_type, AlertType::NodeStarted);
         assert_eq!(payload.severity, AlertSeverity::Info);
         assert_eq!(payload.message, "Test message");
         assert_eq!(payload.metrics.connected_peers, 5);
+        assert_eq!(payload.cli_version, "0.9.0");
+        assert_eq!(payload.protocol_version, "0.5.0");
     }
 
     #[test]
@@ -871,11 +920,15 @@ mod tests {
                 connected_peers: 0,
                 uptime_secs: 60,
             },
+            "0.9.0".to_string(),
+            "0.5.0".to_string(),
         );
 
         let json = format_generic(&payload);
         assert!(json.contains("no_peers"));
         assert!(json.contains("critical"));
+        assert!(json.contains("cli_version"));
+        assert!(json.contains("protocol_version"));
     }
 
     #[test]
@@ -890,12 +943,16 @@ mod tests {
                 connected_peers: 0,
                 uptime_secs: 60,
             },
+            "0.9.0".to_string(),
+            "0.5.0".to_string(),
         );
 
         let json = format_slack(&payload);
         assert!(json.contains("attachments"));
         assert!(json.contains("#ff0000")); // Critical color
         assert!(json.contains("test-node"));
+        assert!(json.contains("CLI Version"));
+        assert!(json.contains("0.9.0"));
     }
 
     #[test]
@@ -910,11 +967,17 @@ mod tests {
                 connected_peers: 3,
                 uptime_secs: 120,
             },
+            "0.9.0".to_string(),
+            "0.5.0".to_string(),
         );
 
         let json = format_discord(&payload);
         assert!(json.contains("embeds"));
         assert!(json.contains("3581519")); // Green color (0x36a64f) as decimal
+        assert!(json.contains("CLI Version"));
+        assert!(json.contains("Protocol"));
+        assert!(json.contains("0.9.0"));
+        assert!(json.contains("0.5.0"));
     }
 
     #[test]
@@ -929,12 +992,15 @@ mod tests {
                 connected_peers: 0,
                 uptime_secs: 60,
             },
+            "0.9.0".to_string(),
+            "0.5.0".to_string(),
         );
 
         let json = format_pagerduty(&payload);
         assert!(json.contains("trigger"));
         assert!(json.contains("critical"));
         assert!(json.contains("dedup_key"));
+        assert!(json.contains("cli_version"));
     }
 
     #[test]
@@ -949,6 +1015,8 @@ mod tests {
                 connected_peers: 3,
                 uptime_secs: 120,
             },
+            "0.9.0".to_string(),
+            "0.5.0".to_string(),
         );
 
         let json = format_pagerduty(&payload);

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use nodalync_crypto::{PeerId, PrivateKey, PublicKey};
 use nodalync_net::{Network, NetworkConfig, NetworkNode};
 use nodalync_ops::DefaultNodeOperations;
-use nodalync_settle::{AccountId, MockSettlement, Settlement};
+use nodalync_settle::Settlement;
 use nodalync_store::{NodeState, NodeStateConfig};
 
 #[cfg(feature = "hedera")]
@@ -18,34 +18,34 @@ use crate::prompt::get_identity_password;
 /// Create settlement instance based on configuration.
 ///
 /// Supports:
-/// - "mock" (default): In-memory mock settlement
 /// - "hedera-testnet": Hedera testnet (requires `hedera` feature)
 /// - "hedera-mainnet": Hedera mainnet (requires `hedera` feature)
 ///
 /// For Hedera, credentials can come from:
 /// 1. Config file (account_id, key_path, contract_id)
 /// 2. Environment variables (HEDERA_ACCOUNT_ID, HEDERA_PRIVATE_KEY, HEDERA_CONTRACT_ID)
+///
+/// The settlement network can be overridden via HEDERA_NETWORK env var.
 #[allow(unused_variables)]
 async fn create_settlement(config: &CliConfig) -> CliResult<Arc<dyn Settlement>> {
-    let network = config.settlement.network.as_str();
+    // Allow env var override for settlement network
+    let network = std::env::var("HEDERA_NETWORK")
+        .ok()
+        .unwrap_or_else(|| config.settlement.network.clone());
 
-    match network {
+    match network.as_str() {
         #[cfg(feature = "hedera")]
-        "hedera-testnet" | "hedera-mainnet" => create_hedera_settlement(config, network).await,
+        "hedera-testnet" | "hedera-mainnet" => create_hedera_settlement(config, &network).await,
         #[cfg(not(feature = "hedera"))]
         "hedera-testnet" | "hedera-mainnet" => Err(CliError::User(
             "Hedera settlement requires the 'hedera' feature. \
                  Rebuild with: cargo build --features hedera"
                 .into(),
         )),
-        _ => {
-            // Default to mock settlement
-            tracing::debug!("Using mock settlement");
-            Ok(Arc::new(MockSettlement::with_balance(
-                AccountId::simple(1),
-                1_000_000_000, // 10 HBAR in tinybars
-            )))
-        }
+        _ => Err(CliError::config(
+            "Settlement network must be 'hedera-testnet' or 'hedera-mainnet'. \
+             Set HEDERA_NETWORK env var or configure settlement.network in config.toml",
+        )),
     }
 }
 
@@ -136,8 +136,8 @@ pub fn get_libp2p_peer_id(private_key: &PrivateKey) -> CliResult<libp2p::PeerId>
 pub struct NodeContext {
     /// Operations interface.
     pub ops: DefaultNodeOperations,
-    /// Settlement interface.
-    pub settlement: Arc<dyn Settlement>,
+    /// Settlement interface (optional, only available when Hedera is configured).
+    pub settlement: Option<Arc<dyn Settlement>>,
     /// Network node (optional, for network operations).
     pub network: Option<Arc<NetworkNode>>,
     /// Configuration.
@@ -147,7 +147,7 @@ pub struct NodeContext {
 impl NodeContext {
     /// Initialize node context for local-only operations.
     ///
-    /// Does not start networking. Use this for commands like `list`, `versions`.
+    /// Does not start networking or settlement. Use this for commands like `list`, `versions`.
     pub fn local(config: CliConfig) -> CliResult<Self> {
         let base_dir = config.base_dir();
 
@@ -161,16 +161,12 @@ impl NodeContext {
         }
         let peer_id = state.identity.peer_id()?;
 
-        // Create settlement (mock for now)
-        let settlement: Arc<dyn Settlement> =
-            Arc::new(MockSettlement::with_balance(AccountId::simple(1), 0));
-
-        // Create operations without network
+        // Create operations without network or settlement
         let ops = DefaultNodeOperations::with_defaults(state, peer_id);
 
         Ok(Self {
             ops,
-            settlement,
+            settlement: None,
             network: None,
             config,
         })
@@ -248,22 +244,30 @@ impl NodeContext {
             None
         };
 
-        // Create settlement based on config
-        let settlement = create_settlement(&config).await?;
+        // Create settlement based on config (may fail if not configured)
+        let settlement = create_settlement(&config).await.ok();
 
         // Create operations with network and/or settlement
-        let ops = match &network {
-            Some(net) => DefaultNodeOperations::with_defaults_network_and_settlement(
+        let ops = match (&network, &settlement) {
+            (Some(net), Some(settle)) => {
+                DefaultNodeOperations::with_defaults_network_and_settlement(
+                    state,
+                    peer_id,
+                    Arc::clone(net) as Arc<dyn Network>,
+                    Arc::clone(settle),
+                )
+            }
+            (Some(net), None) => DefaultNodeOperations::with_defaults_and_network(
                 state,
                 peer_id,
                 Arc::clone(net) as Arc<dyn Network>,
-                Arc::clone(&settlement),
             ),
-            None => DefaultNodeOperations::with_defaults_and_settlement(
+            (None, Some(settle)) => DefaultNodeOperations::with_defaults_and_settlement(
                 state,
                 peer_id,
-                Arc::clone(&settlement),
+                Arc::clone(settle),
             ),
+            (None, None) => DefaultNodeOperations::with_defaults(state, peer_id),
         };
 
         Ok(Self {

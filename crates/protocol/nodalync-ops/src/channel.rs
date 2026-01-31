@@ -32,9 +32,13 @@ where
     ///
     /// Spec §7.3.1:
     /// 1. Generates channel_id from hash(my_peer_id || peer_id || nonce)
-    /// 2. Creates Channel with state=Opening
-    /// 3. Stores locally
-    /// 4. Sends ChannelOpen message (if network available)
+    /// 2. Creates on-chain channel (if settlement available)
+    /// 3. Creates Channel with state=Opening (includes funding_tx_id if on-chain)
+    /// 4. Stores locally
+    /// 5. Sends ChannelOpen message (if network available)
+    ///
+    /// Returns the channel. If settlement is configured, the channel will have
+    /// a `funding_tx_id` with the on-chain transaction ID.
     pub async fn open_payment_channel(
         &mut self,
         peer: &PeerId,
@@ -59,8 +63,40 @@ where
         let nonce: u64 = rand::thread_rng().gen();
         let channel_id = self.generate_channel_id(peer, nonce);
 
-        // 2. Create Channel with state=Opening
-        let channel = Channel::new(channel_id, *peer, deposit, timestamp);
+        // 2. Create on-chain channel if settlement is configured
+        let (channel, funding_tx) = if let Some(settlement) = self.settlement().cloned() {
+            match settlement.open_channel(peer, deposit).await {
+                Ok(on_chain_id) => {
+                    // Use the on-chain channel ID as funding reference
+                    let funding_tx_id = on_chain_id.to_string();
+                    tracing::info!(
+                        channel_id = %channel_id,
+                        on_chain_id = %on_chain_id,
+                        deposit = deposit,
+                        "Channel opened on-chain"
+                    );
+                    let channel = Channel::with_funding(
+                        channel_id,
+                        *peer,
+                        deposit,
+                        timestamp,
+                        funding_tx_id.clone(),
+                    );
+                    (channel, Some(funding_tx_id.into_bytes()))
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        channel_id = %channel_id,
+                        error = %e,
+                        "On-chain channel open failed, proceeding with off-chain only"
+                    );
+                    (Channel::new(channel_id, *peer, deposit, timestamp), None)
+                }
+            }
+        } else {
+            // No settlement configured, create off-chain channel only
+            (Channel::new(channel_id, *peer, deposit, timestamp), None)
+        };
 
         // 3. Store locally
         self.state.channels.create(peer, channel.clone())?;
@@ -71,7 +107,7 @@ where
                 let payload = ChannelOpenPayload {
                     channel_id,
                     initial_balance: deposit,
-                    funding_tx: None,
+                    funding_tx,
                 };
                 // Best effort - don't fail if network send fails
                 let _ = network.send_channel_open(libp2p_peer, payload).await;
@@ -237,9 +273,12 @@ where
     /// Spec §7.3.3:
     /// 1. Gets channel
     /// 2. Computes final balances
-    /// 3. Sends ChannelClose message (if network available)
-    /// 4. Updates state to Closed
-    pub async fn close_payment_channel(&mut self, peer: &PeerId) -> OpsResult<()> {
+    /// 3. Closes on-chain channel (if settlement available and channel was funded on-chain)
+    /// 4. Sends ChannelClose message (if network available)
+    /// 5. Updates state to Closed
+    ///
+    /// Returns the settlement transaction ID if the channel was closed on-chain.
+    pub async fn close_payment_channel(&mut self, peer: &PeerId) -> OpsResult<Option<String>> {
         let timestamp = current_timestamp();
 
         // 1. Get channel
@@ -257,21 +296,58 @@ where
         // 2. Compute final balances (already stored in channel state)
         let my_balance = channel.my_balance;
         let their_balance = channel.their_balance;
+        let final_balances = ChannelBalances::new(my_balance, their_balance);
 
-        // 3. Send ChannelClose message (if network available)
+        // 3. Close on-chain channel if settlement is configured and channel was funded
+        let settlement_tx = if let Some(settlement) = self.settlement().cloned() {
+            // Convert channel_id Hash to ChannelId
+            let channel_id = nodalync_settle::ChannelId::new(channel.channel_id);
+
+            match settlement
+                .close_channel(&channel_id, &final_balances, &[])
+                .await
+            {
+                Ok(tx_id) => {
+                    tracing::info!(
+                        channel_id = %channel.channel_id,
+                        tx_id = %tx_id,
+                        my_balance = my_balance,
+                        their_balance = their_balance,
+                        "Channel closed on-chain"
+                    );
+                    Some(tx_id.to_string())
+                }
+                Err(e) => {
+                    // Log but don't fail - channel may not have been opened on-chain
+                    tracing::warn!(
+                        channel_id = %channel.channel_id,
+                        error = %e,
+                        "On-chain channel close failed (channel may be off-chain only)"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // 4. Send ChannelClose message (if network available)
         if let Some(network) = self.network().cloned() {
             if let Some(libp2p_peer) = network.libp2p_peer_id(peer) {
                 let payload = ChannelClosePayload {
                     channel_id: channel.channel_id,
-                    final_balances: ChannelBalances::new(my_balance, their_balance),
-                    settlement_tx: vec![], // No on-chain tx for MVP
+                    final_balances,
+                    settlement_tx: settlement_tx
+                        .as_ref()
+                        .map(|s| s.as_bytes().to_vec())
+                        .unwrap_or_default(),
                 };
                 // Best effort - don't fail if network send fails
                 let _ = network.send_channel_close(libp2p_peer, payload).await;
             }
         }
 
-        // 4. Update state to Closing then Closed
+        // 5. Update state to Closing then Closed
         channel.mark_closing(timestamp);
         self.state.channels.update(peer, &channel)?;
 
@@ -280,7 +356,7 @@ where
         channel.mark_closed(timestamp);
         self.state.channels.update(peer, &channel)?;
 
-        Ok(())
+        Ok(settlement_tx)
     }
 
     /// Dispute a channel with latest signed state.
@@ -523,8 +599,9 @@ mod tests {
         ops.accept_payment_channel(&channel_id, &peer, 500, 500)
             .unwrap();
 
-        // Close the channel
-        ops.close_payment_channel(&peer).await.unwrap();
+        // Close the channel (no settlement configured, so no tx_id returned)
+        let tx_id = ops.close_payment_channel(&peer).await.unwrap();
+        assert!(tx_id.is_none());
 
         // Verify closed
         let channel = ops.get_payment_channel(&peer).unwrap().unwrap();

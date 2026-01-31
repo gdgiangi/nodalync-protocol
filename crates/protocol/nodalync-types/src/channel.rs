@@ -99,6 +99,9 @@ pub struct Channel {
     pub last_update: Timestamp,
     /// Pending payments not yet settled
     pub pending_payments: Vec<Payment>,
+    /// On-chain funding transaction ID (if channel was funded on-chain)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub funding_tx_id: Option<String>,
 }
 
 impl Channel {
@@ -118,6 +121,28 @@ impl Channel {
             nonce: 0,
             last_update: timestamp,
             pending_payments: Vec::new(),
+            funding_tx_id: None,
+        }
+    }
+
+    /// Create a new channel with on-chain funding transaction.
+    pub fn with_funding(
+        channel_id: Hash,
+        peer_id: PeerId,
+        my_deposit: Amount,
+        timestamp: Timestamp,
+        funding_tx_id: String,
+    ) -> Self {
+        Self {
+            channel_id,
+            peer_id,
+            state: ChannelState::Opening,
+            my_balance: my_deposit,
+            their_balance: 0,
+            nonce: 0,
+            last_update: timestamp,
+            pending_payments: Vec::new(),
+            funding_tx_id: Some(funding_tx_id),
         }
     }
 
@@ -138,7 +163,13 @@ impl Channel {
             nonce: 0,
             last_update: timestamp,
             pending_payments: Vec::new(),
+            funding_tx_id: None,
         }
+    }
+
+    /// Set the funding transaction ID.
+    pub fn set_funding_tx_id(&mut self, tx_id: String) {
+        self.funding_tx_id = Some(tx_id);
     }
 
     /// Check if the channel is open and can process payments.
@@ -251,6 +282,7 @@ impl Default for Channel {
             nonce: 0,
             last_update: 0,
             pending_payments: Vec::new(),
+            funding_tx_id: None,
         }
     }
 }

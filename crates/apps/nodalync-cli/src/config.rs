@@ -220,7 +220,7 @@ pub struct SettlementConfig {
 impl Default for SettlementConfig {
     fn default() -> Self {
         Self {
-            network: "mock".to_string(),
+            network: "hedera-testnet".to_string(),
             account_id: None,
             key_path: None,
             contract_id: None,
@@ -474,7 +474,7 @@ mod tests {
         let config = CliConfig::default();
         assert!(config.network.enabled);
         assert_eq!(config.economics.default_price, 0.10);
-        assert_eq!(config.settlement.network, "mock");
+        assert_eq!(config.settlement.network, "hedera-testnet");
     }
 
     #[test]

@@ -43,17 +43,17 @@ Get your node running in under 5 minutes: **[QUICKSTART.md](./QUICKSTART.md)**
 
 | Layer | Crate | Version | Description |
 |-------|-------|---------|-------------|
-| Protocol | `nodalync-crypto` | 0.4.0 | Hashing (SHA-256), Ed25519 signing, PeerId derivation |
-| Protocol | `nodalync-types` | 0.4.0 | All data structures including L2 Entity Graph |
-| Protocol | `nodalync-wire` | 0.4.0 | Deterministic CBOR serialization, 21 message types |
-| Protocol | `nodalync-store` | 0.4.0 | SQLite manifests, filesystem content, settlement queue |
-| Protocol | `nodalync-valid` | 0.4.0 | Content, provenance, payment, L2 validation |
-| Protocol | `nodalync-econ` | 0.4.0 | 95/5 revenue distribution, Merkle batching |
-| Protocol | `nodalync-ops` | 0.4.0 | CREATE, DERIVE, BUILD_L2, MERGE_L2, QUERY |
-| Protocol | `nodalync-net` | 0.4.0 | libp2p (TCP/Noise/yamux), Kademlia DHT, GossipSub |
-| Protocol | `nodalync-settle` | 0.4.0 | Hedera settlement, smart contract deployed to testnet |
-| App | `nodalync-cli` | 0.8.0 | Full CLI with daemon mode, health endpoints, alerting |
-| App | `nodalync-mcp` | 0.8.0 | MCP server for AI agent integration |
+| Protocol | `nodalync-crypto` | 0.5.0 | Hashing (SHA-256), Ed25519 signing, PeerId derivation |
+| Protocol | `nodalync-types` | 0.5.0 | All data structures including L2 Entity Graph |
+| Protocol | `nodalync-wire` | 0.5.0 | Deterministic CBOR serialization, 21 message types |
+| Protocol | `nodalync-store` | 0.5.0 | SQLite manifests, filesystem content, settlement queue |
+| Protocol | `nodalync-valid` | 0.5.0 | Content, provenance, payment, L2 validation |
+| Protocol | `nodalync-econ` | 0.5.0 | 95/5 revenue distribution, Merkle batching |
+| Protocol | `nodalync-ops` | 0.5.0 | CREATE, DERIVE, BUILD_L2, MERGE_L2, QUERY |
+| Protocol | `nodalync-net` | 0.5.0 | libp2p (TCP/Noise/yamux), Kademlia DHT, GossipSub |
+| Protocol | `nodalync-settle` | 0.5.0 | Hedera settlement, smart contract deployed to testnet |
+| App | `nodalync-cli` | 0.9.0 | Full CLI with daemon mode, health endpoints, alerting |
+| App | `nodalync-mcp` | 0.9.0 | MCP server for AI agent integration |
 
 **Hedera Testnet:**
 

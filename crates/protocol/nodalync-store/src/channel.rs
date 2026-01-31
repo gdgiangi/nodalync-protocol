@@ -59,6 +59,7 @@ impl SqliteChannelStore {
             nonce: nonce as u64,
             last_update: last_update as Timestamp,
             pending_payments: Vec::new(), // Loaded separately
+            funding_tx_id: None,          // TODO: Load from DB when schema is updated
         })
     }
 
@@ -233,6 +234,15 @@ impl ChannelStore for SqliteChannelStore {
             .collect();
 
         Ok(channels_with_payments)
+    }
+
+    fn clear_all(&mut self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        // Try to clear pending_payments if the table exists (ignore errors if it doesn't)
+        let _ = conn.execute("DELETE FROM pending_payments", []);
+        // Clear channels table
+        conn.execute("DELETE FROM channels", [])?;
+        Ok(())
     }
 
     fn add_payment(&mut self, peer: &PeerId, payment: Payment) -> Result<()> {

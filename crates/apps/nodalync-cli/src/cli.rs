@@ -295,11 +295,13 @@ pub enum Commands {
     ///
     /// Creates a new payment channel for off-chain micropayments.
     /// The deposit is locked until the channel is closed.
+    ///
+    /// Minimum deposit: 100 HBAR
     OpenChannel {
-        /// Peer ID to open channel with (hex or base58).
+        /// Peer ID to open channel with (ndl1..., 12D3KooW..., or 40 hex chars).
         peer_id: String,
 
-        /// Deposit amount in HBAR.
+        /// Deposit amount in HBAR (minimum: 100).
         #[arg(short, long)]
         deposit: f64,
     },
