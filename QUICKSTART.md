@@ -6,11 +6,19 @@ Get your node running and connected to the network in under 5 minutes.
 
 Choose one of three options:
 
-### Option A: Docker (Recommended)
+### Option A: One-Line Install (Recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gdgiangi/nodalync-protocol/main/install.sh | sh
+```
+
+This auto-detects your platform (macOS, Linux, Windows) and installs the latest binary.
+
+### Option B: Docker
 
 ```bash
 # Pull or build the image
-docker build -t nodalync:latest https://github.com/nodalync/nodalync.git
+docker build -t nodalync:latest https://github.com/gdgiangi/nodalync-protocol.git
 
 # Initialize your identity
 docker run -it \
@@ -26,14 +34,14 @@ docker run -d --name nodalync-node \
   nodalync:latest start
 ```
 
-### Option B: Build from Source
+### Option C: Build from Source
 
 Requires Rust 1.85+:
 
 ```bash
 # Clone the repo
-git clone https://github.com/nodalync/nodalync.git
-cd nodalync
+git clone https://github.com/gdgiangi/nodalync-protocol.git
+cd nodalync-protocol
 
 # Build release binary
 cargo build --release -p nodalync-cli
@@ -45,9 +53,7 @@ cargo build --release -p nodalync-cli --features hedera-sdk
 export PATH="$PWD/target/release:$PATH"
 ```
 
-### Option C: Pre-built Binary
-
-Download from [Releases](https://github.com/nodalync/nodalync/releases) (when available).
+Pre-built binaries also available at [Releases](https://github.com/gdgiangi/nodalync-protocol/releases).
 
 ---
 
