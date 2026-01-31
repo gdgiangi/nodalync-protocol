@@ -152,6 +152,13 @@ verify() {
     if command -v nodalync >/dev/null 2>&1; then
         INSTALLED_VERSION=$(nodalync --version 2>/dev/null || echo "unknown")
         success "nodalync $INSTALLED_VERSION is ready!"
+        
+        # Check for duplicate binaries in PATH
+        NODALYNC_PATH=$(command -v nodalync)
+        if [ "$NODALYNC_PATH" != "$INSTALL_DIR/$BINARY_NAME" ]; then
+            warn "Found nodalync at $NODALYNC_PATH (not $INSTALL_DIR/$BINARY_NAME)"
+            warn "You may have an old version. Remove it with: rm $NODALYNC_PATH"
+        fi
     else
         warn "Installation complete, but 'nodalync' not found in PATH"
         warn "You may need to add $INSTALL_DIR to your PATH"
