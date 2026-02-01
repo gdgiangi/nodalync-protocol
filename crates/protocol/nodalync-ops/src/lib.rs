@@ -167,7 +167,7 @@ pub use channel::{create_signed_payment, create_signed_payment_for_manifest, sig
 mod tests {
     use super::*;
     use nodalync_crypto::{content_hash, generate_identity, peer_id_from_public_key};
-    use nodalync_store::{NodeStateConfig, SettlementQueueStore};
+    use nodalync_store::NodeStateConfig;
     use nodalync_types::{Metadata, Visibility};
     use tempfile::TempDir;
 
@@ -276,17 +276,13 @@ mod tests {
     }
 
     /// Integration test: Settlement queue
+    /// Integration test: Paid content requires on-chain settlement
+    ///
+    /// This test validates the CRITICAL security property that paid content
+    /// is NEVER delivered without on-chain settlement confirmation.
     #[tokio::test]
-    async fn test_settlement_queue_integration() {
+    async fn test_paid_content_requires_settlement() {
         let (mut ops, _temp) = create_test_ops();
-
-        // Set a recent last_settlement_time so the interval-based trigger doesn't fire
-        // (otherwise, settlement is triggered immediately because last_settlement=0)
-        let recent_time = current_timestamp();
-        ops.state
-            .settlement
-            .set_last_settlement_time(recent_time)
-            .unwrap();
 
         // Create and publish content
         let content = b"Paid content";
@@ -296,7 +292,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Handle query (this enqueues distributions)
+        // Handle query
         let (_, pk) = generate_identity();
         let requester = peer_id_from_public_key(&pk);
         let manifest = ops.get_content_manifest(&hash).unwrap().unwrap();
@@ -323,21 +319,15 @@ mod tests {
             version_spec: None,
             payment_nonce: 1,
         };
-        ops.handle_query_request(&requester, &request)
-            .await
-            .unwrap();
 
-        // Verify pending amount
-        let pending = ops.get_pending_settlement_total().unwrap();
-        assert_eq!(pending, 100);
-
-        // Force settlement
-        let batch_id = ops.force_settlement().await.unwrap();
-        assert!(batch_id.is_some());
-
-        // Verify queue is cleared
-        let pending_after = ops.get_pending_settlement_total().unwrap();
-        assert_eq!(pending_after, 0);
+        // Without settlement configured, paid queries MUST be rejected
+        // This ensures trustless operation: no content without confirmed payment
+        let result = ops.handle_query_request(&requester, &request).await;
+        assert!(
+            matches!(result, Err(crate::OpsError::SettlementRequired)),
+            "Paid queries without settlement MUST fail for trustless operation: {:?}",
+            result
+        );
     }
 
     /// Integration test: L1 extraction

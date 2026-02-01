@@ -5,6 +5,17 @@
 //!
 //! This proves the core value proposition: knowledge creators get paid
 //! when their content is queried.
+//!
+//! # Test Categories
+//!
+//! 1. **Trustless Validation Tests** (run by default):
+//!    - Verify that paid queries REQUIRE on-chain settlement
+//!    - Verify access control and payment validation
+//!
+//! 2. **Full Settlement Tests** (require Hedera testnet, ignored by default):
+//!    - Test complete Publish → Query → Pay → Settle flow
+//!    - Require HEDERA_* environment variables
+//!    - Run with: cargo test --features testnet -- --ignored
 
 use nodalync_crypto::{
     content_hash, generate_identity, peer_id_from_public_key, Hash, PeerId, Signature,
@@ -98,7 +109,11 @@ fn open_channel_between(
 /// - Alice publishes L0 content with price = 100
 /// - Bob queries Alice's content
 /// - Payment flows: 100 → Alice (100% since she's the only contributor)
+///
+/// REQUIRES: Hedera testnet credentials (HEDERA_ACCOUNT_ID, HEDERA_PRIVATE_KEY, HEDERA_CONTRACT_ID)
+/// Run with: cargo test --features testnet -- --ignored test_e2e_simple_l0_publish_query_settle
 #[tokio::test]
+#[ignore = "Requires Hedera testnet - paid queries require on-chain settlement"]
 async fn test_e2e_simple_l0_publish_query_settle() {
     // === SETUP ===
     let mut alice = TestNode::new();
@@ -205,7 +220,11 @@ async fn test_e2e_simple_l0_publish_query_settle() {
 /// - Bob creates L3 synthesis from Alice's L1
 /// - Carol queries Bob's L3
 /// - Payment distribution: 95% to Alice (root), 5% to Bob (synthesis fee)
+///
+/// REQUIRES: Hedera testnet credentials
+/// Run with: cargo test --features testnet -- --ignored test_e2e_multihop_provenance_distribution
 #[tokio::test]
+#[ignore = "Requires Hedera testnet - paid queries require on-chain settlement"]
 async fn test_e2e_multihop_provenance_distribution() {
     // === SETUP ===
     let mut alice = TestNode::new();
@@ -347,7 +366,14 @@ async fn test_e2e_multihop_provenance_distribution() {
 /// - Bob queries 3 times
 /// - Carol queries 2 times
 /// - All 5 payments batch settle together
+///
+/// NOTE: With immediate settlement, each query settles on-chain immediately.
+/// This test validates the batch settlement pattern which requires Hedera testnet.
+///
+/// REQUIRES: Hedera testnet credentials
+/// Run with: cargo test --features testnet -- --ignored test_e2e_batch_settlement
 #[tokio::test]
+#[ignore = "Requires Hedera testnet - paid queries require on-chain settlement"]
 async fn test_e2e_batch_settlement() {
     let mut alice = TestNode::new();
     let bob = TestNode::new();
@@ -438,7 +464,11 @@ async fn test_e2e_batch_settlement() {
 }
 
 /// Test 4: Verify economics are tracked correctly
+///
+/// REQUIRES: Hedera testnet credentials
+/// Run with: cargo test --features testnet -- --ignored test_e2e_economics_tracking
 #[tokio::test]
+#[ignore = "Requires Hedera testnet - paid queries require on-chain settlement"]
 async fn test_e2e_economics_tracking() {
     let mut alice = TestNode::new();
     let bob = TestNode::new();

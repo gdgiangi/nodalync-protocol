@@ -1012,7 +1012,7 @@ mod tests {
     use super::*;
     use crate::node_ops::DefaultNodeOperations;
     use nodalync_crypto::{content_hash, generate_identity, peer_id_from_public_key};
-    use nodalync_store::{NodeStateConfig, SettlementQueueStore};
+    use nodalync_store::NodeStateConfig;
     use nodalync_types::{Metadata, ProvenanceEntry};
     use nodalync_wire::ChannelBalances;
     use tempfile::TempDir;
@@ -1144,14 +1144,14 @@ mod tests {
             payment_nonce: 1,
         };
 
-        let response = ops
-            .handle_query_request(&requester, &request)
-            .await
-            .unwrap();
-
-        assert_eq!(response.hash, hash);
-        assert_eq!(response.content, content.to_vec());
-        assert_eq!(response.payment_receipt.amount, 100);
+        // Paid content queries require on-chain settlement to be configured.
+        // Without settlement, the handler correctly rejects the query.
+        let result = ops.handle_query_request(&requester, &request).await;
+        assert!(
+            matches!(result, Err(OpsError::SettlementRequired)),
+            "Paid queries without settlement must return SettlementRequired: {:?}",
+            result
+        );
     }
 
     #[tokio::test]
@@ -1365,16 +1365,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_query_enqueues_distributions() {
+    async fn test_paid_query_requires_settlement() {
+        // This test verifies that paid content queries are rejected without
+        // on-chain settlement configured. This is a CRITICAL security property:
+        // content providers must not deliver content without payment confirmation.
         let (mut ops, _temp) = create_test_ops();
-
-        // Set a recent last_settlement_time so the interval-based trigger doesn't fire
-        // (current time - last_settlement must be < 1 hour for settlement NOT to trigger)
-        let recent_time = current_timestamp();
-        ops.state
-            .settlement
-            .set_last_settlement_time(recent_time)
-            .unwrap();
 
         // Create and publish content
         let content = b"Content for distribution test";
@@ -1383,9 +1378,6 @@ mod tests {
         ops.publish_content(&hash, Visibility::Shared, 100)
             .await
             .unwrap();
-
-        // Initially no pending distributions
-        assert_eq!(ops.get_pending_settlement_total().unwrap(), 0);
 
         // Handle query request
         let requester = test_peer_id();
@@ -1411,17 +1403,28 @@ mod tests {
             version_spec: None,
             payment_nonce: 1,
         };
-        ops.handle_query_request(&requester, &request)
-            .await
-            .unwrap();
 
-        // Now we should have pending distributions
-        let pending = ops.get_pending_settlement_total().unwrap();
-        assert_eq!(pending, 100); // Full payment amount
+        // Without settlement configured, paid queries MUST be rejected
+        let result = ops.handle_query_request(&requester, &request).await;
+        assert!(
+            matches!(result, Err(OpsError::SettlementRequired)),
+            "Paid queries without settlement MUST return SettlementRequired for trustless operation: {:?}",
+            result
+        );
     }
 
     #[tokio::test]
-    async fn test_channel_nonce_updates_after_payment() {
+    async fn test_nonce_updated_before_settlement_for_replay_protection() {
+        // This test validates that channel nonces are updated BEFORE settlement
+        // is attempted. This is a deliberate security choice:
+        //
+        // If we waited until after settlement to update the nonce, and settlement
+        // succeeded but we crashed before updating the nonce, a replay attack
+        // could occur (same payment nonce reused).
+        //
+        // By updating the nonce early, we ensure that even if settlement fails,
+        // the same nonce cannot be reused. The client must increment the nonce
+        // for any retry. This is more conservative and prevents double-spend.
         let (mut ops, _temp) = create_test_ops();
         let content = b"Premium knowledge content";
         let requester = test_peer_id();
@@ -1457,7 +1460,7 @@ mod tests {
             Signature::from_bytes([0u8; 64]),
         );
 
-        // First query with nonce 1 should succeed
+        // Query with nonce 1 - without settlement, will fail at settlement step
         let request = QueryRequestPayload {
             hash,
             query: None,
@@ -1466,33 +1469,68 @@ mod tests {
             payment_nonce: 1,
         };
         let result = ops.handle_query_request(&requester, &request).await;
-        if let Err(ref e) = result {
-            eprintln!("First query failed: {:?}", e);
-        }
-        assert!(result.is_ok(), "First query should succeed: {:?}", result);
+        assert!(
+            matches!(result, Err(OpsError::SettlementRequired)),
+            "Paid queries require settlement: {:?}",
+            result
+        );
 
-        // Channel nonce should be updated to 1
+        // Channel nonce IS updated (for replay protection) even though settlement failed.
+        // This prevents the same nonce from being reused in a retry attack.
         let channel = ops.state.channels.get(&requester).unwrap().unwrap();
-        assert_eq!(channel.nonce, 1);
+        assert_eq!(
+            channel.nonce, 1,
+            "Nonce should be updated for replay protection even when settlement fails"
+        );
 
-        // Second query with same nonce should fail (replay attack prevention)
+        // Attempting to reuse the same nonce should fail
         let request2 = QueryRequestPayload {
             hash,
             query: None,
             payment: payment.clone(),
             version_spec: None,
-            payment_nonce: 1, // Same nonce as before - should fail
+            payment_nonce: 1, // Same nonce - should fail
         };
         let result2 = ops.handle_query_request(&requester, &request2).await;
         assert!(
             matches!(result2, Err(OpsError::PaymentValidationFailed(_))),
-            "Replay with same nonce should fail: {:?}",
+            "Replay with same nonce must fail: {:?}",
             result2
         );
+    }
 
-        // Query with higher nonce should succeed
-        let payment3 = Payment::new(
-            content_hash(b"payment3"),
+    #[tokio::test]
+    async fn test_replay_attack_rejected_before_settlement() {
+        // This test verifies that replay attacks (same nonce) are rejected
+        // even without settlement configured. This is a security validation.
+        let (mut ops, _temp) = create_test_ops();
+        let content = b"Premium knowledge content";
+        let requester = test_peer_id();
+
+        // Create and publish paid content
+        let meta = Metadata::new("Premium Knowledge", content.len() as u64);
+        let hash = ops.create_content(content, meta).unwrap();
+        ops.publish_content(&hash, Visibility::Shared, 100)
+            .await
+            .unwrap();
+
+        // Open a channel with the requester
+        let channel_id = content_hash(b"test-replay-channel");
+        ops.accept_payment_channel(&channel_id, &requester, 500, 1000)
+            .unwrap();
+
+        // Manually set the channel nonce to simulate a prior payment
+        {
+            let mut channel = ops.state.channels.get(&requester).unwrap().unwrap();
+            channel.nonce = 5;
+            ops.state.channels.update(&requester, &channel).unwrap();
+        }
+
+        let manifest = ops.state.manifests.load(&hash).unwrap().unwrap();
+
+        // Try to replay with an old nonce (should fail BEFORE settlement check)
+        let payment = Payment::new(
+            content_hash(b"replay-payment"),
             channel_id,
             100,
             ops.peer_id(),
@@ -1501,23 +1539,21 @@ mod tests {
             current_timestamp(),
             Signature::from_bytes([0u8; 64]),
         );
-        let request3 = QueryRequestPayload {
+
+        let request = QueryRequestPayload {
             hash,
             query: None,
-            payment: payment3,
+            payment,
             version_spec: None,
-            payment_nonce: 2,
+            payment_nonce: 3, // Old nonce (current is 5)
         };
-        let result3 = ops.handle_query_request(&requester, &request3).await;
-        assert!(
-            result3.is_ok(),
-            "Higher nonce should succeed: {:?}",
-            result3
-        );
 
-        // Channel nonce should now be 2
-        let channel = ops.state.channels.get(&requester).unwrap().unwrap();
-        assert_eq!(channel.nonce, 2);
+        let result = ops.handle_query_request(&requester, &request).await;
+        assert!(
+            matches!(result, Err(OpsError::PaymentValidationFailed(_))),
+            "Replay with old nonce should fail with PaymentValidationFailed: {:?}",
+            result
+        );
     }
 
     #[tokio::test]
