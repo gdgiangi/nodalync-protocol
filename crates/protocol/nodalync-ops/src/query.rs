@@ -7,12 +7,15 @@ use nodalync_crypto::{content_hash, Hash, PeerId, Signature, UNKNOWN_PEER_ID};
 use nodalync_store::{
     CacheStore, CachedContent, ChannelStore, ContentStore, ManifestFilter, ManifestStore,
 };
-use nodalync_types::{Amount, ContentType, L1Summary, Manifest, Payment, Visibility};
+use nodalync_types::{
+    Amount, ContentType, L1Summary, Manifest, Payment, ProvenanceEntry, Visibility,
+};
 use nodalync_valid::Validator;
 use nodalync_wire::{
     PaymentReceipt, QueryRequestPayload, SearchFilters, SearchPayload, VersionInfo, VersionSpec,
 };
 
+use crate::channel::create_signed_payment;
 use crate::error::{OpsError, OpsResult};
 use crate::extraction::L1Extractor;
 use crate::helpers::verify_content_hash;
@@ -333,31 +336,64 @@ where
             .libp2p_peer_id(owner)
             .ok_or(OpsError::PeerIdNotFound)?;
 
-        // Create payment
-        let payment_id =
-            content_hash(&[hash.0.as_slice(), &owner.0, &timestamp.to_be_bytes()].concat());
+        // For paid content, we need a channel and private key
+        let (payment, payment_nonce) = if payment_amount > 0 {
+            // Get channel with this peer
+            let channel = self
+                .state
+                .channels
+                .get(owner)?
+                .ok_or(OpsError::ChannelRequired)?;
 
-        let payment = Payment::new(
-            payment_id,
-            Hash([0u8; 32]), // Channel ID - in full impl, would get from channel
-            payment_amount,
-            *owner,
-            *hash,
-            vec![], // Provenance entries would be added in full impl
-            timestamp,
-            Signature::from_bytes([0u8; 64]), // Signature would be real in full impl
-        );
+            // Require private key for signing
+            let private_key = self.private_key().ok_or(OpsError::PrivateKeyRequired)?;
 
-        // Send query request
-        // Get next nonce for replay protection
-        // Note: In MVP, we use 1 as a placeholder. Full implementation
-        // will get the nonce from the payment channel with the owner.
-        let payment_nonce = 1u64;
+            // Get provenance from manifest or announcement
+            let provenance = if let Some(manifest) = self.state.manifests.load(hash)? {
+                manifest.provenance.root_l0l1.clone()
+            } else if let Some(announce) = self.state.get_announcement(hash) {
+                vec![ProvenanceEntry::new(
+                    announce.hash,
+                    UNKNOWN_PEER_ID,
+                    Visibility::Shared,
+                )]
+            } else {
+                vec![]
+            };
+
+            // Create signed payment
+            let (payment, nonce) = create_signed_payment(
+                private_key,
+                &channel,
+                payment_amount,
+                *owner,
+                *hash,
+                provenance,
+            );
+
+            (payment, nonce)
+        } else {
+            // Free content - use placeholder payment (no signature needed)
+            let payment_id =
+                content_hash(&[hash.0.as_slice(), &owner.0, &timestamp.to_be_bytes()].concat());
+
+            let payment = Payment::new(
+                payment_id,
+                Hash([0u8; 32]),
+                0,
+                *owner,
+                *hash,
+                vec![],
+                timestamp,
+                Signature::from_bytes([0u8; 64]),
+            );
+            (payment, 1u64)
+        };
 
         let request = QueryRequestPayload {
             hash: *hash,
             query: None,
-            payment,
+            payment: payment.clone(),
             version_spec: None,
             payment_nonce,
         };
@@ -367,6 +403,11 @@ where
         // Verify content hash
         if !verify_content_hash(&response.content, hash) {
             return Err(OpsError::ContentHashMismatch);
+        }
+
+        // Update channel balance after successful payment
+        if payment_amount > 0 {
+            self.update_payment_channel(owner, payment)?;
         }
 
         // Cache the content
@@ -474,50 +515,141 @@ where
         network: &std::sync::Arc<dyn nodalync_net::Network>,
     ) -> OpsResult<Option<QueryResponse>> {
         let timestamp = current_timestamp();
-        let payment_id = content_hash(&[hash.0.as_slice(), &timestamp.to_be_bytes()].concat());
 
         // Get Nodalync peer ID from mapping
         let recipient = network
             .nodalync_peer_id(&libp2p_peer)
             .unwrap_or(UNKNOWN_PEER_ID);
 
-        // Get channel ID and provenance if we have a channel with this peer
-        let (channel_id, provenance, payment_nonce) =
-            if let Some(channel) = self.state.channels.get(&recipient)? {
-                // Get provenance from announcement or local manifest
-                let prov = if let Some(announce) = self.state.get_announcement(hash) {
-                    // For announcements, build provenance from the hash
-                    vec![nodalync_types::ProvenanceEntry::new(
-                        announce.hash,
-                        UNKNOWN_PEER_ID,
-                        Visibility::Shared,
-                    )]
-                } else if let Some(manifest) = self.state.manifests.load(hash)? {
-                    manifest.provenance.root_l0l1.clone()
-                } else {
-                    vec![]
-                };
-                (channel.channel_id, prov, channel.nonce + 1)
-            } else {
-                // No channel - use placeholders (validation will be lenient for free content)
-                (Hash([0u8; 32]), vec![], 1u64)
+        // For paid content, we need a channel and private key
+        let (payment, payment_nonce) = if payment_amount > 0 {
+            // Get channel with this peer
+            let channel = match self.state.channels.get(&recipient)? {
+                Some(ch) => ch,
+                None => {
+                    // No channel - use placeholders (server will reject if payment required)
+                    let payment_id =
+                        content_hash(&[hash.0.as_slice(), &timestamp.to_be_bytes()].concat());
+                    let payment = Payment::new(
+                        payment_id,
+                        Hash([0u8; 32]),
+                        payment_amount,
+                        recipient,
+                        *hash,
+                        vec![],
+                        timestamp,
+                        Signature::from_bytes([0u8; 64]),
+                    );
+                    return self
+                        .try_query_peer_with_payment(
+                            hash,
+                            libp2p_peer,
+                            payment_amount,
+                            payment,
+                            1u64,
+                            network,
+                        )
+                        .await;
+                }
             };
 
-        let payment = Payment::new(
-            payment_id,
-            channel_id,
+            // Require private key for signing
+            let private_key = match self.private_key() {
+                Some(pk) => pk,
+                None => {
+                    // No private key - use placeholder and let server reject
+                    let payment_id =
+                        content_hash(&[hash.0.as_slice(), &timestamp.to_be_bytes()].concat());
+                    let payment = Payment::new(
+                        payment_id,
+                        channel.channel_id,
+                        payment_amount,
+                        recipient,
+                        *hash,
+                        vec![],
+                        timestamp,
+                        Signature::from_bytes([0u8; 64]),
+                    );
+                    return self
+                        .try_query_peer_with_payment(
+                            hash,
+                            libp2p_peer,
+                            payment_amount,
+                            payment,
+                            channel.nonce + 1,
+                            network,
+                        )
+                        .await;
+                }
+            };
+
+            // Get provenance from announcement or local manifest
+            let provenance = if let Some(announce) = self.state.get_announcement(hash) {
+                vec![ProvenanceEntry::new(
+                    announce.hash,
+                    UNKNOWN_PEER_ID,
+                    Visibility::Shared,
+                )]
+            } else if let Some(manifest) = self.state.manifests.load(hash)? {
+                manifest.provenance.root_l0l1.clone()
+            } else {
+                vec![]
+            };
+
+            // Create signed payment
+            create_signed_payment(
+                private_key,
+                &channel,
+                payment_amount,
+                recipient,
+                *hash,
+                provenance,
+            )
+        } else {
+            // Free content - use placeholder payment (no signature needed)
+            let payment_id = content_hash(&[hash.0.as_slice(), &timestamp.to_be_bytes()].concat());
+
+            let payment = Payment::new(
+                payment_id,
+                Hash([0u8; 32]),
+                0,
+                recipient,
+                *hash,
+                vec![],
+                timestamp,
+                Signature::from_bytes([0u8; 64]),
+            );
+            (payment, 1u64)
+        };
+
+        self.try_query_peer_with_payment(
+            hash,
+            libp2p_peer,
             payment_amount,
-            recipient,
-            *hash,
-            provenance,
-            timestamp,
-            Signature::from_bytes([0u8; 64]),
-        );
+            payment,
+            payment_nonce,
+            network,
+        )
+        .await
+    }
+
+    /// Internal helper to execute a query with a prepared payment.
+    async fn try_query_peer_with_payment(
+        &mut self,
+        hash: &Hash,
+        libp2p_peer: nodalync_net::PeerId,
+        payment_amount: Amount,
+        payment: Payment,
+        payment_nonce: u64,
+        network: &std::sync::Arc<dyn nodalync_net::Network>,
+    ) -> OpsResult<Option<QueryResponse>> {
+        let timestamp = current_timestamp();
+        let recipient = payment.recipient;
 
         let request = QueryRequestPayload {
             hash: *hash,
             query: None,
-            payment,
+            payment: payment.clone(),
             version_spec: None,
             payment_nonce,
         };
@@ -526,6 +658,16 @@ where
             Ok(response) => {
                 // Verify content hash
                 if verify_content_hash(&response.content, hash) {
+                    // Update channel balance after successful payment
+                    if payment_amount > 0 {
+                        if let Err(e) = self.update_payment_channel(&recipient, payment) {
+                            tracing::warn!(
+                                "Failed to update channel after payment: {} (continuing)",
+                                e
+                            );
+                        }
+                    }
+
                     // Cache the content
                     let cached = CachedContent::new(
                         response.hash,

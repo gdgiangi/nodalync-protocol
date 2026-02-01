@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use nodalync_crypto::{PeerId, Timestamp};
+use nodalync_crypto::{PeerId, PrivateKey, Timestamp};
 use nodalync_net::Network;
 use nodalync_settle::Settlement;
 use nodalync_store::NodeState;
@@ -52,6 +52,10 @@ where
     /// When `Some`, enables Hedera settlement for payment batches.
     /// When `None`, settlement batches are only processed locally.
     settlement: Option<Arc<dyn Settlement>>,
+    /// Optional private key for signing payments and channel operations.
+    ///
+    /// Required for paid queries - without this, only free content can be queried.
+    private_key: Option<PrivateKey>,
 }
 
 impl<V, E> NodeOperations<V, E>
@@ -75,6 +79,7 @@ where
             peer_id,
             network: None,
             settlement: None,
+            private_key: None,
         }
     }
 
@@ -95,6 +100,7 @@ where
             peer_id,
             network: Some(network),
             settlement: None,
+            private_key: None,
         }
     }
 
@@ -115,6 +121,7 @@ where
             peer_id,
             network: None,
             settlement: Some(settlement),
+            private_key: None,
         }
     }
 
@@ -136,6 +143,7 @@ where
             peer_id,
             network: Some(network),
             settlement: Some(settlement),
+            private_key: None,
         }
     }
 
@@ -197,6 +205,26 @@ where
     /// Remove the settlement (switch to local-only mode).
     pub fn clear_settlement(&mut self) {
         self.settlement = None;
+    }
+
+    /// Get a reference to the private key (if available).
+    pub fn private_key(&self) -> Option<&PrivateKey> {
+        self.private_key.as_ref()
+    }
+
+    /// Check if private key is available.
+    pub fn has_private_key(&self) -> bool {
+        self.private_key.is_some()
+    }
+
+    /// Set the private key for signing payments.
+    pub fn set_private_key(&mut self, private_key: PrivateKey) {
+        self.private_key = Some(private_key);
+    }
+
+    /// Remove the private key.
+    pub fn clear_private_key(&mut self) {
+        self.private_key = None;
     }
 }
 

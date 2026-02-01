@@ -218,6 +218,14 @@ async fn run(cli: Cli) -> CliResult<()> {
             commands::close_channel(config, format, &peer_id).await?
         }
 
+        Commands::DisputeChannel { peer_id } => {
+            commands::dispute_channel(config, format, &peer_id).await?
+        }
+
+        Commands::ResolveDispute { peer_id } => {
+            commands::resolve_dispute(config, format, &peer_id).await?
+        }
+
         Commands::ListChannels => commands::list_channels(config, format)?,
 
         // Node management commands

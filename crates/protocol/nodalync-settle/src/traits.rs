@@ -119,6 +119,18 @@ pub trait Settlement: Send + Sync {
     // Account Management
     // =========================================================================
 
+    /// Get our own Hedera account ID.
+    ///
+    /// Returns the account ID used for settlement operations.
+    fn get_own_account(&self) -> AccountId;
+
+    /// Get our own Hedera account ID as a string (e.g., "0.0.12345").
+    ///
+    /// Convenience method for including in protocol messages.
+    fn get_own_account_string(&self) -> String {
+        self.get_own_account().to_string()
+    }
+
     /// Get the Hedera account ID for a peer.
     ///
     /// Returns `None` if no account is mapped for this peer.
@@ -127,7 +139,8 @@ pub trait Settlement: Send + Sync {
     /// Register a Hedera account for a peer.
     ///
     /// Associates a PeerId with a Hedera AccountId for settlement.
-    fn register_peer_account(&mut self, peer: &PeerId, account: AccountId);
+    /// Uses interior mutability (RwLock) for thread-safe updates.
+    fn register_peer_account(&self, peer: &PeerId, account: AccountId);
 }
 
 #[cfg(test)]

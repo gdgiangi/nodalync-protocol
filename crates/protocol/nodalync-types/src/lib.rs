@@ -85,7 +85,7 @@ pub use provenance::{Provenance, ProvenanceEntry};
 pub use content::{L1Summary, Mention, SourceLocation};
 
 // Channel types
-pub use channel::{Channel, Payment};
+pub use channel::{Channel, Payment, PendingClose, PendingDispute};
 
 // Settlement types
 pub use settlement::{Distribution, SettlementBatch, SettlementEntry};

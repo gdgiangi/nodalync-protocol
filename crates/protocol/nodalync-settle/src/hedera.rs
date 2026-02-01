@@ -8,9 +8,9 @@ use std::sync::RwLock;
 
 use async_trait::async_trait;
 use hedera::{
-    AccountBalanceQuery, AccountId as HederaAccountId, Client, ContractExecuteTransaction,
+    AccountId as HederaAccountId, Client, ContractCallQuery, ContractExecuteTransaction,
     ContractFunctionParameters, ContractId, Hbar, PrivateKey, TransactionId as HederaTransactionId,
-    TransactionReceiptQuery, TransferTransaction,
+    TransactionReceiptQuery,
 };
 use nodalync_crypto::{Hash, PeerId, Signature, Timestamp};
 use nodalync_types::SettlementBatch;
@@ -32,6 +32,8 @@ pub struct HederaSettlement {
     client: Client,
     /// Operator account ID
     operator_id: HederaAccountId,
+    /// Operator's EVM address (derived from ECDSA key, used as msg.sender in contracts)
+    operator_evm_address: String,
     /// Settlement contract ID
     contract_id: ContractId,
     /// Account mapping (PeerId -> AccountId)
@@ -51,6 +53,18 @@ impl HederaSettlement {
         let key_bytes = std::fs::read_to_string(&config.private_key_path)?;
         let private_key = PrivateKey::from_str(key_bytes.trim())
             .map_err(|e| SettleError::config(format!("invalid private key: {}", e)))?;
+
+        // Derive EVM address from the ECDSA public key (keccak256(pubkey)[12:])
+        // This is the address that will be msg.sender in contract calls
+        let operator_evm_address = private_key
+            .public_key()
+            .to_evm_address()
+            .map(|addr| format!("{}", addr))
+            .ok_or_else(|| {
+                SettleError::config(
+                    "private key must be ECDSA to derive EVM address for contract calls",
+                )
+            })?;
 
         // Parse account and contract IDs
         let operator_id = HederaAccountId::from_str(&config.account_id)
@@ -72,6 +86,7 @@ impl HederaSettlement {
         info!(
             network = %config.network,
             operator = %config.account_id,
+            evm_address = %operator_evm_address,
             contract = %config.contract_id,
             "Hedera settlement initialized"
         );
@@ -79,6 +94,7 @@ impl HederaSettlement {
         Ok(Self {
             client,
             operator_id,
+            operator_evm_address,
             contract_id,
             account_mapper: RwLock::new(AccountMapper::new()),
             retry_policy: RetryPolicy::from_config(&config.retry),
@@ -154,19 +170,15 @@ impl Settlement for HederaSettlement {
     async fn deposit(&self, amount: u64) -> SettleResult<TransactionId> {
         debug!(amount, "Depositing to settlement contract");
 
+        // Call the contract's deposit() payable function
         let tx = self
             .retry_policy
             .execute(|| async {
-                TransferTransaction::new()
-                    .hbar_transfer(self.operator_id, Hbar::from_tinybars(-(amount as i64)))
-                    .hbar_transfer(
-                        HederaAccountId::new(
-                            self.contract_id.shard,
-                            self.contract_id.realm,
-                            self.contract_id.num,
-                        ),
-                        Hbar::from_tinybars(amount as i64),
-                    )
+                ContractExecuteTransaction::new()
+                    .contract_id(self.contract_id)
+                    .gas(self.config.gas.max_gas_deposit)
+                    .payable_amount(Hbar::from_tinybars(amount as i64))
+                    .function("deposit")
                     .execute(&self.client)
                     .await
                     .map_err(|e| SettleError::hedera_sdk(e.to_string()))
@@ -219,18 +231,32 @@ impl Settlement for HederaSettlement {
     }
 
     async fn get_balance(&self) -> SettleResult<u64> {
-        let balance = self
+        // Query the contract's balances(address) mapping for the operator's deposited balance
+        // Use the EVM address derived from the ECDSA key (this is what msg.sender is in contracts)
+        let result = self
             .retry_policy
             .execute(|| async {
-                AccountBalanceQuery::new()
-                    .account_id(self.operator_id)
+                ContractCallQuery::new()
+                    .contract_id(self.contract_id)
+                    .gas(100_000)
+                    .function_with_parameters(
+                        "balances",
+                        ContractFunctionParameters::new().add_address(&self.operator_evm_address),
+                    )
                     .execute(&self.client)
                     .await
                     .map_err(|e| SettleError::hedera_sdk(e.to_string()))
             })
             .await?;
 
-        Ok(balance.hbars.to_tinybars() as u64)
+        // The balances mapping returns a uint256, extract it
+        let balance = result
+            .get_u256(0)
+            .ok_or_else(|| SettleError::hedera_sdk("failed to decode balance from contract"))?
+            .try_into()
+            .map_err(|_| SettleError::hedera_sdk("balance overflow"))?;
+
+        Ok(balance)
     }
 
     async fn attest(
@@ -610,11 +636,19 @@ impl Settlement for HederaSettlement {
         }
     }
 
+    fn get_own_account(&self) -> AccountId {
+        AccountId::new(
+            self.operator_id.shard,
+            self.operator_id.realm,
+            self.operator_id.num,
+        )
+    }
+
     fn get_account_for_peer(&self, peer: &PeerId) -> Option<AccountId> {
         self.account_mapper.read().unwrap().get_account(peer)
     }
 
-    fn register_peer_account(&mut self, peer: &PeerId, account: AccountId) {
+    fn register_peer_account(&self, peer: &PeerId, account: AccountId) {
         self.account_mapper.write().unwrap().register(peer, account);
     }
 }

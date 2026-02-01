@@ -130,6 +130,8 @@ impl Default for HederaConfig {
 /// Gas limit configuration.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct GasConfig {
+    /// Max gas for deposit operations
+    pub max_gas_deposit: u64,
     /// Max gas for attest operations
     pub max_gas_attest: u64,
     /// Max gas for settle batch operations
@@ -147,6 +149,7 @@ pub struct GasConfig {
 impl Default for GasConfig {
     fn default() -> Self {
         Self {
+            max_gas_deposit: 100_000,
             max_gas_attest: 100_000,
             max_gas_settle: 500_000,
             max_gas_channel_open: 200_000,

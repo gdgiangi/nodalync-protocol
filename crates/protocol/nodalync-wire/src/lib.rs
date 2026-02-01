@@ -137,8 +137,8 @@ pub use payload::{VersionInfo, VersionRequestPayload, VersionResponsePayload};
 
 // Payload types - Channel
 pub use payload::{
-    ChannelAcceptPayload, ChannelBalances, ChannelClosePayload, ChannelDisputePayload,
-    ChannelOpenPayload, ChannelUpdatePayload,
+    ChannelAcceptPayload, ChannelBalances, ChannelCloseAckPayload, ChannelClosePayload,
+    ChannelDisputePayload, ChannelOpenPayload, ChannelUpdatePayload,
 };
 
 // Payload types - Settlement
@@ -299,6 +299,7 @@ mod tests {
             MessageType::ChannelUpdate,
             MessageType::ChannelClose,
             MessageType::ChannelDispute,
+            MessageType::ChannelCloseAck,
             MessageType::SettleBatch,
             MessageType::SettleConfirm,
             MessageType::Ping,

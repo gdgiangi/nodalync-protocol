@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use crate::error::Result;
 
 /// Schema version for migration tracking.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Initialize the database schema.
 ///
@@ -39,12 +39,34 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
             )?;
         }
         Some(version) if version < SCHEMA_VERSION => {
-            // Future: handle migrations
-            // For now, just update version
+            // Apply migrations
+            migrate_schema(conn, version)?;
             conn.execute("UPDATE schema_version SET version = ?1", [SCHEMA_VERSION])?;
         }
         Some(_) => {
             // Current version is up to date
+        }
+    }
+
+    Ok(())
+}
+
+/// Apply schema migrations from the given version to the current version.
+fn migrate_schema(conn: &Connection, from_version: u32) -> Result<()> {
+    // Migration from version 1 to 2: Add pending_close and pending_dispute columns to channels
+    if from_version < 2 {
+        // Add pending_close column (stores JSON)
+        if let Err(e) = conn.execute("ALTER TABLE channels ADD COLUMN pending_close TEXT", []) {
+            if !e.to_string().contains("duplicate column") {
+                tracing::warn!(error = %e, "Failed to add pending_close column to channels");
+            }
+        }
+
+        // Add pending_dispute column (stores JSON)
+        if let Err(e) = conn.execute("ALTER TABLE channels ADD COLUMN pending_dispute TEXT", []) {
+            if !e.to_string().contains("duplicate column") {
+                tracing::warn!(error = %e, "Failed to add pending_dispute column to channels");
+            }
         }
     }
 
@@ -142,7 +164,9 @@ fn create_tables(conn: &Connection) -> Result<()> {
             my_balance INTEGER NOT NULL,
             their_balance INTEGER NOT NULL,
             nonce INTEGER NOT NULL,
-            last_update INTEGER NOT NULL
+            last_update INTEGER NOT NULL,
+            pending_close TEXT,
+            pending_dispute TEXT
         )",
         [],
     )?;

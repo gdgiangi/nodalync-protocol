@@ -240,14 +240,16 @@ Add to your Claude Desktop config (`~/.config/claude/mcp.json` or similar):
       "args": ["mcp-server", "--budget", "1.0", "--auto-approve", "0.01", "--enable-network"],
       "env": {
         "NODALYNC_PASSWORD": "your-secure-password",
-        "NODALYNC_HEDERA_ACCOUNT_ID": "0.0.XXXXX",
-        "NODALYNC_HEDERA_KEY_PATH": "/path/to/hedera.key",
-        "NODALYNC_HEDERA_NETWORK": "testnet"
+        "HEDERA_ACCOUNT_ID": "0.0.7703962",
+        "HEDERA_CONTRACT_ID": "0.0.7729011",
+        "HEDERA_PRIVATE_KEY": "3030020100300706052b8104000a04220420..."
       }
     }
   }
 }
 ```
+
+**Note**: The private key must be DER-encoded ECDSA format (98 hex characters starting with `303002...`).
 
 Now Claude can:
 - Search knowledge in the Nodalync network
@@ -276,15 +278,33 @@ docker compose down
 
 ## Environment Variables
 
+The easiest way to configure Hedera is to use the `.env` file in the repo root:
+
+```bash
+# Export all variables from .env
+set -a && source .env && set +a
+```
+
 | Variable | Description |
 |----------|-------------|
 | `NODALYNC_PASSWORD` | Identity encryption password |
 | `NODALYNC_DATA_DIR` | Data directory (default: `~/.nodalync`) |
 | `RUST_LOG` | Log level (e.g., `nodalync=debug`) |
-| `NODALYNC_HEDERA_ACCOUNT_ID` | Hedera account ID for MCP settlement |
-| `NODALYNC_HEDERA_KEY_PATH` | Path to Hedera private key file |
-| `NODALYNC_HEDERA_CONTRACT_ID` | Settlement contract ID (default: 0.0.7729011) |
-| `NODALYNC_HEDERA_NETWORK` | Network: testnet, mainnet, or previewnet |
+| `HEDERA_ACCOUNT_ID` | Hedera account ID (e.g., `0.0.7703962`) |
+| `HEDERA_CONTRACT_ID` | Settlement contract ID (default: `0.0.7729011`) |
+| `HEDERA_PRIVATE_KEY` | **DER-encoded ECDSA private key** (see note below) |
+
+### Hedera Private Key Format
+
+**IMPORTANT**: Smart contract operations require ECDSA keys with DER encoding.
+
+| Format | Length | Example Prefix | Works? |
+|--------|--------|----------------|--------|
+| DER-encoded ECDSA | 98 hex chars | `3030020100300706052b8104000a04220420...` | **Yes** |
+| Raw hex (Ed25519) | 64 hex chars | `d21f3bfe69929b1d6e0f37fa9622b96f...` | No |
+
+If you have a raw hex key, you need to DER-encode it. Check your account type at HashScan:
+`https://hashscan.io/testnet/account/<account_id>`
 
 ---
 

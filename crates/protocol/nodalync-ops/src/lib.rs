@@ -136,7 +136,7 @@ pub mod settlement;
 // Re-export main types at crate root
 
 // Error types
-pub use error::{OpsError, OpsResult};
+pub use error::{CloseResult, OpsError, OpsResult};
 
 // Network trait (re-exported from nodalync-net)
 pub use nodalync_net::{Network, NetworkError, NetworkEvent};
@@ -269,8 +269,8 @@ mod tests {
             .unwrap();
         assert!(channel2.is_open());
 
-        // Close channel
-        ops.close_payment_channel(&peer2).await.unwrap();
+        // Close channel (use simple version for tests without private key)
+        ops.close_payment_channel_simple(&peer2).await.unwrap();
         let closed = ops.get_payment_channel(&peer2).unwrap().unwrap();
         assert!(closed.is_closed());
     }

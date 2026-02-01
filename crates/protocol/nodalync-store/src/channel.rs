@@ -6,7 +6,9 @@ use rusqlite::{params, Connection, OptionalExtension};
 use std::sync::{Arc, Mutex};
 
 use nodalync_crypto::{Hash, PeerId, Signature, Timestamp};
-use nodalync_types::{Amount, Channel, ChannelState, Payment, ProvenanceEntry};
+use nodalync_types::{
+    Amount, Channel, ChannelState, Payment, PendingClose, PendingDispute, ProvenanceEntry,
+};
 
 use crate::error::{Result, StoreError};
 use crate::traits::ChannelStore;
@@ -23,10 +25,30 @@ impl SqliteChannelStore {
     }
 
     /// Serialize a channel for storage.
+    #[allow(clippy::type_complexity)]
     fn serialize_channel(
         peer: &PeerId,
         channel: &Channel,
-    ) -> (Vec<u8>, Vec<u8>, u8, i64, i64, i64, i64) {
+    ) -> (
+        Vec<u8>,
+        Vec<u8>,
+        u8,
+        i64,
+        i64,
+        i64,
+        i64,
+        Option<String>,
+        Option<String>,
+    ) {
+        let pending_close_json = channel
+            .pending_close
+            .as_ref()
+            .and_then(|pc| serde_json::to_string(pc).ok());
+        let pending_dispute_json = channel
+            .pending_dispute
+            .as_ref()
+            .and_then(|pd| serde_json::to_string(pd).ok());
+
         (
             peer.0.to_vec(),
             channel.channel_id.0.to_vec(),
@@ -35,6 +57,8 @@ impl SqliteChannelStore {
             channel.their_balance as i64,
             channel.nonce as i64,
             channel.last_update as i64,
+            pending_close_json,
+            pending_dispute_json,
         )
     }
 
@@ -47,8 +71,20 @@ impl SqliteChannelStore {
         let nonce: i64 = row.get(5)?;
         let last_update: i64 = row.get(6)?;
 
+        // Get pending_close and pending_dispute (may be NULL in older schemas)
+        let pending_close_json: Option<String> = row.get(7).ok().flatten();
+        let pending_dispute_json: Option<String> = row.get(8).ok().flatten();
+
         let peer_id_bytes: Vec<u8> = row.get(0)?;
         let peer_id = bytes_to_peer_id(&peer_id_bytes);
+
+        // Deserialize pending close/dispute from JSON
+        let pending_close: Option<PendingClose> = pending_close_json
+            .as_ref()
+            .and_then(|json| serde_json::from_str(json).ok());
+        let pending_dispute: Option<PendingDispute> = pending_dispute_json
+            .as_ref()
+            .and_then(|json| serde_json::from_str(json).ok());
 
         Ok(Channel {
             channel_id: bytes_to_hash(&channel_id_bytes),
@@ -60,6 +96,8 @@ impl SqliteChannelStore {
             last_update: last_update as Timestamp,
             pending_payments: Vec::new(), // Loaded separately
             funding_tx_id: None,          // TODO: Load from DB when schema is updated
+            pending_close,
+            pending_dispute,
         })
     }
 
@@ -140,13 +178,22 @@ impl ChannelStore for SqliteChannelStore {
             return Err(StoreError::invalid_data("Channel already exists for peer"));
         }
 
-        let (peer_bytes, channel_id, state, my_balance, their_balance, nonce, last_update) =
-            Self::serialize_channel(peer, &channel);
+        let (
+            peer_bytes,
+            channel_id,
+            state,
+            my_balance,
+            their_balance,
+            nonce,
+            last_update,
+            pending_close,
+            pending_dispute,
+        ) = Self::serialize_channel(peer, &channel);
 
         conn.execute(
-            "INSERT INTO channels (peer_id, channel_id, state, my_balance, their_balance, nonce, last_update)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![peer_bytes, channel_id, state, my_balance, their_balance, nonce, last_update],
+            "INSERT INTO channels (peer_id, channel_id, state, my_balance, their_balance, nonce, last_update, pending_close, pending_dispute)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![peer_bytes, channel_id, state, my_balance, their_balance, nonce, last_update, pending_close, pending_dispute],
         )?;
 
         Ok(())
@@ -158,7 +205,7 @@ impl ChannelStore for SqliteChannelStore {
 
         let channel = conn
             .query_row(
-                "SELECT peer_id, channel_id, state, my_balance, their_balance, nonce, last_update
+                "SELECT peer_id, channel_id, state, my_balance, their_balance, nonce, last_update, pending_close, pending_dispute
                  FROM channels WHERE peer_id = ?1",
                 [&peer_bytes],
                 Self::deserialize_channel,
@@ -178,13 +225,22 @@ impl ChannelStore for SqliteChannelStore {
     fn update(&mut self, peer: &PeerId, channel: &Channel) -> Result<()> {
         let conn = self.conn.lock().unwrap();
 
-        let (peer_bytes, channel_id, state, my_balance, their_balance, nonce, last_update) =
-            Self::serialize_channel(peer, channel);
+        let (
+            peer_bytes,
+            channel_id,
+            state,
+            my_balance,
+            their_balance,
+            nonce,
+            last_update,
+            pending_close,
+            pending_dispute,
+        ) = Self::serialize_channel(peer, channel);
 
         let rows_affected = conn.execute(
             "UPDATE channels SET
                 channel_id = ?2, state = ?3, my_balance = ?4, their_balance = ?5,
-                nonce = ?6, last_update = ?7
+                nonce = ?6, last_update = ?7, pending_close = ?8, pending_dispute = ?9
              WHERE peer_id = ?1",
             params![
                 peer_bytes,
@@ -193,7 +249,9 @@ impl ChannelStore for SqliteChannelStore {
                 my_balance,
                 their_balance,
                 nonce,
-                last_update
+                last_update,
+                pending_close,
+                pending_dispute
             ],
         )?;
 
@@ -208,7 +266,7 @@ impl ChannelStore for SqliteChannelStore {
         let conn = self.conn.lock().unwrap();
 
         let mut stmt = conn.prepare(
-            "SELECT peer_id, channel_id, state, my_balance, their_balance, nonce, last_update
+            "SELECT peer_id, channel_id, state, my_balance, their_balance, nonce, last_update, pending_close, pending_dispute
              FROM channels WHERE state = ?1",
         )?;
 
@@ -569,5 +627,92 @@ mod tests {
 
         assert!(store.get(&peer).unwrap().is_none());
         assert!(store.get_pending_payments(&peer).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_pending_close_persistence() {
+        let mut store = setup_store();
+        let peer = test_peer_id();
+        let mut channel = test_channel(peer);
+
+        // Create channel without pending close
+        store.create(&peer, channel.clone()).unwrap();
+
+        // Add pending close
+        let pending_close = PendingClose::new_as_initiator(
+            (500, 500), // final_balances
+            5,          // nonce
+            Signature::from_bytes([1u8; 64]),
+            1234567890, // initiated_at
+        );
+        channel.pending_close = Some(pending_close);
+        store.update(&peer, &channel).unwrap();
+
+        // Reload and verify pending close was persisted
+        let loaded = store.get(&peer).unwrap().unwrap();
+        assert!(loaded.pending_close.is_some());
+        let pc = loaded.pending_close.unwrap();
+        assert_eq!(pc.final_balances, (500, 500));
+        assert_eq!(pc.nonce, 5);
+        assert!(pc.we_initiated);
+        assert_eq!(pc.initiated_at, 1234567890);
+    }
+
+    #[test]
+    fn test_pending_dispute_persistence() {
+        let mut store = setup_store();
+        let peer = test_peer_id();
+        let mut channel = test_channel(peer);
+
+        // Create channel without pending dispute
+        store.create(&peer, channel.clone()).unwrap();
+
+        // Add pending dispute
+        let pending_dispute = PendingDispute::new(
+            "0.0.123456@1234567890.000000000".to_string(),
+            1234567890, // initiated_at
+            5,          // nonce
+            400,        // initiator_balance
+            600,        // responder_balance
+        );
+        channel.pending_dispute = Some(pending_dispute);
+        store.update(&peer, &channel).unwrap();
+
+        // Reload and verify pending dispute was persisted
+        let loaded = store.get(&peer).unwrap().unwrap();
+        assert!(loaded.pending_dispute.is_some());
+        let pd = loaded.pending_dispute.unwrap();
+        assert_eq!(pd.dispute_tx_id, "0.0.123456@1234567890.000000000");
+        assert_eq!(pd.initiated_at, 1234567890);
+        assert_eq!(pd.disputed_state, (5, 400, 600));
+    }
+
+    #[test]
+    fn test_clear_pending_close() {
+        let mut store = setup_store();
+        let peer = test_peer_id();
+        let mut channel = test_channel(peer);
+
+        // Create channel with pending close
+        let pending_close = PendingClose::new_as_initiator(
+            (500, 500),
+            5,
+            Signature::from_bytes([1u8; 64]),
+            1234567890,
+        );
+        channel.pending_close = Some(pending_close);
+        store.create(&peer, channel.clone()).unwrap();
+
+        // Verify it was saved
+        let loaded = store.get(&peer).unwrap().unwrap();
+        assert!(loaded.pending_close.is_some());
+
+        // Clear pending close
+        channel.pending_close = None;
+        store.update(&peer, &channel).unwrap();
+
+        // Verify it was cleared
+        let loaded = store.get(&peer).unwrap().unwrap();
+        assert!(loaded.pending_close.is_none());
     }
 }

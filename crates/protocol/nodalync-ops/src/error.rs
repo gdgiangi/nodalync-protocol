@@ -10,6 +10,49 @@ use thiserror::Error;
 /// Result type for operations.
 pub type OpsResult<T> = std::result::Result<T, OpsError>;
 
+/// Result of a channel close operation.
+///
+/// Represents the different outcomes of attempting to close a payment channel.
+#[derive(Debug, Clone)]
+pub enum CloseResult {
+    /// Channel was successfully closed on-chain.
+    Success {
+        /// The on-chain transaction ID.
+        transaction_id: String,
+        /// Final balances: (our balance, their balance).
+        final_balances: (u64, u64),
+    },
+    /// Channel was closed off-chain only (no settlement layer configured).
+    SuccessOffChain {
+        /// Final balances: (our balance, their balance).
+        final_balances: (u64, u64),
+    },
+    /// Peer did not respond to cooperative close request.
+    ///
+    /// The channel is now in pending close state. The user can either:
+    /// 1. Wait for the peer to come online and retry
+    /// 2. Use dispute-based close (24-hour wait)
+    PeerUnresponsive {
+        /// Suggestion for the user.
+        suggestion: String,
+    },
+    /// On-chain transaction failed.
+    OnChainFailed {
+        /// Error message from the settlement layer.
+        error: String,
+    },
+}
+
+impl CloseResult {
+    /// Check if the close was successful (on-chain or off-chain).
+    pub fn is_success(&self) -> bool {
+        matches!(
+            self,
+            CloseResult::Success { .. } | CloseResult::SuccessOffChain { .. }
+        )
+    }
+}
+
 /// Errors that can occur during protocol operations.
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -73,6 +116,10 @@ pub enum OpsError {
     /// Insufficient balance in channel.
     #[error("insufficient channel balance")]
     InsufficientChannelBalance,
+
+    /// Private key required for paid queries.
+    #[error("private key required for paid queries")]
+    PrivateKeyRequired,
 
     // =========================================================================
     // Channel Errors
@@ -159,6 +206,7 @@ impl OpsError {
             Self::ChannelRequired => ErrorCode::ChannelNotFound,
             Self::ChannelRequiredWithPeerInfo { .. } => ErrorCode::ChannelNotFound,
             Self::InsufficientChannelBalance => ErrorCode::InsufficientBalance,
+            Self::PrivateKeyRequired => ErrorCode::PaymentInvalid,
 
             // Channel errors
             Self::ChannelNotFound => ErrorCode::ChannelNotFound,

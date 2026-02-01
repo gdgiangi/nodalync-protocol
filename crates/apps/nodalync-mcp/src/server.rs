@@ -236,7 +236,7 @@ impl NodalyncMcpServer {
             };
 
         // Create operations with network and/or settlement
-        let ops = match (&network, &settlement) {
+        let mut ops = match (&network, &settlement) {
             (Some(net), Some(settle)) => {
                 DefaultNodeOperations::with_defaults_network_and_settlement(
                     state,
@@ -257,6 +257,9 @@ impl NodalyncMcpServer {
             ),
             (None, None) => DefaultNodeOperations::with_defaults(state, peer_id),
         };
+
+        // Set the private key for signing payments
+        ops.set_private_key(private_key);
 
         // Wrap ops in Arc<Mutex> for sharing
         let ops = Arc::new(Mutex::new(ops));
@@ -827,6 +830,7 @@ impl NodalyncMcpServer {
                             r.owner.to_string()
                         },
                         source: r.source.to_string(),
+                        peer_id: r.publisher_peer_id.clone(),
                         preview,
                         topics: r.l1_summary.primary_topics.clone(),
                     }
@@ -1168,7 +1172,9 @@ impl NodalyncMcpServer {
             "Closing payment channel"
         );
 
-        match ops.close_payment_channel(&peer_id).await {
+        // Use the simple close (without signature exchange) for MCP server
+        // since we don't have easy access to the private key here
+        match ops.close_payment_channel_simple(&peer_id).await {
             Ok(tx_id_opt) => {
                 // Get updated Hedera balance after settlement
                 let hedera_balance = if let Some(ref settlement) = self.settlement {

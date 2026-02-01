@@ -256,6 +256,11 @@ pub struct SearchResultInfo {
     /// Where result came from: "local", "cached", or "peer".
     pub source: String,
 
+    /// libp2p peer ID of the publisher (starts with "12D3Koo").
+    /// Use this for opening payment channels. None for local content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peer_id: Option<String>,
+
     /// Preview of L1 mentions (extracted facts/entities).
     pub preview: Vec<String>,
 

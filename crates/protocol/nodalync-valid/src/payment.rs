@@ -8,8 +8,8 @@
 //! - Signature verification
 //! - Provenance matching
 
-use nodalync_crypto::{verify, PublicKey};
-use nodalync_types::{Channel, ChannelState, Manifest, Payment, PeerId, ProvenanceEntry};
+use nodalync_crypto::{sign, verify, Hash, PrivateKey, PublicKey, Signature};
+use nodalync_types::{Amount, Channel, ChannelState, Manifest, Payment, PeerId, ProvenanceEntry};
 
 use crate::error::{ValidationError, ValidationResult};
 
@@ -154,6 +154,64 @@ pub fn construct_payment_message(payment: &Payment) -> Vec<u8> {
     message.extend_from_slice(&payment.timestamp.to_be_bytes());
     message
 }
+
+// =============================================================================
+// Channel Close Signature Functions
+// =============================================================================
+
+/// Construct the close message for signing.
+///
+/// The close message includes:
+/// `channel_id || nonce (u64 BE) || initiator_balance (u64 BE) || responder_balance (u64 BE)`
+///
+/// Both parties must sign this exact message for cooperative close.
+pub fn construct_close_message(
+    channel_id: &Hash,
+    nonce: u64,
+    initiator_balance: Amount,
+    responder_balance: Amount,
+) -> Vec<u8> {
+    let mut message = Vec::with_capacity(32 + 8 + 8 + 8);
+    message.extend_from_slice(channel_id.as_ref());
+    message.extend_from_slice(&nonce.to_be_bytes());
+    message.extend_from_slice(&initiator_balance.to_be_bytes());
+    message.extend_from_slice(&responder_balance.to_be_bytes());
+    message
+}
+
+/// Sign a channel close message.
+///
+/// Creates a signature over the close message for cooperative channel close.
+pub fn sign_channel_close(
+    private_key: &PrivateKey,
+    channel_id: &Hash,
+    nonce: u64,
+    initiator_balance: Amount,
+    responder_balance: Amount,
+) -> Signature {
+    let message = construct_close_message(channel_id, nonce, initiator_balance, responder_balance);
+    sign(private_key, &message)
+}
+
+/// Verify a channel close signature.
+///
+/// Verifies that the signature was created by the holder of the private key
+/// corresponding to the given public key over the close message.
+pub fn verify_channel_close_signature(
+    public_key: &PublicKey,
+    channel_id: &Hash,
+    nonce: u64,
+    initiator_balance: Amount,
+    responder_balance: Amount,
+    signature: &Signature,
+) -> bool {
+    let message = construct_close_message(channel_id, nonce, initiator_balance, responder_balance);
+    verify(public_key, &message, signature)
+}
+
+// =============================================================================
+// Internal Helpers
+// =============================================================================
 
 /// Check if payment provenance matches manifest provenance.
 ///
@@ -409,5 +467,139 @@ mod tests {
         // Different hashes should not match
         let prov3 = vec![ProvenanceEntry::new(hash1, owner, Visibility::Shared)];
         assert!(!provenance_matches(&prov1, &prov3));
+    }
+
+    // =========================================================================
+    // Channel Close Signature Tests
+    // =========================================================================
+
+    #[test]
+    fn test_construct_close_message() {
+        let channel_id = content_hash(b"test-channel");
+        let nonce = 42u64;
+        let initiator_balance = 1000u64;
+        let responder_balance = 500u64;
+
+        let message =
+            construct_close_message(&channel_id, nonce, initiator_balance, responder_balance);
+
+        // Message should be 32 + 8 + 8 + 8 = 56 bytes
+        assert_eq!(message.len(), 56);
+
+        // Verify the message contains the expected components
+        assert_eq!(&message[0..32], channel_id.as_ref());
+        assert_eq!(&message[32..40], &nonce.to_be_bytes());
+        assert_eq!(&message[40..48], &initiator_balance.to_be_bytes());
+        assert_eq!(&message[48..56], &responder_balance.to_be_bytes());
+    }
+
+    #[test]
+    fn test_sign_and_verify_channel_close() {
+        let (private_key, public_key) = generate_identity();
+        let channel_id = content_hash(b"test-channel");
+        let nonce = 42u64;
+        let initiator_balance = 1000u64;
+        let responder_balance = 500u64;
+
+        // Sign the close message
+        let signature = sign_channel_close(
+            &private_key,
+            &channel_id,
+            nonce,
+            initiator_balance,
+            responder_balance,
+        );
+
+        // Verify with correct parameters
+        assert!(verify_channel_close_signature(
+            &public_key,
+            &channel_id,
+            nonce,
+            initiator_balance,
+            responder_balance,
+            &signature,
+        ));
+    }
+
+    #[test]
+    fn test_verify_channel_close_wrong_key() {
+        let (private_key, _) = generate_identity();
+        let (_, wrong_public_key) = generate_identity();
+        let channel_id = content_hash(b"test-channel");
+        let nonce = 42u64;
+        let initiator_balance = 1000u64;
+        let responder_balance = 500u64;
+
+        let signature = sign_channel_close(
+            &private_key,
+            &channel_id,
+            nonce,
+            initiator_balance,
+            responder_balance,
+        );
+
+        // Verify with wrong key should fail
+        assert!(!verify_channel_close_signature(
+            &wrong_public_key,
+            &channel_id,
+            nonce,
+            initiator_balance,
+            responder_balance,
+            &signature,
+        ));
+    }
+
+    #[test]
+    fn test_verify_channel_close_wrong_nonce() {
+        let (private_key, public_key) = generate_identity();
+        let channel_id = content_hash(b"test-channel");
+        let nonce = 42u64;
+        let initiator_balance = 1000u64;
+        let responder_balance = 500u64;
+
+        let signature = sign_channel_close(
+            &private_key,
+            &channel_id,
+            nonce,
+            initiator_balance,
+            responder_balance,
+        );
+
+        // Verify with wrong nonce should fail
+        assert!(!verify_channel_close_signature(
+            &public_key,
+            &channel_id,
+            99, // Wrong nonce
+            initiator_balance,
+            responder_balance,
+            &signature,
+        ));
+    }
+
+    #[test]
+    fn test_verify_channel_close_wrong_balance() {
+        let (private_key, public_key) = generate_identity();
+        let channel_id = content_hash(b"test-channel");
+        let nonce = 42u64;
+        let initiator_balance = 1000u64;
+        let responder_balance = 500u64;
+
+        let signature = sign_channel_close(
+            &private_key,
+            &channel_id,
+            nonce,
+            initiator_balance,
+            responder_balance,
+        );
+
+        // Verify with wrong balance should fail
+        assert!(!verify_channel_close_signature(
+            &public_key,
+            &channel_id,
+            nonce,
+            9999, // Wrong initiator balance
+            responder_balance,
+            &signature,
+        ));
     }
 }

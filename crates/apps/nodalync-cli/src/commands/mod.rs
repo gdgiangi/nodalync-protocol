@@ -30,7 +30,7 @@ pub mod withdraw;
 // Re-export command handlers
 pub use balance::balance;
 pub use build_l2::build_l2;
-pub use channel::{close_channel, list_channels, open_channel};
+pub use channel::{close_channel, dispute_channel, list_channels, open_channel, resolve_dispute};
 pub use completions::completions;
 pub use delete::delete;
 pub use deposit::deposit;

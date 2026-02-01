@@ -10,6 +10,125 @@ use crate::enums::ChannelState;
 use crate::provenance::ProvenanceEntry;
 use crate::Amount;
 
+// =============================================================================
+// Pending Close/Dispute State
+// =============================================================================
+
+/// State for a pending cooperative channel close.
+///
+/// Tracks the close attempt until both parties sign and the
+/// transaction is submitted on-chain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct PendingClose {
+    /// Final balances being proposed (initiator, responder)
+    pub final_balances: (Amount, Amount),
+    /// Nonce of the state being closed
+    pub nonce: u64,
+    /// Initiator's signature over the close message
+    pub initiator_signature: Signature,
+    /// Responder's signature (if received)
+    pub responder_signature: Option<Signature>,
+    /// Whether we initiated the close
+    pub we_initiated: bool,
+    /// When the close was initiated
+    pub initiated_at: Timestamp,
+}
+
+impl PendingClose {
+    /// Create a new pending close as the initiator.
+    pub fn new_as_initiator(
+        final_balances: (Amount, Amount),
+        nonce: u64,
+        initiator_signature: Signature,
+        initiated_at: Timestamp,
+    ) -> Self {
+        Self {
+            final_balances,
+            nonce,
+            initiator_signature,
+            responder_signature: None,
+            we_initiated: true,
+            initiated_at,
+        }
+    }
+
+    /// Create a new pending close as the responder.
+    pub fn new_as_responder(
+        final_balances: (Amount, Amount),
+        nonce: u64,
+        initiator_signature: Signature,
+        initiated_at: Timestamp,
+    ) -> Self {
+        Self {
+            final_balances,
+            nonce,
+            initiator_signature,
+            responder_signature: None,
+            we_initiated: false,
+            initiated_at,
+        }
+    }
+
+    /// Check if we have both signatures.
+    pub fn has_both_signatures(&self) -> bool {
+        self.responder_signature.is_some()
+    }
+
+    /// Add the responder's signature.
+    pub fn add_responder_signature(&mut self, signature: Signature) {
+        self.responder_signature = Some(signature);
+    }
+}
+
+/// State for a pending channel dispute.
+///
+/// Tracks a dispute until the dispute period (24 hours) elapses
+/// and the dispute can be resolved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct PendingDispute {
+    /// Transaction ID of the dispute submission
+    pub dispute_tx_id: String,
+    /// When the dispute was initiated
+    pub initiated_at: Timestamp,
+    /// When the dispute can be resolved (initiated_at + 24 hours)
+    pub resolution_time: Timestamp,
+    /// The state we disputed with: (nonce, initiator_balance, responder_balance)
+    pub disputed_state: (u64, Amount, Amount),
+}
+
+impl PendingDispute {
+    /// Dispute period in milliseconds (24 hours).
+    pub const DISPUTE_PERIOD_MS: u64 = 24 * 60 * 60 * 1000;
+
+    /// Create a new pending dispute.
+    pub fn new(
+        dispute_tx_id: String,
+        initiated_at: Timestamp,
+        nonce: u64,
+        initiator_balance: Amount,
+        responder_balance: Amount,
+    ) -> Self {
+        Self {
+            dispute_tx_id,
+            initiated_at,
+            resolution_time: initiated_at + Self::DISPUTE_PERIOD_MS,
+            disputed_state: (nonce, initiator_balance, responder_balance),
+        }
+    }
+
+    /// Check if the dispute period has elapsed.
+    pub fn can_resolve(&self, current_time: Timestamp) -> bool {
+        current_time >= self.resolution_time
+    }
+
+    /// Get remaining time until resolution in milliseconds.
+    pub fn time_until_resolution(&self, current_time: Timestamp) -> u64 {
+        self.resolution_time.saturating_sub(current_time)
+    }
+}
+
 /// A payment for a content query.
 ///
 /// Payments are made through payment channels and include full
@@ -102,6 +221,12 @@ pub struct Channel {
     /// On-chain funding transaction ID (if channel was funded on-chain)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub funding_tx_id: Option<String>,
+    /// Pending cooperative close state
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_close: Option<PendingClose>,
+    /// Pending dispute state
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_dispute: Option<PendingDispute>,
 }
 
 impl Channel {
@@ -122,6 +247,8 @@ impl Channel {
             last_update: timestamp,
             pending_payments: Vec::new(),
             funding_tx_id: None,
+            pending_close: None,
+            pending_dispute: None,
         }
     }
 
@@ -143,6 +270,8 @@ impl Channel {
             last_update: timestamp,
             pending_payments: Vec::new(),
             funding_tx_id: Some(funding_tx_id),
+            pending_close: None,
+            pending_dispute: None,
         }
     }
 
@@ -164,6 +293,8 @@ impl Channel {
             last_update: timestamp,
             pending_payments: Vec::new(),
             funding_tx_id: None,
+            pending_close: None,
+            pending_dispute: None,
         }
     }
 
@@ -283,6 +414,8 @@ impl Default for Channel {
             last_update: 0,
             pending_payments: Vec::new(),
             funding_tx_id: None,
+            pending_close: None,
+            pending_dispute: None,
         }
     }
 }

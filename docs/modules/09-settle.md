@@ -71,16 +71,42 @@ contract NodalyncSettlement {
 
 ## §12.3 Contract Operations
 
+### EVM Address Handling
+
+**Critical for ECDSA accounts**: When interacting with the settlement contract, the EVM address
+used by `msg.sender` differs based on account key type:
+
+| Key Type | EVM Address (`msg.sender`) |
+|----------|---------------------------|
+| **ECDSA** | Derived from public key: `keccak256(uncompressed_pubkey)[12:]` |
+| **Ed25519** | Simple padded account number: `0x000...{account_num_hex}` |
+
+For ECDSA accounts, `AccountId::to_solidity_address()` returns the **wrong** address for
+contract storage lookups. The contract uses `msg.sender` (the key-derived address) when
+storing balances, but queries using `to_solidity_address()` will look up the wrong slot.
+
+**To get the correct EVM address for any account:**
+```bash
+curl -s "https://testnet.mirrornode.hedera.com/api/v1/accounts/0.0.ACCOUNT_ID" | jq '.evm_address'
+```
+
 ### Deposit/Withdraw
+
+**Important**: Deposits must call the contract's `deposit()` payable function to update
+the internal `balances` mapping. A simple `TransferTransaction` sends HBAR but does NOT
+update the contract's balance tracking.
 
 ```rust
 pub async fn deposit(&self, amount: Amount) -> Result<TransactionId> {
-    let tx = TransferTransaction::new()
-        .hbar_transfer(self.account_id, Hbar::from_tinybars(-(amount as i64)))
-        .hbar_transfer(self.contract_id, Hbar::from_tinybars(amount as i64))
+    // CORRECT: Call the contract's deposit() payable function
+    let tx = ContractExecuteTransaction::new()
+        .contract_id(self.contract_id)
+        .gas(100_000)
+        .payable_amount(Hbar::from_tinybars(amount as i64))
+        .function("deposit")
         .execute(&self.client)
         .await?;
-    
+
     let receipt = tx.get_receipt(&self.client).await?;
     Ok(receipt.transaction_id)
 }
@@ -88,11 +114,12 @@ pub async fn deposit(&self, amount: Amount) -> Result<TransactionId> {
 pub async fn withdraw(&self, amount: Amount) -> Result<TransactionId> {
     let tx = ContractExecuteTransaction::new()
         .contract_id(self.contract_id)
+        .gas(100_000)
         .function("withdraw")
         .function_parameters(ContractFunctionParameters::new().add_uint256(amount))
         .execute(&self.client)
         .await?;
-    
+
     Ok(tx.transaction_id)
 }
 ```
@@ -352,3 +379,66 @@ max_gas_settle = 500000
 8. **Batch settlement**: Multiple recipients settled in one tx
 9. **Batch distribution**: All root contributors receive correct amounts
 10. **Merkle verification**: Prove inclusion in batch
+
+---
+
+## Debugging & Verification
+
+### Verify Transactions On-Chain
+
+After any settlement operation, always verify on-chain status:
+
+```bash
+# Check recent transactions - should show CONTRACTCALL, not just CRYPTOTRANSFER
+curl -s "https://testnet.mirrornode.hedera.com/api/v1/transactions?account.id=0.0.ACCOUNT&limit=5&order=desc" \
+  | jq '.transactions[] | {timestamp: .consensus_timestamp, type: .name, result: .result}'
+
+# Check contract calls specifically
+curl -s "https://testnet.mirrornode.hedera.com/api/v1/contracts/0.0.7729011/results?limit=5&order=desc" \
+  | jq '.results[] | {timestamp, from, result: .error_message}'
+```
+
+### Check Contract State
+
+```bash
+# View all storage slots
+curl -s "https://testnet.mirrornode.hedera.com/api/v1/contracts/0.0.7729011/state" | jq '.state'
+
+# Query balance for an address (balances mapping, selector 0x27e235e3)
+# Replace EVM_ADDRESS with 40 hex chars (no 0x prefix)
+curl -s -X POST "https://testnet.mirrornode.hedera.com/api/v1/contracts/call" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "block": "latest",
+    "data": "0x27e235e3000000000000000000000000EVM_ADDRESS",
+    "to": "0xc6b4bFD28AF2F6999B32510557380497487A60dD"
+  }' | jq '.result'
+```
+
+### Check Event Logs
+
+```bash
+# View deposit/withdraw events (shows actual credited address)
+curl -s "https://testnet.mirrornode.hedera.com/api/v1/contracts/0.0.7729011/results/logs?order=desc&limit=10" \
+  | jq '.logs[] | {timestamp, topics, data}'
+```
+
+### Common Issues
+
+| Symptom | Cause | Solution |
+|---------|-------|----------|
+| Transaction shows `CRYPTOTRANSFER` not `CONTRACTCALL` | Using `TransferTransaction` instead of `ContractExecuteTransaction` | Use `ContractExecuteTransaction` with `payable_amount()` |
+| Balance query returns 0 after deposit | Wrong EVM address for ECDSA accounts | Use key-derived `evm_address` from mirror node |
+| `CONTRACT_REVERT_EXECUTED` | Contract logic rejected the call | Check function parameters, balances, or channel state |
+| CLI shows success but contract reverts | Receipt status not properly checked | Verify via mirror node API |
+
+### Contract Function Selectors
+
+| Function | Selector | Notes |
+|----------|----------|-------|
+| `deposit()` | `0xd0e30db0` | Payable, no parameters |
+| `withdraw(uint256)` | `0x2e1a7d4d` | Amount in tinybars |
+| `balances(address)` | `0x27e235e3` | Public mapping getter |
+| `openChannel(bytes32,address,uint256,uint256)` | `0xcf027915` | channelId, peer, deposit1, deposit2 |
+| `closeChannel(bytes32,uint256,uint256,bytes)` | varies | channelId, bal1, bal2, signatures |
+| `settleBatch(bytes32,bytes32,bytes[])` | varies | batchId, merkleRoot, entries |

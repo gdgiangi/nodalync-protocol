@@ -85,6 +85,9 @@ pub enum MessageType {
     /// Initiate a channel dispute
     ChannelDispute = 0x0504,
 
+    /// Acknowledge a cooperative channel close (responder's signature)
+    ChannelCloseAck = 0x0505,
+
     // =========================================================================
     // Settlement Messages (0x06xx)
     // =========================================================================
@@ -134,6 +137,7 @@ impl MessageType {
             0x0502 => Ok(MessageType::ChannelUpdate),
             0x0503 => Ok(MessageType::ChannelClose),
             0x0504 => Ok(MessageType::ChannelDispute),
+            0x0505 => Ok(MessageType::ChannelCloseAck),
             // Settlement
             0x0600 => Ok(MessageType::SettleBatch),
             0x0601 => Ok(MessageType::SettleConfirm),
@@ -225,6 +229,7 @@ impl std::fmt::Display for MessageType {
             MessageType::ChannelUpdate => write!(f, "CHANNEL_UPDATE"),
             MessageType::ChannelClose => write!(f, "CHANNEL_CLOSE"),
             MessageType::ChannelDispute => write!(f, "CHANNEL_DISPUTE"),
+            MessageType::ChannelCloseAck => write!(f, "CHANNEL_CLOSE_ACK"),
             MessageType::SettleBatch => write!(f, "SETTLE_BATCH"),
             MessageType::SettleConfirm => write!(f, "SETTLE_CONFIRM"),
             MessageType::Ping => write!(f, "PING"),

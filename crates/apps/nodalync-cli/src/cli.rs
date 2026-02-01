@@ -308,9 +308,28 @@ pub enum Commands {
 
     /// Close a payment channel with a peer.
     ///
-    /// Settles the final balances and closes the channel.
+    /// Attempts cooperative close first (requires peer to be online).
+    /// If the peer doesn't respond, suggests using dispute-channel.
     CloseChannel {
         /// Peer ID of the channel to close.
+        peer_id: String,
+    },
+
+    /// Initiate a dispute-based channel close.
+    ///
+    /// Use this when the peer is offline or unresponsive.
+    /// Starts a 24-hour dispute period before funds can be released.
+    DisputeChannel {
+        /// Peer ID of the channel to dispute.
+        peer_id: String,
+    },
+
+    /// Resolve a channel dispute after the waiting period.
+    ///
+    /// Can only be called after the 24-hour dispute period has elapsed.
+    /// Finalizes the channel close and distributes funds.
+    ResolveDispute {
+        /// Peer ID of the disputed channel.
         peer_id: String,
     },
 

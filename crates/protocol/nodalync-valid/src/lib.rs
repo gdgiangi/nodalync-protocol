@@ -109,8 +109,8 @@ pub use l2::{
 };
 pub use message::{is_valid_message_type, validate_message, validate_message_basic};
 pub use payment::{
-    construct_payment_message, validate_payment, validate_payment_basic, BondChecker,
-    PublicKeyLookup,
+    construct_close_message, construct_payment_message, sign_channel_close, validate_payment,
+    validate_payment_basic, verify_channel_close_signature, BondChecker, PublicKeyLookup,
 };
 pub use provenance::validate_provenance;
 pub use version::validate_version;

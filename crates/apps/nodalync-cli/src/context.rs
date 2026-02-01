@@ -8,7 +8,7 @@ use nodalync_ops::DefaultNodeOperations;
 use nodalync_settle::Settlement;
 use nodalync_store::{NodeState, NodeStateConfig};
 
-#[cfg(feature = "hedera")]
+#[cfg(feature = "hedera-sdk")]
 use nodalync_settle::{HederaConfig, HederaSettlement};
 
 use crate::config::CliConfig;
@@ -34,9 +34,9 @@ async fn create_settlement(config: &CliConfig) -> CliResult<Arc<dyn Settlement>>
         .unwrap_or_else(|| config.settlement.network.clone());
 
     match network.as_str() {
-        #[cfg(feature = "hedera")]
+        #[cfg(feature = "hedera-sdk")]
         "hedera-testnet" | "hedera-mainnet" => create_hedera_settlement(config, &network).await,
-        #[cfg(not(feature = "hedera"))]
+        #[cfg(not(feature = "hedera-sdk"))]
         "hedera-testnet" | "hedera-mainnet" => Err(CliError::User(
             "Hedera settlement requires the 'hedera' feature. \
                  Rebuild with: cargo build --features hedera"
@@ -50,7 +50,7 @@ async fn create_settlement(config: &CliConfig) -> CliResult<Arc<dyn Settlement>>
 }
 
 /// Create Hedera settlement instance.
-#[cfg(feature = "hedera")]
+#[cfg(feature = "hedera-sdk")]
 async fn create_hedera_settlement(
     config: &CliConfig,
     network: &str,
@@ -142,6 +142,8 @@ pub struct NodeContext {
     pub network: Option<Arc<NetworkNode>>,
     /// Configuration.
     pub config: CliConfig,
+    /// Private key (for signing operations).
+    pub private_key: PrivateKey,
 }
 
 impl NodeContext {
@@ -164,11 +166,16 @@ impl NodeContext {
         // Create operations without network or settlement
         let ops = DefaultNodeOperations::with_defaults(state, peer_id);
 
+        // Use a dummy private key for local-only operations
+        // (signing operations will fail, but that's expected for local-only)
+        let private_key = PrivateKey::from_bytes([0u8; 32]);
+
         Ok(Self {
             ops,
             settlement: None,
             network: None,
             config,
+            private_key,
         })
     }
 
@@ -245,10 +252,16 @@ impl NodeContext {
         };
 
         // Create settlement based on config (may fail if not configured)
-        let settlement = create_settlement(&config).await.ok();
+        let settlement = match create_settlement(&config).await {
+            Ok(s) => Some(s),
+            Err(e) => {
+                tracing::warn!("Failed to create settlement: {}", e);
+                None
+            }
+        };
 
         // Create operations with network and/or settlement
-        let ops = match (&network, &settlement) {
+        let mut ops = match (&network, &settlement) {
             (Some(net), Some(settle)) => {
                 DefaultNodeOperations::with_defaults_network_and_settlement(
                     state,
@@ -270,11 +283,17 @@ impl NodeContext {
             (None, None) => DefaultNodeOperations::with_defaults(state, peer_id),
         };
 
+        // Set the private key for signing payments
+        if config.network.enabled {
+            ops.set_private_key(private_key.clone());
+        }
+
         Ok(Self {
             ops,
             settlement,
             network,
             config,
+            private_key,
         })
     }
 

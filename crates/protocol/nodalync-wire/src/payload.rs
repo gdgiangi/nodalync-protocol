@@ -289,6 +289,9 @@ pub struct ChannelOpenPayload {
     pub initial_balance: Amount,
     /// Optional on-chain funding transaction
     pub funding_tx: Option<Vec<u8>>,
+    /// Hedera account ID for on-chain settlement (e.g., "0.0.12345")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hedera_account: Option<String>,
 }
 
 /// Payload for CHANNEL_ACCEPT messages.
@@ -303,6 +306,9 @@ pub struct ChannelAcceptPayload {
     pub initial_balance: Amount,
     /// Optional on-chain funding transaction
     pub funding_tx: Option<Vec<u8>>,
+    /// Hedera account ID for on-chain settlement (e.g., "0.0.12345")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hedera_account: Option<String>,
 }
 
 /// Payload for CHANNEL_UPDATE messages.
@@ -350,16 +356,33 @@ impl ChannelBalances {
 
 /// Payload for CHANNEL_CLOSE messages.
 ///
-/// Requests cooperative channel close.
+/// Requests cooperative channel close. The initiator signs the final state
+/// and sends this to the responder, who must verify and counter-sign.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ChannelClosePayload {
     /// Channel identifier
     pub channel_id: Hash,
+    /// Monotonically increasing nonce (highest state seen)
+    pub nonce: u64,
     /// Final agreed balances
     pub final_balances: ChannelBalances,
-    /// Proposed on-chain settlement transaction
-    pub settlement_tx: Vec<u8>,
+    /// Initiator's signature over the close message:
+    /// `sign(channel_id || nonce || initiator_balance || responder_balance)`
+    pub initiator_signature: Signature,
+}
+
+/// Payload for CHANNEL_CLOSE_ACK messages.
+///
+/// Response to a cooperative channel close request. Contains the responder's
+/// signature to complete the two-signature requirement for on-chain settlement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ChannelCloseAckPayload {
+    /// Channel identifier (echoed from close request)
+    pub channel_id: Hash,
+    /// Responder's signature over the same close message
+    pub responder_signature: Signature,
 }
 
 /// Payload for CHANNEL_DISPUTE messages.

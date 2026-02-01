@@ -3,7 +3,7 @@
 //! This module implements handlers for incoming protocol messages,
 //! processing requests from other nodes.
 
-use nodalync_crypto::{content_hash, PeerId, Signature};
+use nodalync_crypto::{content_hash, PeerId, PrivateKey, PublicKey, Signature};
 use nodalync_econ::distribute_revenue;
 use nodalync_net::NetworkEvent;
 use nodalync_store::{
@@ -12,10 +12,11 @@ use nodalync_store::{
 use nodalync_types::{Channel, ChannelState, Payment, Visibility};
 use nodalync_valid::Validator;
 use nodalync_wire::{
-    decode_message, decode_payload, AnnouncePayload, ChannelAcceptPayload, ChannelClosePayload,
-    ChannelOpenPayload, MessageType, PaymentReceipt, PreviewRequestPayload, PreviewResponsePayload,
-    QueryRequestPayload, QueryResponsePayload, SearchPayload, SearchResponsePayload,
-    SearchResult as WireSearchResult, VersionInfo, VersionRequestPayload, VersionResponsePayload,
+    decode_message, decode_payload, AnnouncePayload, ChannelAcceptPayload, ChannelCloseAckPayload,
+    ChannelClosePayload, ChannelOpenPayload, MessageType, PaymentReceipt, PreviewRequestPayload,
+    PreviewResponsePayload, QueryRequestPayload, QueryResponsePayload, SearchPayload,
+    SearchResponsePayload, SearchResult as WireSearchResult, VersionInfo, VersionRequestPayload,
+    VersionResponsePayload,
 };
 use tracing::{debug, info};
 
@@ -365,8 +366,9 @@ where
     /// Handle an incoming channel open request.
     ///
     /// 1. Validate no existing channel
-    /// 2. Create channel state
-    /// 3. Return ChannelAcceptPayload
+    /// 2. Register peer's Hedera account if provided
+    /// 3. Create channel state
+    /// 4. Return ChannelAcceptPayload with our Hedera account
     pub fn handle_channel_open(
         &mut self,
         requester: &PeerId,
@@ -379,7 +381,21 @@ where
             return Err(OpsError::ChannelAlreadyExists);
         }
 
-        // 2. Create channel state
+        // 2. Register peer's Hedera account if provided (enables on-chain channels)
+        if let Some(peer_hedera) = &request.hedera_account {
+            if let Some(settlement) = self.settlement() {
+                if let Ok(account_id) = nodalync_settle::AccountId::from_string(peer_hedera) {
+                    settlement.register_peer_account(requester, account_id);
+                    debug!(
+                        peer = %requester,
+                        hedera_account = %peer_hedera,
+                        "Registered peer's Hedera account from channel open"
+                    );
+                }
+            }
+        }
+
+        // 3. Create channel state
         // For MVP, we auto-accept with a matching deposit
         let my_deposit = request.initial_balance; // Match their deposit
 
@@ -393,11 +409,14 @@ where
 
         self.state.channels.create(requester, channel)?;
 
-        // 3. Return accept payload
+        // 4. Return accept payload with our Hedera account
+        let hedera_account = self.settlement().map(|s| s.get_own_account_string());
+
         Ok(ChannelAcceptPayload {
             channel_id: request.channel_id,
             initial_balance: my_deposit,
             funding_tx: None, // No on-chain funding for MVP
+            hedera_account,
         })
     }
 
@@ -433,6 +452,20 @@ where
             )));
         }
 
+        // Register peer's Hedera account if provided (enables on-chain channels)
+        if let Some(peer_hedera) = &response.hedera_account {
+            if let Some(settlement) = self.settlement() {
+                if let Ok(account_id) = nodalync_settle::AccountId::from_string(peer_hedera) {
+                    settlement.register_peer_account(peer, account_id);
+                    debug!(
+                        peer = %peer,
+                        hedera_account = %peer_hedera,
+                        "Registered peer's Hedera account from channel accept"
+                    );
+                }
+            }
+        }
+
         // Transition to Open state with their deposit
         channel.mark_open(response.initial_balance, timestamp);
         self.state.channels.update(peer, &channel)?;
@@ -448,14 +481,24 @@ where
 
     /// Handle an incoming channel close request.
     ///
-    /// 1. Verify channel exists
-    /// 2. Verify final state
-    /// 3. (Submit settlement - stub)
-    pub fn handle_channel_close(
+    /// This is called on the responder side when receiving a cooperative close request.
+    ///
+    /// 1. Verify channel exists and ID matches
+    /// 2. Verify the initiator's signature
+    /// 3. Verify proposed balances match our local state
+    /// 4. Sign and return our signature
+    ///
+    /// The initiator will then submit both signatures to the chain.
+    pub fn handle_channel_close_request(
         &mut self,
         requester: &PeerId,
         request: &ChannelClosePayload,
-    ) -> OpsResult<()> {
+        private_key: &PrivateKey,
+        requester_public_key: Option<&PublicKey>,
+    ) -> OpsResult<ChannelCloseAckPayload> {
+        use nodalync_types::PendingClose;
+        use nodalync_valid::{sign_channel_close, verify_channel_close_signature};
+
         let timestamp = current_timestamp();
 
         // 1. Verify channel exists
@@ -470,10 +513,138 @@ where
             return Err(OpsError::invalid_operation("channel ID mismatch"));
         }
 
-        // 2. Verify final state (basic check)
-        // In full implementation, verify signatures and state
+        // Cannot close already closed channel
+        if channel.is_closed() {
+            return Err(OpsError::invalid_operation("channel already closed"));
+        }
 
-        // 3. Mark channel as closed
+        // Cannot close if already disputing
+        if channel.pending_dispute.is_some() {
+            return Err(OpsError::invalid_operation("channel has pending dispute"));
+        }
+
+        // 2. Verify initiator's signature (if we have their public key)
+        // Note: In a production system, we'd look up the peer's public key
+        // from a registry. For now, signature verification is optional.
+        if let Some(pubkey) = requester_public_key {
+            let valid = verify_channel_close_signature(
+                pubkey,
+                &request.channel_id,
+                request.nonce,
+                request.final_balances.initiator,
+                request.final_balances.responder,
+                &request.initiator_signature,
+            );
+            if !valid {
+                return Err(OpsError::invalid_operation(
+                    "invalid initiator signature on close request",
+                ));
+            }
+        }
+
+        // 3. Verify proposed balances match our local state
+        // Note: From our perspective as responder:
+        // - Their initiator_balance is what THEY think they should get
+        // - Their responder_balance is what WE should get (from their POV)
+        //
+        // From our local channel state:
+        // - their_balance is what THEY have
+        // - my_balance is what WE have
+        //
+        // So: initiator_balance should == their_balance (what they have)
+        //     responder_balance should == my_balance (what we have)
+        if request.final_balances.initiator != channel.their_balance
+            || request.final_balances.responder != channel.my_balance
+        {
+            tracing::warn!(
+                channel_id = %channel.channel_id,
+                proposed_initiator = request.final_balances.initiator,
+                proposed_responder = request.final_balances.responder,
+                our_their_balance = channel.their_balance,
+                our_my_balance = channel.my_balance,
+                "Close request balances don't match local state"
+            );
+            return Err(OpsError::invalid_operation(
+                "proposed balances don't match local state",
+            ));
+        }
+
+        // Verify nonce matches
+        if request.nonce != channel.nonce {
+            tracing::warn!(
+                channel_id = %channel.channel_id,
+                proposed_nonce = request.nonce,
+                our_nonce = channel.nonce,
+                "Close request nonce doesn't match"
+            );
+            // We allow closing with a higher nonce (they may have payments we haven't seen yet)
+            // but not a lower nonce (potential replay attack)
+            if request.nonce < channel.nonce {
+                return Err(OpsError::invalid_operation(
+                    "proposed nonce is lower than local state",
+                ));
+            }
+        }
+
+        // 4. Sign the close message as responder
+        // We sign with the same parameters they sent (after validation)
+        let responder_signature = sign_channel_close(
+            private_key,
+            &request.channel_id,
+            request.nonce,
+            request.final_balances.initiator,
+            request.final_balances.responder,
+        );
+
+        // Store pending close state (as responder)
+        let pending_close = PendingClose::new_as_responder(
+            (
+                request.final_balances.initiator,
+                request.final_balances.responder,
+            ),
+            request.nonce,
+            request.initiator_signature,
+            timestamp,
+        );
+        channel.pending_close = Some(pending_close);
+        channel.mark_closing(timestamp);
+        self.state.channels.update(requester, &channel)?;
+
+        debug!(
+            channel_id = %request.channel_id,
+            "Signed channel close acknowledgment"
+        );
+
+        Ok(ChannelCloseAckPayload {
+            channel_id: request.channel_id,
+            responder_signature,
+        })
+    }
+
+    /// Handle an incoming channel close request (legacy without signature).
+    ///
+    /// This is a backward-compatible handler that doesn't require signing.
+    /// The channel is closed immediately without on-chain settlement.
+    pub fn handle_channel_close(
+        &mut self,
+        requester: &PeerId,
+        request: &ChannelClosePayload,
+    ) -> OpsResult<()> {
+        let timestamp = current_timestamp();
+
+        // Verify channel exists
+        let mut channel = self
+            .state
+            .channels
+            .get(requester)?
+            .ok_or(OpsError::ChannelNotFound)?;
+
+        // Verify channel ID matches
+        if channel.channel_id != request.channel_id {
+            return Err(OpsError::invalid_operation("channel ID mismatch"));
+        }
+
+        // Mark channel as closed (no on-chain settlement)
         channel.mark_closing(timestamp);
         self.state.channels.update(requester, &channel)?;
 
@@ -696,8 +867,16 @@ where
                                 OpsError::invalid_operation(format!("decode error: {}", e))
                             })?;
                         debug!("Received channel close request");
+                        // Use legacy handler for now (no private key available here)
+                        // A production implementation would need to pass the node's private key
                         self.handle_channel_close(&nodalync_peer, &request)?;
-                        Ok(None) // No response needed for close
+                        Ok(None) // No response needed for legacy close
+                    }
+                    MessageType::ChannelCloseAck => {
+                        // This is handled by the initiator when they receive the response
+                        // No action needed here as it's processed in close_payment_channel()
+                        debug!("Received channel close ack (handled by initiator)");
+                        Ok(None)
                     }
                     MessageType::ChannelAccept => {
                         let response: ChannelAcceptPayload = decode_payload(&message.payload)
@@ -970,6 +1149,7 @@ mod tests {
             channel_id,
             initial_balance: 1000,
             funding_tx: None,
+            hedera_account: Some("0.0.12345".to_string()),
         };
 
         let response = ops.handle_channel_open(&requester, &request).unwrap();
@@ -994,14 +1174,16 @@ mod tests {
             channel_id,
             initial_balance: 1000,
             funding_tx: None,
+            hedera_account: None,
         };
         ops.handle_channel_open(&requester, &open_request).unwrap();
 
         // Now close it
         let close_request = ChannelClosePayload {
             channel_id,
+            nonce: 0,
             final_balances: ChannelBalances::new(1000, 1000),
-            settlement_tx: vec![],
+            initiator_signature: Signature::from_bytes([0u8; 64]),
         };
 
         ops.handle_channel_close(&requester, &close_request)
@@ -1032,6 +1214,7 @@ mod tests {
             channel_id: channel.channel_id,
             initial_balance: 100_0000_0000, // Their matching deposit
             funding_tx: None,
+            hedera_account: Some("0.0.54321".to_string()),
         };
 
         ops.handle_channel_accept(&peer, &accept_response).unwrap();
@@ -1057,6 +1240,7 @@ mod tests {
             channel_id: content_hash(b"wrong channel"),
             initial_balance: 100_0000_0000,
             funding_tx: None,
+            hedera_account: None,
         };
 
         let result = ops.handle_channel_accept(&peer, &wrong_accept);
@@ -1078,6 +1262,7 @@ mod tests {
             channel_id,
             initial_balance: 500,
             funding_tx: None,
+            hedera_account: None,
         };
 
         let result = ops.handle_channel_accept(&peer, &accept);
@@ -1094,6 +1279,7 @@ mod tests {
             channel_id: content_hash(b"nonexistent"),
             initial_balance: 500,
             funding_tx: None,
+            hedera_account: None,
         };
 
         let result = ops.handle_channel_accept(&peer, &accept);

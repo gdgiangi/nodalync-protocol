@@ -1,6 +1,7 @@
 //! Payment channel management commands.
 
 use nodalync_crypto::PeerId;
+use nodalync_ops::CloseResult;
 use nodalync_store::ChannelStore;
 
 use crate::config::CliConfig;
@@ -84,6 +85,9 @@ pub async fn open_channel(
 }
 
 /// Close a payment channel with a peer.
+///
+/// Attempts cooperative close first. If the peer is unresponsive,
+/// returns a message suggesting to use dispute-channel instead.
 pub async fn close_channel(
     config: CliConfig,
     format: OutputFormat,
@@ -95,6 +99,9 @@ pub async fn close_channel(
     // Initialize context with network
     let mut ctx = NodeContext::with_network(config).await?;
 
+    // Bootstrap to connect to the network
+    ctx.bootstrap().await?;
+
     // Get channel info before closing
     let channel = ctx
         .ops
@@ -105,20 +112,197 @@ pub async fn close_channel(
     let my_balance = channel.my_balance;
     let their_balance = channel.their_balance;
 
-    // Close the channel (returns settlement transaction ID if on-chain)
-    let transaction_id = ctx.ops.close_payment_channel(&peer_id).await?;
+    // Try cooperative close with signature
+    let result = ctx
+        .ops
+        .close_payment_channel(&peer_id, &ctx.private_key)
+        .await?;
 
-    let output = ChannelOutput {
-        channel_id,
-        peer_id: peer_id_str.to_string(),
-        state: "Closed".to_string(),
-        my_balance,
-        their_balance,
-        operation: "closed".to_string(),
-        transaction_id,
-    };
+    match result {
+        CloseResult::Success {
+            transaction_id,
+            final_balances,
+        } => {
+            let output = ChannelOutput {
+                channel_id,
+                peer_id: peer_id_str.to_string(),
+                state: "Closed".to_string(),
+                my_balance: final_balances.0,
+                their_balance: final_balances.1,
+                operation: "closed (on-chain)".to_string(),
+                transaction_id: Some(transaction_id),
+            };
+            Ok(output.render(format))
+        }
+        CloseResult::SuccessOffChain { final_balances } => {
+            let output = ChannelOutput {
+                channel_id,
+                peer_id: peer_id_str.to_string(),
+                state: "Closed".to_string(),
+                my_balance: final_balances.0,
+                their_balance: final_balances.1,
+                operation: "closed (off-chain)".to_string(),
+                transaction_id: None,
+            };
+            Ok(output.render(format))
+        }
+        CloseResult::PeerUnresponsive { suggestion } => {
+            // Return as formatted output based on format
+            if format == OutputFormat::Json {
+                Ok(serde_json::json!({
+                    "status": "peer_unresponsive",
+                    "channel_id": channel_id,
+                    "peer_id": peer_id_str,
+                    "my_balance": my_balance,
+                    "their_balance": their_balance,
+                    "suggestion": suggestion
+                })
+                .to_string())
+            } else {
+                Ok(format!(
+                    "Cooperative close failed: peer unresponsive\n\n\
+                    Channel: {}\n\
+                    Your balance: {} tinybars\n\
+                    Their balance: {} tinybars\n\n\
+                    {}",
+                    channel_id, my_balance, their_balance, suggestion
+                ))
+            }
+        }
+        CloseResult::OnChainFailed { error } => Err(CliError::User(format!(
+            "On-chain close failed: {}. Try using 'nodalync dispute-channel {}' instead.",
+            error, peer_id_str
+        ))),
+    }
+}
 
-    Ok(output.render(format))
+/// Initiate a dispute-based channel close.
+///
+/// Use when the peer is unresponsive. Starts a 24-hour waiting period.
+pub async fn dispute_channel(
+    config: CliConfig,
+    format: OutputFormat,
+    peer_id_str: &str,
+) -> CliResult<String> {
+    // Parse peer ID
+    let peer_id = parse_peer_id(peer_id_str)?;
+
+    // Initialize context with network
+    let mut ctx = NodeContext::with_network(config).await?;
+
+    // Get channel info
+    let channel = ctx
+        .ops
+        .get_payment_channel(&peer_id)?
+        .ok_or_else(|| CliError::User("No channel exists with this peer".into()))?;
+
+    // Check if already has pending dispute
+    if channel.pending_dispute.is_some() {
+        return Err(CliError::User(
+            "Channel already has a pending dispute. Use 'nodalync resolve-dispute' when the waiting period is over.".into()
+        ));
+    }
+
+    let channel_id = channel.channel_id.to_string();
+    let my_balance = channel.my_balance;
+    let their_balance = channel.their_balance;
+
+    // Initiate dispute
+    let tx_id = ctx
+        .ops
+        .dispute_payment_channel(&peer_id, &ctx.private_key)
+        .await?;
+
+    if format == OutputFormat::Json {
+        Ok(serde_json::json!({
+            "status": "dispute_initiated",
+            "channel_id": channel_id,
+            "peer_id": peer_id_str,
+            "transaction_id": tx_id,
+            "my_balance": my_balance,
+            "their_balance": their_balance,
+            "waiting_period": "24 hours"
+        })
+        .to_string())
+    } else {
+        Ok(format!(
+            "Dispute initiated\n\n\
+            Channel: {}\n\
+            Transaction: {}\n\
+            Your balance: {} tinybars\n\
+            Their balance: {} tinybars\n\n\
+            Waiting period: 24 hours\n\
+            Run 'nodalync resolve-dispute {}' after the waiting period to finalize.",
+            channel_id, tx_id, my_balance, their_balance, peer_id_str
+        ))
+    }
+}
+
+/// Resolve a channel dispute after the waiting period.
+pub async fn resolve_dispute(
+    config: CliConfig,
+    format: OutputFormat,
+    peer_id_str: &str,
+) -> CliResult<String> {
+    // Parse peer ID
+    let peer_id = parse_peer_id(peer_id_str)?;
+
+    // Initialize context
+    let mut ctx = NodeContext::with_network(config).await?;
+
+    // Check dispute status first
+    let status = ctx.ops.get_pending_dispute_status(&peer_id)?;
+
+    match status {
+        None => {
+            return Err(CliError::User("No pending dispute for this channel".into()));
+        }
+        Some((_, false, remaining_ms)) => {
+            let hours = remaining_ms as f64 / (60.0 * 60.0 * 1000.0);
+            return Err(CliError::User(format!(
+                "Dispute waiting period not yet complete. {:.1} hours remaining.",
+                hours
+            )));
+        }
+        Some((_, true, _)) => {
+            // Can resolve
+        }
+    }
+
+    // Get channel info
+    let channel = ctx
+        .ops
+        .get_payment_channel(&peer_id)?
+        .ok_or_else(|| CliError::User("Channel not found".into()))?;
+
+    let channel_id = channel.channel_id.to_string();
+    let my_balance = channel.my_balance;
+    let their_balance = channel.their_balance;
+
+    // Resolve the dispute
+    let tx_id = ctx.ops.resolve_dispute(&peer_id).await?;
+
+    if format == OutputFormat::Json {
+        Ok(serde_json::json!({
+            "status": "dispute_resolved",
+            "channel_id": channel_id,
+            "peer_id": peer_id_str,
+            "transaction_id": tx_id,
+            "final_balance_ours": my_balance,
+            "final_balance_theirs": their_balance
+        })
+        .to_string())
+    } else {
+        Ok(format!(
+            "Dispute resolved\n\n\
+            Channel: {}\n\
+            Transaction: {}\n\
+            Your final balance: {} tinybars\n\
+            Their final balance: {} tinybars\n\n\
+            Channel is now closed.",
+            channel_id, tx_id, my_balance, their_balance
+        ))
+    }
 }
 
 /// List all payment channels.
