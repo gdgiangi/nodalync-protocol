@@ -924,22 +924,24 @@ impl NodalyncMcpServer {
 
         // Hedera status - async calls done without holding ops lock
         // Fetch both account balance (on-chain HBAR) and contract balance (deposited funds)
-        let (hedera_account_id, hedera_network, hedera_account_balance_hbar, hedera_contract_balance_hbar) =
-            if let (Some(config), Some(settlement)) = (&self.hedera_config, &self.settlement) {
-                // Fetch both balances in parallel for efficiency
-                let (account_balance, contract_balance) = tokio::join!(
-                    settlement.get_account_balance(),
-                    settlement.get_balance()
-                );
-                (
-                    Some(config.account_id.clone()),
-                    Some(config.network.clone()),
-                    account_balance.ok().map(tinybars_to_hbar),
-                    contract_balance.ok().map(tinybars_to_hbar),
-                )
-            } else {
-                (None, None, None, None)
-            };
+        let (
+            hedera_account_id,
+            hedera_network,
+            hedera_account_balance_hbar,
+            hedera_contract_balance_hbar,
+        ) = if let (Some(config), Some(settlement)) = (&self.hedera_config, &self.settlement) {
+            // Fetch both balances in parallel for efficiency
+            let (account_balance, contract_balance) =
+                tokio::join!(settlement.get_account_balance(), settlement.get_balance());
+            (
+                Some(config.account_id.clone()),
+                Some(config.network.clone()),
+                account_balance.ok().map(tinybars_to_hbar),
+                contract_balance.ok().map(tinybars_to_hbar),
+            )
+        } else {
+            (None, None, None, None)
+        };
 
         let output = StatusOutput {
             // Network
@@ -1219,7 +1221,11 @@ impl NodalyncMcpServer {
             Ok(tx_id_opt) => {
                 // Get updated Hedera account balance after settlement (live on-chain balance)
                 let hedera_balance = if let Some(ref settlement) = self.settlement {
-                    settlement.get_account_balance().await.ok().map(tinybars_to_hbar)
+                    settlement
+                        .get_account_balance()
+                        .await
+                        .ok()
+                        .map(tinybars_to_hbar)
                 } else {
                     None
                 };
