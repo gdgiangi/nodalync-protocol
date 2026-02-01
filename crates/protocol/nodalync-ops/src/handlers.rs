@@ -3,12 +3,10 @@
 //! This module implements handlers for incoming protocol messages,
 //! processing requests from other nodes.
 
-use nodalync_crypto::{content_hash, PeerId, PrivateKey, PublicKey, Signature};
+use nodalync_crypto::{content_hash, Hash, PeerId, PrivateKey, PublicKey, Signature};
 use nodalync_econ::distribute_revenue;
 use nodalync_net::NetworkEvent;
-use nodalync_store::{
-    ChannelStore, ContentStore, ManifestStore, QueuedDistribution, SettlementQueueStore,
-};
+use nodalync_store::{ChannelStore, ContentStore, ManifestStore};
 use nodalync_types::{Channel, ChannelState, Payment, Visibility};
 use nodalync_valid::Validator;
 use nodalync_wire::{
@@ -65,17 +63,24 @@ where
 
     /// Handle an incoming query request.
     ///
-    /// CRITICAL: This handler:
+    /// CRITICAL: This handler ensures TRUSTLESS operation by requiring
+    /// on-chain settlement confirmation BEFORE delivering content.
+    ///
+    /// Flow:
     /// 1. Load manifest
     /// 2. Validate access
     /// 3. Validate payment amount
     /// 4. Validate payment signature for paid content (channel, nonce, signature)
     /// 5. Update channel state (credit)
-    /// 6. Calculate ALL distributions via distribute_revenue()
-    /// 7. Enqueue ALL to settlement queue
-    /// 8. Update manifest economics
-    /// 9. Check settlement trigger (threshold/interval)
+    /// 6. Generate payment ID
+    /// 7. Calculate 95/5 distribution (5% synthesis fee to owner, 95% to root L0/L1 contributors)
+    /// 8. **IMMEDIATE ON-CHAIN SETTLEMENT** - blocks until confirmed
+    /// 9. Update manifest economics (only after settlement)
     /// 10. Load and return content with receipt
+    ///
+    /// If settlement fails, the query is REJECTED and no content is delivered.
+    /// This ensures creators are always paid before content is released.
+    /// The 95/5 distribution split is a CORE PROTOCOL FEATURE.
     pub async fn handle_query_request(
         &mut self,
         requester: &PeerId,
@@ -186,38 +191,104 @@ where
             }
         }
 
-        // 6. Calculate ALL distributions via distribute_revenue()
+        // 6. Generate payment ID
+        let payment_id =
+            content_hash(&[request.hash.0.as_slice(), &timestamp.to_be_bytes()].concat());
+
+        // 7. Calculate 95/5 distribution (CORE PROTOCOL FEATURE)
+        // - 5% synthesis fee goes to the content owner
+        // - 95% root pool is distributed proportionally to foundational L0/L1 contributors
         let distributions = distribute_revenue(
             payment_amount,
             &manifest.owner,
             &manifest.provenance.root_l0l1,
         );
 
-        // 7. Enqueue ALL to settlement queue
-        let payment_id =
-            content_hash(&[request.hash.0.as_slice(), &timestamp.to_be_bytes()].concat());
-
+        // Log the distribution split for transparency
         for dist in &distributions {
-            let queued = QueuedDistribution::new(
-                payment_id,
-                dist.recipient,
-                dist.amount,
-                request.hash,
-                timestamp,
+            tracing::debug!(
+                recipient = %dist.recipient,
+                amount = dist.amount,
+                source_hash = %dist.source_hash,
+                "Distribution calculated for settlement"
             );
-            self.state.settlement.enqueue(queued)?;
         }
 
-        // 8. Update manifest economics
+        tracing::info!(
+            payment_id = %payment_id,
+            total_amount = payment_amount,
+            num_recipients = distributions.len(),
+            "95/5 distribution calculated: 5% synthesis fee to owner, 95% to {} root contributors",
+            manifest.provenance.root_l0l1.len()
+        );
+
+        // 8. IMMEDIATE ON-CHAIN SETTLEMENT (required before content delivery)
+        // Content is ONLY delivered after payment is confirmed on-chain.
+        // This ensures trustless operation - no content without verified payment.
+        // The settlement batch includes ALL distributions from the 95/5 split.
+        let transaction_id = if payment_amount > 0 {
+            if let Some(settlement) = self.settlement().cloned() {
+                // Create a single-payment batch for immediate settlement
+                // Note: create_settlement_batch internally calls distribute_revenue
+                // to compute the same 95/5 split for all recipients
+                let payment = Payment::new(
+                    payment_id,
+                    Hash([0u8; 32]),
+                    payment_amount,
+                    manifest.owner,
+                    request.hash,
+                    manifest.provenance.root_l0l1.clone(),
+                    timestamp,
+                    nodalync_crypto::Signature::from_bytes([0u8; 64]),
+                );
+
+                let batch = nodalync_econ::create_settlement_batch(&[payment]);
+
+                // Submit to chain and WAIT for confirmation
+                match settlement.settle_batch(&batch).await {
+                    Ok(tx_id) => {
+                        tracing::info!(
+                            payment_id = %payment_id,
+                            tx_id = %tx_id,
+                            amount = payment_amount,
+                            num_recipients = distributions.len(),
+                            hash = %request.hash,
+                            "Payment settled on-chain with 95/5 distribution before content delivery"
+                        );
+                        Some(tx_id.to_string())
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            payment_id = %payment_id,
+                            error = %e,
+                            hash = %request.hash,
+                            "On-chain settlement FAILED - refusing to deliver content"
+                        );
+                        return Err(OpsError::SettlementFailed(format!(
+                            "Payment settlement failed: {}. Content will not be delivered without confirmed payment.",
+                            e
+                        )));
+                    }
+                }
+            } else {
+                // No settlement configured - cannot process paid queries trustlessly
+                tracing::error!(
+                    hash = %request.hash,
+                    price = payment_amount,
+                    "Paid query received but no settlement configured"
+                );
+                return Err(OpsError::SettlementRequired);
+            }
+        } else {
+            None // Free content, no settlement needed
+        };
+
+        // 9. Update manifest economics (only after successful settlement)
         manifest.economics.record_query(payment_amount);
         manifest.updated_at = timestamp;
         self.state.manifests.update(&manifest)?;
 
-        // 9. Check settlement trigger (threshold/interval)
-        // Don't fail the query if settlement fails
-        let _ = self.trigger_settlement_batch().await;
-
-        // 10. Load and return content
+        // 10. Load and return content (settlement confirmed)
         let content = self
             .state
             .content
@@ -228,9 +299,16 @@ where
             payment_id,
             amount: payment_amount,
             timestamp,
-            channel_nonce: 0, // Would come from channel
+            channel_nonce: request.payment_nonce,
             distributor_signature: Signature::from_bytes([0u8; 64]),
         };
+
+        tracing::info!(
+            hash = %request.hash,
+            payment_amount = payment_amount,
+            transaction_id = ?transaction_id,
+            "Content delivered after settlement confirmation"
+        );
 
         Ok(QueryResponsePayload {
             hash: request.hash,

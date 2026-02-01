@@ -286,6 +286,28 @@ impl NodalyncMcpServer {
                     }
                 }
             });
+
+            // Spawn background cleanup task for old announcements
+            let ops_cleanup = Arc::clone(&ops);
+            tokio::spawn(async move {
+                // Cleanup announcements older than 7 days
+                const ANNOUNCEMENT_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
+                // Run cleanup every hour
+                const CLEANUP_INTERVAL_SECONDS: u64 = 60 * 60;
+
+                loop {
+                    tokio::time::sleep(Duration::from_secs(CLEANUP_INTERVAL_SECONDS)).await;
+
+                    let ops_guard = ops_cleanup.lock().await;
+                    let deleted = ops_guard
+                        .state
+                        .cleanup_old_announcements(ANNOUNCEMENT_TTL_SECONDS);
+                    if deleted > 0 {
+                        info!(deleted = deleted, "Cleaned up old announcements");
+                    }
+                    drop(ops_guard);
+                }
+            });
         }
 
         // Create budget tracker
@@ -346,7 +368,7 @@ impl NodalyncMcpServer {
             deposit_amount_hbar: None,
             provider_peer_id: None,
             payment_receipt_id: None,
-            hedera_balance_hbar: None,
+            hedera_account_balance_hbar: None,
         };
 
         // Get preview to check price and find provider
@@ -562,10 +584,10 @@ impl NodalyncMcpServer {
         // Record payment receipt
         payment_details.payment_receipt_id = Some(hash_to_string(&response.receipt.payment_id));
 
-        // Get updated Hedera balance
+        // Get updated Hedera account balance (live on-chain balance)
         if let Some(ref settlement) = self.settlement {
-            if let Ok(balance) = settlement.get_balance().await {
-                payment_details.hedera_balance_hbar = Some(tinybars_to_hbar(balance));
+            if let Ok(balance) = settlement.get_account_balance().await {
+                payment_details.hedera_account_balance_hbar = Some(tinybars_to_hbar(balance));
             }
         }
 
@@ -863,43 +885,60 @@ impl NodalyncMcpServer {
         description = "Get comprehensive status of the Nodalync node including network connectivity, session budget, payment channels, and Hedera balance. Use this as the primary status check."
     )]
     async fn status(&self) -> Result<CallToolResult, McpError> {
-        let ops = self.ops.lock().await;
+        // Collect data from ops while holding lock, then release before async calls
+        let (peer_id, local_content_count, open_channels, channel_balance_tinybars) = {
+            let ops = self.ops.lock().await;
 
-        // Network status
+            let peer_id = ops.peer_id().to_string();
+
+            // Local content count
+            let filter = ManifestFilter::new();
+            let local_content_count = match ops.state.manifests.list(filter) {
+                Ok(manifests) => manifests.len() as u32,
+                Err(_) => 0,
+            };
+
+            // Channel status
+            let channels = ops.state.channels.list_open().unwrap_or_default();
+            let open_channels = channels.len() as u32;
+            let channel_balance_tinybars: u64 = channels
+                .iter()
+                .map(|(_, c)| c.my_balance + c.their_balance)
+                .sum();
+
+            (
+                peer_id,
+                local_content_count,
+                open_channels,
+                channel_balance_tinybars,
+            )
+        }; // ops lock released here
+
+        // Network status (no lock needed - network methods are thread-safe)
         let (connected_peers, is_bootstrapped) = if let Some(ref network) = self.network {
             let peers = network.connected_peers().len() as u32;
             (peers, peers > 0)
         } else {
             (0, false)
         };
-        let peer_id = ops.peer_id().to_string();
 
-        // Local content count
-        let filter = ManifestFilter::new();
-        let local_content_count = match ops.state.manifests.list(filter) {
-            Ok(manifests) => manifests.len() as u32,
-            Err(_) => 0,
-        };
-
-        // Channel status
-        let channels = ops.state.channels.list_open().unwrap_or_default();
-        let open_channels = channels.len() as u32;
-        let channel_balance_tinybars: u64 = channels
-            .iter()
-            .map(|(_, c)| c.my_balance + c.their_balance)
-            .sum();
-
-        // Hedera status
-        let (hedera_account_id, hedera_network, hedera_balance_hbar) =
+        // Hedera status - async calls done without holding ops lock
+        // Fetch both account balance (on-chain HBAR) and contract balance (deposited funds)
+        let (hedera_account_id, hedera_network, hedera_account_balance_hbar, hedera_contract_balance_hbar) =
             if let (Some(config), Some(settlement)) = (&self.hedera_config, &self.settlement) {
-                let balance = settlement.get_balance().await.ok().map(tinybars_to_hbar);
+                // Fetch both balances in parallel for efficiency
+                let (account_balance, contract_balance) = tokio::join!(
+                    settlement.get_account_balance(),
+                    settlement.get_balance()
+                );
                 (
                     Some(config.account_id.clone()),
                     Some(config.network.clone()),
-                    balance,
+                    account_balance.ok().map(tinybars_to_hbar),
+                    contract_balance.ok().map(tinybars_to_hbar),
                 )
             } else {
-                (None, None, None)
+                (None, None, None, None)
             };
 
         let output = StatusOutput {
@@ -919,14 +958,16 @@ impl NodalyncMcpServer {
             hedera_configured: self.settlement.is_some(),
             hedera_account_id,
             hedera_network,
-            hedera_balance_hbar,
+            hedera_account_balance_hbar,
+            hedera_contract_balance_hbar,
         };
 
         info!(
             connected_peers = connected_peers,
             open_channels = open_channels,
             budget_remaining = output.budget_remaining_hbar,
-            hedera_balance = ?output.hedera_balance_hbar,
+            hedera_account_balance = ?output.hedera_account_balance_hbar,
+            hedera_contract_balance = ?output.hedera_contract_balance_hbar,
             "Status requested"
         );
 
@@ -1176,9 +1217,9 @@ impl NodalyncMcpServer {
         // since we don't have easy access to the private key here
         match ops.close_payment_channel_simple(&peer_id).await {
             Ok(tx_id_opt) => {
-                // Get updated Hedera balance after settlement
+                // Get updated Hedera account balance after settlement (live on-chain balance)
                 let hedera_balance = if let Some(ref settlement) = self.settlement {
-                    settlement.get_balance().await.ok().map(tinybars_to_hbar)
+                    settlement.get_account_balance().await.ok().map(tinybars_to_hbar)
                 } else {
                     None
                 };
@@ -1188,14 +1229,14 @@ impl NodalyncMcpServer {
                     transaction_id: tx_id_opt,
                     final_balance_tinybars: final_balance,
                     peer_id: input.peer_id.clone(),
-                    hedera_balance_hbar: hedera_balance,
+                    hedera_account_balance_hbar: hedera_balance,
                 };
 
                 info!(
                     peer_id = %input.peer_id,
                     tx_id = ?output.transaction_id,
                     final_balance_tinybars = final_balance,
-                    hedera_balance_hbar = ?hedera_balance,
+                    hedera_account_balance_hbar = ?hedera_balance,
                     "Channel closed successfully"
                 );
 
@@ -1463,9 +1504,11 @@ fn build_network_config(
         }
     }
 
-    // Use random port for MCP server (don't conflict with main node)
+    // Listen on all interfaces with random port (required for incoming peer connections)
+    // The request/response protocol requires bidirectional connectivity - peers need
+    // to be able to send responses back to us, which requires listening on 0.0.0.0
     Ok(NetworkConfig {
-        listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse()?],
+        listen_addresses: vec!["/ip4/0.0.0.0/tcp/0".parse()?],
         bootstrap_nodes,
         ..Default::default()
     })

@@ -137,6 +137,17 @@ pub enum OpsError {
     ChannelNotOpen,
 
     // =========================================================================
+    // Settlement Errors
+    // =========================================================================
+    /// Settlement failed - content will not be delivered without confirmed payment.
+    #[error("settlement failed: {0}")]
+    SettlementFailed(String),
+
+    /// Settlement required for paid queries.
+    #[error("settlement required: no on-chain settlement configured for paid queries")]
+    SettlementRequired,
+
+    // =========================================================================
     // Operation Errors
     // =========================================================================
     /// Invalid operation.
@@ -212,6 +223,10 @@ impl OpsError {
             Self::ChannelNotFound => ErrorCode::ChannelNotFound,
             Self::ChannelAlreadyExists => ErrorCode::ChannelNotFound, // Closest match
             Self::ChannelNotOpen => ErrorCode::ChannelClosed,
+
+            // Settlement errors
+            Self::SettlementFailed(_) => ErrorCode::InternalError,
+            Self::SettlementRequired => ErrorCode::PaymentRequired,
 
             // Operation errors
             Self::InvalidOperation(_) => ErrorCode::InvalidManifest,

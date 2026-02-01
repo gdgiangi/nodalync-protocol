@@ -32,7 +32,14 @@ pub trait Settlement: Send + Sync {
     async fn withdraw(&self, amount: u64) -> SettleResult<TransactionId>;
 
     /// Get the current balance in the settlement contract.
+    ///
+    /// This is the amount deposited into the smart contract for payment channels.
     async fn get_balance(&self) -> SettleResult<u64>;
+
+    /// Get the current Hedera account balance (on-chain HBAR).
+    ///
+    /// This is the total HBAR in the Hedera account, separate from contract deposits.
+    async fn get_account_balance(&self) -> SettleResult<u64>;
 
     // =========================================================================
     // Content Attestation

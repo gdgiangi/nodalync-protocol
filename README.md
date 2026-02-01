@@ -43,17 +43,17 @@ creates perpetual economic participation in all derivative work.
 
 | Layer | Crate | Version | Description |
 |-------|-------|---------|-------------|
-| Protocol | `nodalync-crypto` | 0.5.1 | Hashing (SHA-256), Ed25519 signing, PeerId derivation |
-| Protocol | `nodalync-types` | 0.5.1 | All data structures including L2 Entity Graph |
-| Protocol | `nodalync-wire` | 0.5.1 | Deterministic CBOR serialization, 21 message types |
-| Protocol | `nodalync-store` | 0.5.1 | SQLite manifests, filesystem content, settlement queue |
-| Protocol | `nodalync-valid` | 0.5.1 | Content, provenance, payment, L2 validation |
-| Protocol | `nodalync-econ` | 0.5.1 | 95/5 revenue distribution, Merkle batching |
-| Protocol | `nodalync-ops` | 0.5.1 | CREATE, DERIVE, BUILD_L2, MERGE_L2, QUERY |
-| Protocol | `nodalync-net` | 0.5.1 | libp2p (TCP/Noise/yamux), Kademlia DHT, GossipSub |
-| Protocol | `nodalync-settle` | 0.5.1 | Hedera settlement, smart contract deployed to testnet |
-| App | `nodalync-cli` | 0.9.3 | Full CLI with daemon mode, health endpoints, alerting |
-| App | `nodalync-mcp` | 0.9.3 | MCP server for AI agent integration |
+| Protocol | `nodalync-crypto` | 0.6.0 | Hashing (SHA-256), Ed25519 signing, PeerId derivation |
+| Protocol | `nodalync-types` | 0.6.0 | All data structures including L2 Entity Graph |
+| Protocol | `nodalync-wire` | 0.6.0 | Deterministic CBOR serialization, 21 message types |
+| Protocol | `nodalync-store` | 0.6.0 | SQLite manifests, filesystem content, settlement queue |
+| Protocol | `nodalync-valid` | 0.6.0 | Content, provenance, payment, L2 validation |
+| Protocol | `nodalync-econ` | 0.6.0 | 95/5 revenue distribution, Merkle batching |
+| Protocol | `nodalync-ops` | 0.6.0 | CREATE, DERIVE, BUILD_L2, MERGE_L2, QUERY |
+| Protocol | `nodalync-net` | 0.6.0 | libp2p (TCP/Noise/yamux), Kademlia DHT, GossipSub |
+| Protocol | `nodalync-settle` | 0.6.0 | Hedera settlement, smart contract deployed to testnet |
+| App | `nodalync-cli` | 0.9.4 | Full CLI with daemon mode, health endpoints, alerting |
+| App | `nodalync-mcp` | 0.9.4 | MCP server for AI agent integration |
 
 **Hedera Testnet:**
 

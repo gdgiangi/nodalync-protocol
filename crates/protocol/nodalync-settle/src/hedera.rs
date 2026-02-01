@@ -8,9 +8,9 @@ use std::sync::RwLock;
 
 use async_trait::async_trait;
 use hedera::{
-    AccountId as HederaAccountId, Client, ContractCallQuery, ContractExecuteTransaction,
-    ContractFunctionParameters, ContractId, Hbar, PrivateKey, TransactionId as HederaTransactionId,
-    TransactionReceiptQuery,
+    AccountBalanceQuery, AccountId as HederaAccountId, Client, ContractCallQuery,
+    ContractExecuteTransaction, ContractFunctionParameters, ContractId, Hbar, PrivateKey,
+    TransactionId as HederaTransactionId, TransactionReceiptQuery,
 };
 use nodalync_crypto::{Hash, PeerId, Signature, Timestamp};
 use nodalync_types::SettlementBatch;
@@ -257,6 +257,24 @@ impl Settlement for HederaSettlement {
             .map_err(|_| SettleError::hedera_sdk("balance overflow"))?;
 
         Ok(balance)
+    }
+
+    async fn get_account_balance(&self) -> SettleResult<u64> {
+        // Query the actual Hedera account balance (not the contract deposit)
+        let balance = self
+            .retry_policy
+            .execute(|| async {
+                AccountBalanceQuery::new()
+                    .account_id(self.operator_id)
+                    .execute(&self.client)
+                    .await
+                    .map_err(|e| SettleError::hedera_sdk(e.to_string()))
+            })
+            .await?;
+
+        // Convert Hbar to tinybars (u64)
+        let tinybars = balance.hbars.to_tinybars();
+        Ok(tinybars as u64)
     }
 
     async fn attest(

@@ -143,9 +143,9 @@ pub struct AlertPayload {
     pub timestamp: u64,
     /// Current metrics.
     pub metrics: AlertMetrics,
-    /// CLI version (e.g., "0.9.3").
+    /// CLI version (e.g., "0.9.4").
     pub cli_version: String,
-    /// Protocol version (e.g., "0.5.1").
+    /// Protocol version (e.g., "0.6.0").
     pub protocol_version: String,
 }
 
@@ -896,16 +896,16 @@ mod tests {
                 connected_peers: 5,
                 uptime_secs: 100,
             },
-            "0.9.3".to_string(),
-            "0.5.1".to_string(),
+            "0.9.4".to_string(),
+            "0.6.0".to_string(),
         );
 
         assert_eq!(payload.alert_type, AlertType::NodeStarted);
         assert_eq!(payload.severity, AlertSeverity::Info);
         assert_eq!(payload.message, "Test message");
         assert_eq!(payload.metrics.connected_peers, 5);
-        assert_eq!(payload.cli_version, "0.9.3");
-        assert_eq!(payload.protocol_version, "0.5.1");
+        assert_eq!(payload.cli_version, "0.9.4");
+        assert_eq!(payload.protocol_version, "0.6.0");
     }
 
     #[test]
@@ -920,8 +920,8 @@ mod tests {
                 connected_peers: 0,
                 uptime_secs: 60,
             },
-            "0.9.3".to_string(),
-            "0.5.1".to_string(),
+            "0.9.4".to_string(),
+            "0.6.0".to_string(),
         );
 
         let json = format_generic(&payload);
@@ -943,8 +943,8 @@ mod tests {
                 connected_peers: 0,
                 uptime_secs: 60,
             },
-            "0.9.3".to_string(),
-            "0.5.1".to_string(),
+            "0.9.4".to_string(),
+            "0.6.0".to_string(),
         );
 
         let json = format_slack(&payload);
@@ -952,7 +952,7 @@ mod tests {
         assert!(json.contains("#ff0000")); // Critical color
         assert!(json.contains("test-node"));
         assert!(json.contains("CLI Version"));
-        assert!(json.contains("0.9.3"));
+        assert!(json.contains("0.9.4"));
     }
 
     #[test]
@@ -967,8 +967,8 @@ mod tests {
                 connected_peers: 3,
                 uptime_secs: 120,
             },
-            "0.9.3".to_string(),
-            "0.5.1".to_string(),
+            "0.9.4".to_string(),
+            "0.6.0".to_string(),
         );
 
         let json = format_discord(&payload);
@@ -976,8 +976,8 @@ mod tests {
         assert!(json.contains("3581519")); // Green color (0x36a64f) as decimal
         assert!(json.contains("CLI Version"));
         assert!(json.contains("Protocol"));
-        assert!(json.contains("0.9.3"));
-        assert!(json.contains("0.5.1"));
+        assert!(json.contains("0.9.4"));
+        assert!(json.contains("0.6.0"));
     }
 
     #[test]
@@ -992,8 +992,8 @@ mod tests {
                 connected_peers: 0,
                 uptime_secs: 60,
             },
-            "0.9.3".to_string(),
-            "0.5.1".to_string(),
+            "0.9.4".to_string(),
+            "0.6.0".to_string(),
         );
 
         let json = format_pagerduty(&payload);
@@ -1015,8 +1015,8 @@ mod tests {
                 connected_peers: 3,
                 uptime_secs: 120,
             },
-            "0.9.3".to_string(),
-            "0.5.1".to_string(),
+            "0.9.4".to_string(),
+            "0.6.0".to_string(),
         );
 
         let json = format_pagerduty(&payload);

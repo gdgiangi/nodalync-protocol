@@ -1,6 +1,6 @@
 # Nodalync Protocol Specification
 
-**Version:** 0.5.1
+**Version:** 0.6.0
 **Author:** Gabriel Giangi
 **Date:** January 2026
 **Status:** Draft

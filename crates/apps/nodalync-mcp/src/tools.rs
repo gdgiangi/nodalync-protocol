@@ -91,8 +91,9 @@ pub struct PaymentDetails {
     pub payment_receipt_id: Option<String>,
 
     /// Current Hedera account balance after this query (HBAR).
+    /// This is the on-chain account balance, not the settlement contract deposit.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub hedera_balance_hbar: Option<f64>,
+    pub hedera_account_balance_hbar: Option<f64>,
 }
 
 // ============================================================================
@@ -193,9 +194,14 @@ pub struct StatusOutput {
     /// Hedera network (testnet/mainnet).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hedera_network: Option<String>,
-    /// On-chain Hedera balance in HBAR (if configured).
+    /// Hedera account balance in HBAR - total HBAR owned by this account on-chain.
+    /// This is the spendable balance for gas fees, deposits, and transfers.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub hedera_balance_hbar: Option<f64>,
+    pub hedera_account_balance_hbar: Option<f64>,
+    /// Settlement contract balance in HBAR - amount deposited into the smart contract.
+    /// This funds payment channels and is separate from the account balance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hedera_contract_balance_hbar: Option<f64>,
 }
 
 // ============================================================================
@@ -340,8 +346,9 @@ pub struct CloseChannelOutput {
     pub final_balance_tinybars: u64,
     /// Peer ID of the closed channel.
     pub peer_id: String,
-    /// Updated Hedera balance after settlement (HBAR).
-    pub hedera_balance_hbar: Option<f64>,
+    /// Updated Hedera account balance after settlement (HBAR).
+    /// This is the on-chain account balance after funds are returned.
+    pub hedera_account_balance_hbar: Option<f64>,
 }
 
 /// Output from the `reset_channels` tool.
