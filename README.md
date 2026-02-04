@@ -44,16 +44,7 @@ Built with Rust. Peer-to-peer over libp2p. Settlement on Hedera. AI agents conne
 
 ## How It Works
 
-```mermaid
-graph LR
-    A["AI Agent"] -->|"MCP query"| B["Your Node"]
-    B -->|"provenance lookup"| C["L0/L1 Sources"]
-    C -->|"content hash chain"| B
-    B -->|"response"| A
-    A -->|"payment"| D["Hedera Settlement"]
-    D -->|"95% to sources"| C
-    D -->|"5% to synthesizer"| B
-```
+<img width="633" height="224" alt="Screenshot 2026-02-03 at 10 46 20 PM" src="https://github.com/user-attachments/assets/300d3533-305f-4d4a-969b-fafb4a3f155d" />
 
 Knowledge is structured in four layers with strict economic rules:
 
