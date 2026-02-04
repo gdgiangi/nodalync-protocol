@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use nodalync_crypto::{Hash, PeerId, Timestamp};
 use nodalync_wire::payload::PaymentReceipt;
 
-use crate::error::Result;
+use crate::error::{Result, StoreError};
 use crate::traits::CacheStore;
 use crate::types::CachedContent;
 
@@ -99,7 +99,10 @@ impl CacheStore for FsCacheStore {
         file.sync_all()?;
 
         // Store metadata in SQLite
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let hash_bytes = entry.hash.0.to_vec();
         let source_peer_bytes = entry.source_peer.0.to_vec();
         let payment_receipt_json = serde_json::to_string(&entry.payment_proof)?;
@@ -122,7 +125,10 @@ impl CacheStore for FsCacheStore {
 
     fn get(&self, hash: &Hash) -> Result<Option<CachedContent>> {
         // Check metadata first
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let hash_bytes = hash.0.to_vec();
 
         let metadata = conn
@@ -144,7 +150,10 @@ impl CacheStore for FsCacheStore {
         if !path.exists() {
             // Metadata exists but file is missing - remove stale metadata
             drop(conn);
-            let conn = self.conn.lock().unwrap();
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
             conn.execute("DELETE FROM cache WHERE hash = ?1", [&hash_bytes])?;
             return Ok(None);
         }
@@ -169,7 +178,14 @@ impl CacheStore for FsCacheStore {
         }
 
         // Also check metadata exists
-        let conn = self.conn.lock().unwrap();
+        let conn = match self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))
+        {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
         let hash_bytes = hash.0.to_vec();
         conn.query_row("SELECT 1 FROM cache WHERE hash = ?1", [hash_bytes], |_| {
             Ok(true)
@@ -180,7 +196,10 @@ impl CacheStore for FsCacheStore {
     }
 
     fn evict(&mut self, max_size_bytes: u64) -> Result<u64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
 
         // Get current total size
         let current_size: i64 = conn.query_row(
@@ -254,14 +273,20 @@ impl CacheStore for FsCacheStore {
         }
 
         // Clear database
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         conn.execute("DELETE FROM cache", [])?;
 
         Ok(())
     }
 
     fn total_size(&self) -> Result<u64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let size: i64 = conn.query_row(
             "SELECT COALESCE(SUM(size_bytes), 0) FROM cache",
             [],
@@ -274,14 +299,20 @@ impl CacheStore for FsCacheStore {
 impl FsCacheStore {
     /// Get the number of cached entries.
     pub fn count(&self) -> Result<u64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM cache", [], |row| row.get(0))?;
         Ok(count as u64)
     }
 
     /// Update the queried_at timestamp (for LRU refresh on access).
     pub fn touch(&mut self, hash: &Hash, timestamp: Timestamp) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let hash_bytes = hash.0.to_vec();
         conn.execute(
             "UPDATE cache SET queried_at = ?2 WHERE hash = ?1",

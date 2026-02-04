@@ -113,6 +113,8 @@ pub struct SearchResult {
     pub price: Amount,
     pub total_queries: u64,
     pub relevance_score: f64,
+    /// Publisher's reachable multiaddresses for reconnection
+    pub publisher_addresses: Vec<String>,
 }
 ```
 

@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use nodalync_crypto::{Hash, PeerId};
 use nodalync_types::{ProvenanceEntry, Visibility};
 
-use crate::error::Result;
+use crate::error::{Result, StoreError};
 use crate::traits::ProvenanceGraph;
 
 /// SQLite-based provenance graph.
@@ -32,7 +32,10 @@ impl SqliteProvenanceGraph {
 
 impl ProvenanceGraph for SqliteProvenanceGraph {
     fn add(&mut self, hash: &Hash, derived_from: &[Hash]) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let hash_bytes = hash.0.to_vec();
 
         // Insert forward edges
@@ -48,7 +51,10 @@ impl ProvenanceGraph for SqliteProvenanceGraph {
     }
 
     fn get_roots(&self, hash: &Hash) -> Result<Vec<ProvenanceEntry>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let hash_bytes = hash.0.to_vec();
 
         // First check the cache
@@ -132,7 +138,10 @@ impl ProvenanceGraph for SqliteProvenanceGraph {
     }
 
     fn get_derivations(&self, hash: &Hash) -> Result<Vec<Hash>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let hash_bytes = hash.0.to_vec();
 
         let mut stmt =
@@ -154,7 +163,10 @@ impl ProvenanceGraph for SqliteProvenanceGraph {
             return Ok(false); // A hash is not its own ancestor
         }
 
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
 
         // BFS from descendant towards roots
         let mut visited = HashSet::new();
@@ -182,7 +194,10 @@ impl ProvenanceGraph for SqliteProvenanceGraph {
     }
 
     fn cache_root(&mut self, content_hash: &Hash, entry: &ProvenanceEntry) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
 
         let content_bytes = content_hash.0.to_vec();
         let root_bytes = entry.hash.0.to_vec();
@@ -229,7 +244,10 @@ impl SqliteProvenanceGraph {
 
     /// Clear the root cache for a content hash.
     pub fn clear_cache(&mut self, hash: &Hash) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let hash_bytes = hash.0.to_vec();
         conn.execute(
             "DELETE FROM root_cache WHERE content_hash = ?1",
@@ -240,7 +258,10 @@ impl SqliteProvenanceGraph {
 
     /// Get cached roots with full data.
     pub fn get_cached_roots(&self, hash: &Hash) -> Result<Option<Vec<ProvenanceEntry>>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let hash_bytes = hash.0.to_vec();
 
         let mut stmt = conn.prepare(

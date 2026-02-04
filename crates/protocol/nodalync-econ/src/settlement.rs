@@ -304,4 +304,47 @@ mod tests {
         assert_eq!(batch1.batch_id, batch2.batch_id);
         assert_eq!(batch1.merkle_root, batch2.merkle_root);
     }
+
+    #[test]
+    fn test_should_settle_just_under_threshold() {
+        assert!(!should_settle(SETTLEMENT_BATCH_THRESHOLD - 1, 0, 1000));
+    }
+
+    #[test]
+    fn test_should_settle_at_exact_threshold() {
+        assert!(should_settle(SETTLEMENT_BATCH_THRESHOLD, 0, 1000));
+    }
+
+    #[test]
+    fn test_create_batch_empty_payments() {
+        let batch = create_settlement_batch(&[]);
+        assert!(batch.is_empty());
+        assert_eq!(batch.entry_count(), 0);
+        assert_eq!(batch.total_amount(), 0);
+    }
+
+    #[test]
+    fn test_create_batch_deduplicates_recipients() {
+        // Same root contributor appearing in multiple payments should be aggregated
+        let owner = test_peer_id();
+        let root = test_peer_id();
+
+        let entry = ProvenanceEntry::with_weight(test_hash(b"src"), root, Visibility::Shared, 1);
+
+        let payment1 = test_payment(100, owner, vec![entry.clone()]);
+        let payment2 = test_payment(200, owner, vec![entry]);
+
+        let batch = create_settlement_batch(&[payment1, payment2]);
+
+        // Root should appear only once (aggregated from both payments)
+        let root_entries: Vec<_> = batch
+            .entries
+            .iter()
+            .filter(|e| e.recipient == root)
+            .collect();
+        assert_eq!(root_entries.len(), 1);
+
+        // Total should be 300
+        assert_eq!(batch.total_amount(), 300);
+    }
 }

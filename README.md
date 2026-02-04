@@ -1,235 +1,214 @@
-# Nodalync Protocol
+<p align="center">
+  <h1 align="center">Nodalync Protocol</h1>
+</p>
 
-**A protocol for fair knowledge economics in the age of AI.**
+<p align="center">
+  <strong>Publish knowledge. AI agents query it. You get paid — forever.</strong>
+</p>
 
----
+<p align="center">
+  <a href="https://github.com/gdgiangi/nodalync-protocol/actions"><img src="https://img.shields.io/github/actions/workflow/status/gdgiangi/nodalync-protocol/ci.yml?branch=main&style=flat-square&logo=github&label=CI" alt="CI"></a>
+  <a href="https://github.com/gdgiangi/nodalync-protocol/releases"><img src="https://img.shields.io/badge/CLI-v0.10.0-blue?style=flat-square" alt="CLI Version"></a>
+  <a href="docs/spec.md"><img src="https://img.shields.io/badge/protocol-v0.7.0-blue?style=flat-square" alt="Protocol Version"></a>
+  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%2FApache--2.0-orange?style=flat-square" alt="License"></a>
+  <a href="https://hashscan.io/testnet/contract/0.0.7729011"><img src="https://img.shields.io/badge/Hedera-testnet%20live-8259EF?style=flat-square" alt="Hedera Testnet"></a>
+  <a href="https://discord.gg/hYVrEAM6"><img src="https://img.shields.io/badge/Discord-join-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord"></a>
+</p>
 
-### Abstract
-
-We propose a protocol for knowledge economics that ensures original contributors receive
-perpetual, proportional compensation from all downstream value creation. A researcher can
-publish valuable findings once and receive perpetual royalties as the ecosystem builds upon
-their work. A writer's insights compound in value as others synthesize and extend them. The
-protocol enables humans to benefit from knowledge compounding—earning from what they
-know, not just what they continuously produce. The protocol structures knowledge into four
-layers where source material (L0) forms an immutable foundation from which all derivative
-value flows. Cryptographic provenance chains link every insight back to its roots. A revenue
-distribution mechanism routes 95% of transaction value to foundational contributors
-regardless of derivation depth. Unlike prior approaches that attempted to price and transfer
-data, the protocol monetizes query access—buyers gain the right to query a node, not
-ownership of transferable assets. This eliminates secondary markets that have historically
-enabled royalty bypass. The protocol implements Model Context Protocol (MCP) as the
-standard interface for AI agent consumption, creating immediate demand from agentic
-systems. The result is infrastructure where contributing valuable foundational knowledge once
-creates perpetual economic participation in all derivative work.
-
----
-
-### Documentation
-
-📚 **[Read the Docs](https://gdgiangi.github.io/nodalync-protocol/)** — Full documentation, guides, and API reference
-
-📄 **[Whitepaper](https://gdgiangi.github.io/nodalync-protocol/papers/whitepaper.html)** — Protocol design and economics
-
-🚀 **[Quick Start](https://gdgiangi.github.io/nodalync-protocol/quickstart.html)** — Get your node running in under 5 minutes
-
-💬 **[Discord](https://discord.gg/hYVrEAM6)** — Join the community
+<p align="center">
+  <a href="https://gdgiangi.github.io/nodalync-protocol/">Docs</a> &middot;
+  <a href="https://gdgiangi.github.io/nodalync-protocol/quickstart.html">Quick Start</a> &middot;
+  <a href="https://gdgiangi.github.io/nodalync-protocol/papers/whitepaper.html">Whitepaper</a> &middot;
+  <a href="https://discord.gg/hYVrEAM6">Discord</a>
+</p>
 
 ---
 
-### Status
+## What is Nodalync?
 
-**Protocol v0.5.0** · **CLI v0.9.0**
+Nodalync is an open protocol where knowledge creators earn perpetual royalties every time an AI agent queries their work. 95% of every payment flows back to original sources through cryptographic provenance chains — regardless of how many layers of synthesis stand between the query and the source.
 
-| Layer | Crate | Version | Description |
-|-------|-------|---------|-------------|
-| Protocol | `nodalync-crypto` | 0.6.0 | Hashing (SHA-256), Ed25519 signing, PeerId derivation |
-| Protocol | `nodalync-types` | 0.6.0 | All data structures including L2 Entity Graph |
-| Protocol | `nodalync-wire` | 0.6.0 | Deterministic CBOR serialization, 21 message types |
-| Protocol | `nodalync-store` | 0.6.0 | SQLite manifests, filesystem content, settlement queue |
-| Protocol | `nodalync-valid` | 0.6.0 | Content, provenance, payment, L2 validation |
-| Protocol | `nodalync-econ` | 0.6.0 | 95/5 revenue distribution, Merkle batching |
-| Protocol | `nodalync-ops` | 0.6.0 | CREATE, DERIVE, BUILD_L2, MERGE_L2, QUERY |
-| Protocol | `nodalync-net` | 0.6.0 | libp2p (TCP/Noise/yamux), Kademlia DHT, GossipSub |
-| Protocol | `nodalync-settle` | 0.6.0 | Hedera settlement, smart contract deployed to testnet |
-| App | `nodalync-cli` | 0.9.4 | Full CLI with daemon mode, health endpoints, alerting |
-| App | `nodalync-mcp` | 0.9.4 | MCP server for AI agent integration |
+You publish knowledge once. As others build on it, you earn from every downstream query. The protocol monetizes *access*, not ownership — buyers query your node, they never download your data.
 
-**Hedera Testnet:**
+Built with Rust. Peer-to-peer over libp2p. Settlement on Hedera. AI agents connect via MCP.
 
-| Resource | Value |
-|----------|-------|
-| Contract ID | `0.0.7729011` |
-| EVM Address | `0xc6b4bFD28AF2F6999B32510557380497487A60dD` |
-| HashScan | [View Contract](https://hashscan.io/testnet/contract/0.0.7729011) |
+## Why Nodalync?
 
----
+- **Perpetual royalties** — Publish once, earn from every downstream query forever
+- **95/5 revenue distribution** — 95% flows to foundational sources, not intermediaries
+- **AI-native** — MCP interface lets any AI agent query and pay automatically
+- **Local-first** — Your data stays on your node; buyers get query access, not downloads
+- **Cryptographic provenance** — Every insight links to its sources via content-addressed hashes
+- **On-chain settlement** — Payment channels on Hedera with a live testnet smart contract
+- **834+ tests** — Comprehensive test coverage across 11 protocol and application crates
 
-### Building
+## How It Works
 
-**Prerequisites:**
-- Rust 1.85+ (with cargo)
-- SQLite development headers
-- (Optional) `protoc` for Hedera SDK feature
-
-```bash
-# Clone the repository
-git clone https://github.com/gdgiangi/nodalync-protocol.git
-cd nodalync-protocol
-
-# Build all crates
-cargo build --workspace
-
-# Run tests (834+ tests)
-cargo test --workspace
-
-# Build CLI with Hedera settlement support (requires protoc)
-cargo build --release -p nodalync-cli --features hedera-sdk
-
-# Build documentation
-cargo doc --workspace --no-deps --open
-
-# Run smart contract tests
-cd contracts && npm install && npm test
+```mermaid
+graph LR
+    A["AI Agent"] -->|"MCP query"| B["Your Node"]
+    B -->|"provenance lookup"| C["L0/L1 Sources"]
+    C -->|"content hash chain"| B
+    B -->|"response"| A
+    A -->|"payment"| D["Hedera Settlement"]
+    D -->|"95% to sources"| C
+    D -->|"5% to synthesizer"| B
 ```
 
-### CLI Usage
+Knowledge is structured in four layers with strict economic rules:
+
+| Layer | What it contains | Queryable | Economics |
+|-------|-----------------|-----------|-----------|
+| **L0** | Raw documents, notes, transcripts | Yes | Original source — earns royalties |
+| **L1** | Atomic facts extracted from L0 | Yes | Structured claims — earns royalties |
+| **L2** | Your entity graph across L1s | No | Personal perspective — never shared |
+| **L3** | Novel insights synthesizing sources | Yes | Original analysis — captures 5% |
+
+L2 is intentionally private. It represents *your* unique interpretation of knowledge. Its value surfaces when you create L3 insights that others find valuable.
+
+## Quick Start
 
 ```bash
-# Initialize identity
+# Install
+cargo install nodalync-cli
+
+# Initialize your identity
 nodalync init
 
-# Create and publish content
-nodalync publish my-document.txt --visibility shared --price 100
+# Publish content
+nodalync publish my-research.md --visibility shared --price 100
 
-# Build L2 entity graph from L1 sources
-nodalync build-l2 <l1-hash-1> <l1-hash-2>
-
-# Create L3 insight from sources
-nodalync synthesize --sources <hash1>,<hash2> --file insight.md
-
-# Query remote content
-nodalync query <hash>
+# Start your node
+nodalync start
 
 # Check earnings
 nodalync earnings
+```
 
-# Payment channel management
+For the full walkthrough, see the [Quick Start guide](https://gdgiangi.github.io/nodalync-protocol/quickstart.html).
+
+## CLI
+
+```bash
+# Content operations
+nodalync publish document.txt --visibility shared --price 100
+nodalync synthesize --sources <hash1>,<hash2> --file insight.md
+nodalync build-l2 <l1-hash-1> <l1-hash-2>
+nodalync query <hash>
+
+# Node management
+nodalync start --daemon --health --health-port 8080
+nodalync status
+nodalync stop
+
+# Payment channels
 nodalync open-channel <peer-id> --deposit 1.0
 nodalync list-channels
 nodalync close-channel <peer-id>
 ```
 
-### Running a Node
+**Health endpoints** (when `--health` enabled):
+- `GET /health` — `{"status":"ok","connected_peers":N,"uptime_secs":M}`
+- `GET /metrics` — Prometheus metrics
+
+## Network
+
+Three bootstrap nodes are deployed across regions:
+
+| Region | Endpoint |
+|--------|----------|
+| US East | `nodalync-bootstrap.eastus.azurecontainer.io` |
+| EU North | `nodalync-eu.northeurope.azurecontainer.io` |
+| Asia SE | `nodalync-asia.southeastasia.azurecontainer.io` |
+
+**Hedera testnet contract:** [`0.0.7729011`](https://hashscan.io/testnet/contract/0.0.7729011)
+
+## Roadmap
+
+Nodalync provides the provenance and economic layer. We are building toward a complete stack for autonomous knowledge commerce:
+
+| Integration | What it adds | Status |
+|-------------|-------------|--------|
+| [**ERC-8004**](https://eips.ethereum.org/EIPS/eip-8004) | On-chain identity, reputation, and validation for AI agents — verifiable trust for every query | Planned |
+| [**x402**](https://www.x402.org/) | HTTP-native micropayments (Coinbase/Cloudflare) — agents pay per request via standard HTTP | Planned |
+
+**ERC-8004** gives agents verifiable identities and accumulated reputation. Nodalync tells you *what to pay and who to pay*. x402 handles *how to pay* at the HTTP layer. Together: trustless agents discover knowledge, pay with stablecoins, and 95% flows to original sources — no accounts, no subscriptions, no intermediaries.
+
+<details>
+<summary><strong>Crate structure</strong></summary>
+
+| Layer | Crate | Version | Description |
+|-------|-------|---------|-------------|
+| Protocol | `nodalync-crypto` | 0.7.0 | SHA-256 hashing, Ed25519 signing, PeerId derivation |
+| Protocol | `nodalync-types` | 0.7.0 | All data structures including L2 Entity Graph |
+| Protocol | `nodalync-wire` | 0.7.0 | Deterministic CBOR serialization, 21 message types |
+| Protocol | `nodalync-store` | 0.7.0 | SQLite manifests, filesystem content, settlement queue |
+| Protocol | `nodalync-valid` | 0.7.0 | Content, provenance, payment, L2 validation |
+| Protocol | `nodalync-econ` | 0.7.0 | 95/5 revenue distribution, Merkle batching |
+| Protocol | `nodalync-ops` | 0.7.0 | CREATE, DERIVE, BUILD_L2, MERGE_L2, QUERY |
+| Protocol | `nodalync-net` | 0.7.0 | libp2p networking, Kademlia DHT, GossipSub |
+| Protocol | `nodalync-settle` | 0.7.0 | Hedera settlement, smart contract integration |
+| App | `nodalync-cli` | 0.10.0 | Full CLI with daemon mode, health endpoints, alerting |
+| App | `nodalync-mcp` | 0.10.0 | MCP server for AI agent integration |
+
+</details>
+
+<details>
+<summary><strong>Building from source</strong></summary>
+
+**Prerequisites:** Rust 1.85+, SQLite dev headers, (optional) `protoc` for Hedera SDK
 
 ```bash
-# Start node (foreground)
-nodalync start
+git clone https://github.com/gdgiangi/nodalync-protocol.git
+cd nodalync-protocol
 
-# Start node with health endpoint (for containers/monitoring)
-nodalync start --health --health-port 8080
+cargo build --workspace
+cargo test --workspace
 
-# Start as daemon (background)
-nodalync start --daemon
+# With Hedera settlement support
+cargo build --release -p nodalync-cli --features hedera-sdk
 
-# Check status
-nodalync status
-
-# Stop daemon
-nodalync stop
+# Smart contract tests
+cd contracts && npm install && npm test
 ```
 
-**Health Endpoints** (when `--health` enabled):
-- `GET /health` — JSON status: `{"status":"ok","connected_peers":N,"uptime_secs":M}`
-- `GET /metrics` — Prometheus metrics (peers, DHT ops, settlements, queries)
+</details>
 
-**Bootstrap Node:**
-```
-/dns4/nodalync-bootstrap.eastus.azurecontainer.io/tcp/9000/p2p/12D3KooWMqrUmZm4e1BJTRMWqKHCe1TSX9Vu83uJLEyCGr2dUjYm
-```
+<details>
+<summary><strong>Versioning</strong></summary>
 
----
+This repository uses split versioning:
 
-### Knowledge Layers
+| Component | Version | Tag pattern |
+|-----------|---------|-------------|
+| Protocol crates | `0.7.x` (spec-driven) | `protocol-v*` |
+| Application crates | `0.10.x` (feature releases) | `v*` |
 
-| Layer | Content | Operation | Queryable | Economics |
-|-------|---------|-----------|-----------|-----------|
-| **L0** | Raw documents, notes, transcripts | `CREATE` | Yes | Original source material |
-| **L1** | Atomic facts extracted from L0 | `EXTRACT_L1` | Yes | Structured, quotable claims |
-| **L2** | Entities and relationships across L1s | `BUILD_L2` | **No** (personal) | Your perspective, never monetized directly |
-| **L3** | Novel insights synthesizing sources | `DERIVE` | Yes | Original analysis and conclusions |
+**Users:** download releases tagged `v*` for CLI binaries.
+**Developers:** protocol crate versions indicate wire compatibility.
 
-**L2 is Personal:** Your L2 represents your unique interpretation — how you link entities, resolve ambiguities, and structure knowledge. It is never shared or queried. Its value surfaces when you create L3 insights that others find valuable.
+</details>
 
----
+## Documentation
 
-### Core Ideas
+- [Protocol Specification](https://gdgiangi.github.io/nodalync-protocol/spec.html) — Source of truth
+- [Architecture](https://gdgiangi.github.io/nodalync-protocol/architecture.html) — System design
+- [CLI Reference](https://gdgiangi.github.io/nodalync-protocol/modules/10-cli.html) — All commands
+- [MCP Server](https://gdgiangi.github.io/nodalync-protocol/modules/11-mcp.html) — AI agent integration
+- [FAQ](https://gdgiangi.github.io/nodalync-protocol/FAQ.html) — Common questions
 
-1. **Four-layer knowledge model** — L0 (raw sources) → L1 (facts) → L2 (entity graphs) → L3 (insights), with strict rules about what can be queried at each layer
+## Community
 
-2. **Cryptographic provenance** — Every derived insight links back to its foundational sources via content-addressed hashes
+- **Discord:** [discord.gg/hYVrEAM6](https://discord.gg/hYVrEAM6)
+- **X:** [@GabrielGia29751](https://x.com/GabrielGia29751)
+- **Email:** gabegiangi@gmail.com
 
-3. **Fair revenue distribution** — 95% of query payment flows to L0/L1 contributors; synthesis captures only 5%
-
-4. **L2 as personal perspective** — Your entity graph represents your unique understanding; value surfaces through L3 insights
-
-5. **URI-based ontology** — L2 uses RDF-compatible URIs (Schema.org, FOAF, custom) for semantic interoperability
-
-6. **AI-native interface** — MCP integration enables any agent to query knowledge bases with automatic compensation
-
-7. **Local-first sovereignty** — Your data stays on your node; buyers get query access, not downloads
-
----
-
-### Versioning
-
-This repository uses **split versioning** to distinguish protocol stability from application features:
-
-| Component | Version | Stability | Tag Pattern | Release Contents |
-|-----------|---------|-----------|-------------|------------------|
-| **Protocol crates** | `0.5.x` | Stable, spec-driven | `protocol-v*` | GitHub release only |
-| **Application crates** | `0.9.x` | Feature releases | `v*` | Binaries + Docker |
-
-**Protocol crates** (`nodalync-crypto`, `nodalync-types`, `nodalync-wire`, `nodalync-store`, `nodalync-valid`, `nodalync-econ`, `nodalync-ops`, `nodalync-net`, `nodalync-settle`):
-- Version tracks the [protocol specification](./docs/spec.md) (currently v0.5.0)
-- Changes are rare and require spec updates
-- Breaking changes require major version bump
-- Tag `protocol-v0.5.0` → creates GitHub release (libraries, no binaries)
-
-**Application crates** (`nodalync-cli`, `nodalync-mcp`):
-- Version tracks CLI/MCP features
-- Independent release cadence
-- Tag `v0.8.0` → builds binaries for all platforms + Docker images
-
-**For users:** Download releases tagged `v*` (e.g., `v0.8.0`). This is the CLI version.
-
-**For developers:** Protocol crate versions indicate wire compatibility. Same `0.4.x` = compatible.
-
----
-
-### Documentation
-
-- [Protocol Specification](https://gdgiangi.github.io/nodalync-protocol/spec.html)
-- [Architecture](https://gdgiangi.github.io/nodalync-protocol/architecture.html)
-- [FAQ](https://gdgiangi.github.io/nodalync-protocol/FAQ.html)
-- [CLI Reference](https://gdgiangi.github.io/nodalync-protocol/modules/10-cli.html)
-- [MCP Server](https://gdgiangi.github.io/nodalync-protocol/modules/11-mcp.html)
-
----
-
-### Contact
-
-**Gabriel Giangi**  
-gabegiangi@gmail.com  
-DMs open on X: @GabrielGia29751  
-Discord: [discord.gg/hYVrEAM6](https://discord.gg/hYVrEAM6)
-
----
-
-### Contributors
+## Contributors
 
 Gabriel Giangi, Thomas Blanc Bolelli
 
-### License
+## License
 
-The protocol specification is released under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT License](LICENSE-MIT) at your option.
+
+The protocol specification and documentation (`docs/`) are released under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).

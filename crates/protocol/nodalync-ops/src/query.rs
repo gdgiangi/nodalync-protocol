@@ -99,7 +99,11 @@ where
         if let Some(manifest) = self.state.manifests.load(hash)? {
             // 2-3. Check visibility and access
             // For MVP, we only serve our own content or shared content
-            if manifest.visibility == Visibility::Private && manifest.owner != self.peer_id() {
+            if matches!(
+                manifest.visibility,
+                Visibility::Private | Visibility::Offline
+            ) && manifest.owner != self.peer_id()
+            {
                 return Err(OpsError::AccessDenied);
             }
 
@@ -828,16 +832,29 @@ where
             for peer in network.connected_peers().iter().take(5) {
                 match network.send_search(*peer, search_payload.clone()).await {
                     Ok(response) => {
+                        tracing::info!(
+                            peer = %peer,
+                            results_count = response.results.len(),
+                            "Received search response from peer"
+                        );
                         for result in response.results {
                             if seen_hashes.insert(result.hash) {
                                 // Create and cache an announcement so this content can be queried later
+                                // Use the publisher_addresses from the search result for robust reconnection
+                                tracing::info!(
+                                    hash = %result.hash,
+                                    title = %result.title,
+                                    publisher_addresses_count = result.publisher_addresses.len(),
+                                    publisher_addresses = ?result.publisher_addresses,
+                                    "Creating announcement from search result"
+                                );
                                 let announcement = nodalync_wire::AnnouncePayload {
                                     hash: result.hash,
                                     content_type: result.content_type,
                                     title: result.title.clone(),
                                     l1_summary: result.l1_summary.clone(),
                                     price: result.price,
-                                    addresses: vec![],
+                                    addresses: result.publisher_addresses.clone(),
                                     publisher_peer_id: Some(peer.to_string()),
                                 };
                                 self.state.store_announcement(announcement);
@@ -1056,5 +1073,32 @@ mod tests {
 
         // Still not cached because we own it
         assert!(!ops.is_content_cached(&hash));
+    }
+
+    #[test]
+    fn test_get_content_manifest_existing() {
+        let (mut ops, _temp) = create_test_ops();
+
+        // Create content (this also stores the manifest)
+        let content = b"Manifest retrieval test";
+        let meta = Metadata::new("Manifest Test", content.len() as u64);
+        let hash = ops.create_content(content, meta).unwrap();
+
+        // Retrieve the manifest
+        let manifest = ops.get_content_manifest(&hash).unwrap();
+        assert!(manifest.is_some());
+        let manifest = manifest.unwrap();
+        assert_eq!(manifest.hash, hash);
+        assert_eq!(manifest.metadata.title, "Manifest Test");
+    }
+
+    #[test]
+    fn test_get_content_manifest_nonexistent() {
+        let (ops, _temp) = create_test_ops();
+
+        // Try to get a manifest for a hash that doesn't exist
+        let unknown_hash = nodalync_crypto::content_hash(b"nonexistent content");
+        let manifest = ops.get_content_manifest(&unknown_hash).unwrap();
+        assert!(manifest.is_none());
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "nodalync-wire"
-version = "0.6.0"
+version = "0.7.0"
 edition.workspace = true
 description = "Wire protocol serialization for Nodalync"
 license.workspace = true

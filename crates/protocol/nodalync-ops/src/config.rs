@@ -46,6 +46,8 @@ pub struct OpsConfig {
     pub settlement_threshold: Amount,
     /// Settlement interval in milliseconds.
     pub settlement_interval_ms: u64,
+    /// Settlement timeout in milliseconds (for query handler).
+    pub settlement_timeout_ms: u64,
 }
 
 impl Default for OpsConfig {
@@ -56,6 +58,7 @@ impl Default for OpsConfig {
             // From constants
             settlement_threshold: nodalync_types::SETTLEMENT_BATCH_THRESHOLD,
             settlement_interval_ms: nodalync_types::SETTLEMENT_BATCH_INTERVAL_MS,
+            settlement_timeout_ms: 30_000,
         }
     }
 }
@@ -76,6 +79,12 @@ impl OpsConfig {
     /// Set the settlement interval.
     pub fn with_settlement_interval(mut self, interval_ms: u64) -> Self {
         self.settlement_interval_ms = interval_ms;
+        self
+    }
+
+    /// Set the settlement timeout in milliseconds.
+    pub fn with_settlement_timeout(mut self, timeout_ms: u64) -> Self {
+        self.settlement_timeout_ms = timeout_ms;
         self
     }
 }

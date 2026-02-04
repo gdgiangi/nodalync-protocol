@@ -74,6 +74,10 @@ pub enum StoreError {
     /// Path error.
     #[error("Path error: {0}")]
     Path(String),
+
+    /// Lock poisoning error.
+    #[error("lock poisoned: {0}")]
+    LockPoisoned(String),
 }
 
 impl StoreError {
@@ -100,6 +104,11 @@ impl StoreError {
     /// Create a path error.
     pub fn path(msg: impl Into<String>) -> Self {
         StoreError::Path(msg.into())
+    }
+
+    /// Create a lock poisoned error.
+    pub fn lock_poisoned(msg: impl Into<String>) -> Self {
+        StoreError::LockPoisoned(msg.into())
     }
 }
 

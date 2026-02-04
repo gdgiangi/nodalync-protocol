@@ -8,6 +8,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nodalync_net::{InboundRequestId, Network, NetworkEvent, NetworkNode};
+use nodalync_ops::CloseResult;
+use nodalync_store::ChannelStore;
 use nodalync_wire::MessageType;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -305,6 +307,11 @@ pub async fn run_event_loop_with_health(
     // Status update interval (every 5 seconds)
     let mut status_interval = interval(Duration::from_secs(5));
 
+    // Settlement interval (every 5 minutes)
+    let mut settlement_interval = interval(Duration::from_secs(5 * 60));
+    // Skip the first immediate tick
+    settlement_interval.tick().await;
+
     // Track start time for uptime calculation
     let start_time = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -430,6 +437,23 @@ pub async fn run_event_loop_with_health(
                 alert_manager.check_health(peer_count).await;
             }
 
+            // Periodic settlement check
+            _ = settlement_interval.tick() => {
+                // Trigger settlement batch for any channels that have exceeded thresholds
+                match ctx.ops.trigger_settlement_batch().await {
+                    Ok(Some(batch_id)) => {
+                        info!(batch_id = %batch_id, "Background settlement batch submitted");
+                    }
+                    Ok(None) => {
+                        // No settlement needed (threshold not reached)
+                        debug!("Settlement check: no settlement needed");
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Background settlement batch failed");
+                    }
+                }
+            }
+
             // Process network events
             event_result = network.next_event() => {
                 match event_result {
@@ -488,6 +512,53 @@ pub async fn run_event_loop_with_health(
     // Send shutdown alert
     let final_peer_count = network.connected_peers().len() as u32;
     alert_manager.send_shutdown_alert(final_peer_count).await;
+
+    // Close all payment channels on shutdown
+    info!("Closing payment channels on shutdown...");
+    let channels = ctx.ops.state.channels.list_open().unwrap_or_default();
+    if !channels.is_empty() {
+        let channels_count = channels.len();
+        if let Some(private_key) = ctx.ops.private_key().cloned() {
+            let mut closed = 0;
+            let mut disputed = 0;
+
+            for (peer_id, _channel) in channels {
+                // Try cooperative close with short timeout
+                let close_result = tokio::time::timeout(
+                    Duration::from_secs(3),
+                    ctx.ops.close_payment_channel(&peer_id, &private_key),
+                )
+                .await;
+
+                match close_result {
+                    Ok(Ok(CloseResult::Success { .. }))
+                    | Ok(Ok(CloseResult::SuccessOffChain { .. })) => {
+                        closed += 1;
+                    }
+                    _ => {
+                        // Try to initiate dispute for unresponsive/failed channels
+                        if ctx
+                            .ops
+                            .dispute_payment_channel(&peer_id, &private_key)
+                            .await
+                            .is_ok()
+                        {
+                            disputed += 1;
+                        }
+                    }
+                }
+            }
+
+            info!(
+                channels = channels_count,
+                closed = closed,
+                disputed = disputed,
+                "Channel cleanup complete"
+            );
+        } else {
+            warn!("Private key not available, cannot close channels on shutdown");
+        }
+    }
 
     // Signal heartbeat task to shutdown
     if let Some(tx) = heartbeat_shutdown_tx {
@@ -760,6 +831,60 @@ mod tests {
     fn test_check_existing_node_no_file() {
         let temp_dir = TempDir::new().unwrap();
         assert!(check_existing_node(temp_dir.path()).is_none());
+    }
+
+    #[test]
+    fn test_status_file_path() {
+        let base = Path::new("/tmp/nodalync");
+        let path = status_file_path(base);
+        assert_eq!(path, PathBuf::from("/tmp/nodalync/node.status"));
+    }
+
+    #[test]
+    fn test_write_and_read_status_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("node.status");
+
+        let status = RuntimeStatus {
+            connected_peers: 7,
+            updated_at: 1700000000,
+        };
+
+        write_status_file(&path, &status).unwrap();
+
+        let read_back = read_status_file(&path).unwrap();
+        assert_eq!(read_back.connected_peers, 7);
+        assert_eq!(read_back.updated_at, 1700000000);
+    }
+
+    #[test]
+    fn test_remove_status_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("node.status");
+
+        let status = RuntimeStatus {
+            connected_peers: 1,
+            updated_at: 1700000000,
+        };
+        write_status_file(&path, &status).unwrap();
+        assert!(path.exists());
+
+        remove_status_file(&path).unwrap();
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn test_remove_nonexistent_status_file() {
+        let result = remove_status_file(Path::new("/nonexistent/path/node.status"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_health_config_defaults() {
+        let health = HealthConfig::default();
+        assert!(!health.enabled);
+        assert_eq!(health.port, 8080);
+        assert!(!health.alerting.enabled);
     }
 
     #[test]

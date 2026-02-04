@@ -110,4 +110,133 @@ mod tests {
         };
         assert!(event.peer().is_none());
     }
+
+    #[test]
+    fn test_network_event_variants_debug() {
+        let peer = PeerId::random();
+
+        // PeerConnected
+        let event = NetworkEvent::PeerConnected { peer };
+        let debug = format!("{:?}", event);
+        assert!(
+            debug.contains("PeerConnected"),
+            "Debug should contain variant name"
+        );
+
+        // PeerDisconnected
+        let event = NetworkEvent::PeerDisconnected { peer };
+        let debug = format!("{:?}", event);
+        assert!(debug.contains("PeerDisconnected"));
+
+        // DhtPutComplete
+        let event = NetworkEvent::DhtPutComplete {
+            key: Hash([0u8; 32]),
+            success: true,
+        };
+        let debug = format!("{:?}", event);
+        assert!(debug.contains("DhtPutComplete"));
+        assert!(debug.contains("true"));
+
+        // DhtGetResult
+        let event = NetworkEvent::DhtGetResult {
+            key: Hash([1u8; 32]),
+            value: Some(vec![1, 2, 3]),
+        };
+        let debug = format!("{:?}", event);
+        assert!(debug.contains("DhtGetResult"));
+
+        // NewListenAddr
+        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/9000".parse().unwrap();
+        let event = NetworkEvent::NewListenAddr { address: addr };
+        let debug = format!("{:?}", event);
+        assert!(debug.contains("NewListenAddr"));
+
+        // BootstrapComplete
+        let event = NetworkEvent::BootstrapComplete {
+            peers_discovered: 42,
+        };
+        let debug = format!("{:?}", event);
+        assert!(debug.contains("BootstrapComplete"));
+        assert!(debug.contains("42"));
+
+        // BroadcastReceived
+        let event = NetworkEvent::BroadcastReceived {
+            topic: "/nodalync/announce/1.0.0".to_string(),
+            data: vec![10, 20, 30],
+        };
+        let debug = format!("{:?}", event);
+        assert!(debug.contains("BroadcastReceived"));
+        assert!(debug.contains("nodalync"));
+    }
+
+    #[test]
+    fn test_network_event_peer_connected_has_peer_id() {
+        let peer = PeerId::random();
+        let event = NetworkEvent::PeerConnected { peer };
+
+        let extracted = event.peer();
+        assert!(extracted.is_some());
+        assert_eq!(*extracted.unwrap(), peer);
+    }
+
+    #[test]
+    fn test_network_event_dht_get_no_peer() {
+        let event = NetworkEvent::DhtGetResult {
+            key: Hash([5u8; 32]),
+            value: None,
+        };
+
+        assert!(
+            event.peer().is_none(),
+            "DhtGetResult should not have an associated peer"
+        );
+
+        // Also check DhtPutComplete
+        let event = NetworkEvent::DhtPutComplete {
+            key: Hash([6u8; 32]),
+            success: false,
+        };
+        assert!(
+            event.peer().is_none(),
+            "DhtPutComplete should not have an associated peer"
+        );
+
+        // Also check NewListenAddr
+        let addr: Multiaddr = "/ip4/0.0.0.0/tcp/0".parse().unwrap();
+        let event = NetworkEvent::NewListenAddr { address: addr };
+        assert!(
+            event.peer().is_none(),
+            "NewListenAddr should not have an associated peer"
+        );
+
+        // Also check BroadcastReceived
+        let event = NetworkEvent::BroadcastReceived {
+            topic: "test".to_string(),
+            data: vec![],
+        };
+        assert!(
+            event.peer().is_none(),
+            "BroadcastReceived should not have an associated peer"
+        );
+    }
+
+    #[test]
+    fn test_network_event_message_received_has_peer() {
+        let peer = PeerId::random();
+        let msg = Message::new(
+            1,
+            nodalync_wire::MessageType::Ping,
+            Hash([0u8; 32]),
+            0,
+            nodalync_crypto::PeerId::from_bytes([0u8; 20]),
+            vec![],
+            nodalync_crypto::Signature::from_bytes([0u8; 64]),
+        );
+
+        let event = NetworkEvent::MessageReceived { peer, message: msg };
+
+        let extracted = event.peer();
+        assert!(extracted.is_some());
+        assert_eq!(*extracted.unwrap(), peer);
+    }
 }

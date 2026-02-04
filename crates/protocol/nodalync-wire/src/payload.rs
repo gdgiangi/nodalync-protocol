@@ -119,6 +119,10 @@ pub struct SearchResult {
     pub total_queries: u64,
     /// Relevance score (0.0 to 1.0)
     pub relevance_score: f64,
+    /// Publisher's reachable addresses (multiaddrs as strings).
+    /// Used to reconnect to the publisher if the peer disconnects.
+    #[serde(default)]
+    pub publisher_addresses: Vec<String>,
 }
 
 // =============================================================================
@@ -694,5 +698,420 @@ mod tests {
         assert_eq!(decoded.error_code, ErrorCode::ChannelNotFound);
         assert_eq!(decoded.required_channel_peer_id, Some(peer_id));
         assert!(decoded.required_channel_libp2p_peer.is_some());
+    }
+
+    fn test_manifest(
+        hash: Hash,
+        content_type: ContentType,
+        owner: PeerId,
+        price: Amount,
+        visibility: Visibility,
+    ) -> Manifest {
+        use nodalync_types::provenance::Provenance;
+        use nodalync_types::{Economics, Metadata, Version};
+
+        Manifest {
+            hash,
+            content_type,
+            owner,
+            version: Version::new_v1(hash, 1234567890),
+            visibility,
+            access: nodalync_types::AccessControl::default(),
+            metadata: Metadata::new("Test", 0),
+            economics: Economics::with_price(price),
+            provenance: Provenance::new_l0(hash, owner),
+            created_at: 1234567890,
+            updated_at: 1234567890,
+        }
+    }
+
+    #[test]
+    fn test_announce_update_payload_cbor_roundtrip() {
+        let payload = AnnounceUpdatePayload {
+            version_root: test_hash(b"root"),
+            new_hash: test_hash(b"new"),
+            version_number: 2,
+            title: "Updated Content".to_string(),
+            l1_summary: test_l1_summary(),
+            price: 200,
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: AnnounceUpdatePayload = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_search_payload_cbor_roundtrip() {
+        let payload = SearchPayload {
+            query: "machine learning".to_string(),
+            filters: None,
+            limit: 10,
+            offset: 0,
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: SearchPayload = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_search_payload_with_filters_cbor_roundtrip() {
+        let payload = SearchPayload {
+            query: "quantum computing".to_string(),
+            filters: Some(SearchFilters {
+                content_types: Some(vec![ContentType::L0, ContentType::L1]),
+                max_price: Some(500),
+                min_reputation: Some(10),
+                created_after: Some(1000000),
+                created_before: Some(2000000),
+                tags: Some(vec!["physics".to_string(), "quantum".to_string()]),
+            }),
+            limit: 20,
+            offset: 5,
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: SearchPayload = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_search_response_payload_cbor_roundtrip() {
+        let payload = SearchResponsePayload {
+            results: vec![SearchResult {
+                hash: test_hash(b"result1"),
+                content_type: ContentType::L0,
+                title: "First Result".to_string(),
+                owner: PeerId([1u8; 20]),
+                l1_summary: test_l1_summary(),
+                price: 100,
+                total_queries: 42,
+                relevance_score: 0.95,
+                publisher_addresses: vec!["/ip4/127.0.0.1/tcp/9000".to_string()],
+            }],
+            total_count: 1,
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: SearchResponsePayload = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_preview_request_payload_cbor_roundtrip() {
+        let payload = PreviewRequestPayload {
+            hash: test_hash(b"content-to-preview"),
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: PreviewRequestPayload = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_preview_response_payload_cbor_roundtrip() {
+        let hash = test_hash(b"previewed");
+        let payload = PreviewResponsePayload {
+            hash,
+            manifest: test_manifest(
+                hash,
+                ContentType::L0,
+                PeerId([2u8; 20]),
+                100,
+                Visibility::Shared,
+            ),
+            l1_summary: test_l1_summary(),
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: PreviewResponsePayload = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_query_request_payload_cbor_roundtrip() {
+        let hash = test_hash(b"queried");
+        let payload = QueryRequestPayload {
+            hash,
+            query: Some("tell me about X".to_string()),
+            payment: Payment::new(
+                test_hash(b"pay-id"),
+                test_hash(b"channel"),
+                100,
+                PeerId([3u8; 20]),
+                hash,
+                vec![],
+                1234567890,
+                Signature::from_bytes([0u8; 64]),
+            ),
+            version_spec: Some(VersionSpec::Latest),
+            payment_nonce: 5,
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: QueryRequestPayload = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_query_response_payload_cbor_roundtrip() {
+        let hash = test_hash(b"responded");
+        let payload = QueryResponsePayload {
+            hash,
+            content: b"the full content bytes here".to_vec(),
+            manifest: test_manifest(
+                hash,
+                ContentType::L0,
+                PeerId([4u8; 20]),
+                50,
+                Visibility::Shared,
+            ),
+            payment_receipt: PaymentReceipt {
+                payment_id: test_hash(b"receipt"),
+                amount: 50,
+                timestamp: 1234567890,
+                channel_nonce: 3,
+                distributor_signature: Signature::from_bytes([1u8; 64]),
+            },
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: QueryResponsePayload = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_payment_receipt_cbor_roundtrip() {
+        let payload = PaymentReceipt {
+            payment_id: test_hash(b"pay-receipt"),
+            amount: 999,
+            timestamp: 9999999999,
+            channel_nonce: 42,
+            distributor_signature: Signature::from_bytes([7u8; 64]),
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: PaymentReceipt = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_version_request_payload_cbor_roundtrip() {
+        let payload = VersionRequestPayload {
+            version_root: test_hash(b"version-root"),
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: VersionRequestPayload = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_version_response_payload_cbor_roundtrip() {
+        let root = test_hash(b"vroot");
+        let latest = test_hash(b"latest-ver");
+        let payload = VersionResponsePayload {
+            version_root: root,
+            versions: vec![
+                VersionInfo {
+                    hash: test_hash(b"v1"),
+                    number: 1,
+                    timestamp: 1000000,
+                    visibility: Visibility::Shared,
+                    price: 100,
+                },
+                VersionInfo {
+                    hash: latest,
+                    number: 2,
+                    timestamp: 2000000,
+                    visibility: Visibility::Shared,
+                    price: 150,
+                },
+            ],
+            latest,
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: VersionResponsePayload = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_version_info_cbor_roundtrip() {
+        let payload = VersionInfo {
+            hash: test_hash(b"single-version"),
+            number: 5,
+            timestamp: 5555555,
+            visibility: Visibility::Private,
+            price: 250,
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: VersionInfo = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_channel_open_payload_cbor_roundtrip() {
+        let payload = ChannelOpenPayload {
+            channel_id: test_hash(b"channel-open"),
+            initial_balance: 10000,
+            funding_tx: Some(vec![0xDE, 0xAD, 0xBE, 0xEF]),
+            hedera_account: Some("0.0.12345".to_string()),
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: ChannelOpenPayload = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_channel_accept_payload_cbor_roundtrip() {
+        let payload = ChannelAcceptPayload {
+            channel_id: test_hash(b"channel-accept"),
+            initial_balance: 5000,
+            funding_tx: None,
+            hedera_account: Some("0.0.67890".to_string()),
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: ChannelAcceptPayload = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_channel_update_payload_cbor_roundtrip() {
+        let payload = ChannelUpdatePayload {
+            channel_id: test_hash(b"channel-update"),
+            nonce: 7,
+            balances: ChannelBalances::new(8000, 2000),
+            payments: vec![Payment::new(
+                test_hash(b"pay"),
+                test_hash(b"chan"),
+                100,
+                PeerId([5u8; 20]),
+                test_hash(b"q"),
+                vec![],
+                1234567890,
+                Signature::from_bytes([0u8; 64]),
+            )],
+            signature: Signature::from_bytes([2u8; 64]),
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: ChannelUpdatePayload = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_channel_close_payload_cbor_roundtrip() {
+        let payload = ChannelClosePayload {
+            channel_id: test_hash(b"channel-close"),
+            nonce: 15,
+            final_balances: ChannelBalances::new(3000, 7000),
+            initiator_signature: Signature::from_bytes([3u8; 64]),
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: ChannelClosePayload = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_channel_close_ack_payload_cbor_roundtrip() {
+        let payload = ChannelCloseAckPayload {
+            channel_id: test_hash(b"channel-close-ack"),
+            responder_signature: Signature::from_bytes([4u8; 64]),
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: ChannelCloseAckPayload = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_channel_dispute_payload_cbor_roundtrip() {
+        let payload = ChannelDisputePayload {
+            channel_id: test_hash(b"channel-dispute"),
+            claimed_state: ChannelUpdatePayload {
+                channel_id: test_hash(b"channel-dispute"),
+                nonce: 10,
+                balances: ChannelBalances::new(1000, 9000),
+                payments: vec![],
+                signature: Signature::from_bytes([5u8; 64]),
+            },
+            evidence: vec![vec![1, 2, 3], vec![4, 5, 6]],
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: ChannelDisputePayload = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_settle_batch_payload_cbor_roundtrip() {
+        let payload = SettleBatchPayload {
+            batch_id: test_hash(b"batch"),
+            entries: vec![SettlementEntry {
+                recipient: PeerId([6u8; 20]),
+                amount: 5000,
+                provenance_hashes: vec![test_hash(b"prov1"), test_hash(b"prov2")],
+                payment_ids: vec![test_hash(b"pay1")],
+            }],
+            merkle_root: test_hash(b"merkle"),
+            signature: Signature::from_bytes([8u8; 64]),
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: SettleBatchPayload = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_settlement_entry_cbor_roundtrip() {
+        let payload = SettlementEntry {
+            recipient: PeerId([7u8; 20]),
+            amount: 12345,
+            provenance_hashes: vec![test_hash(b"p1"), test_hash(b"p2"), test_hash(b"p3")],
+            payment_ids: vec![test_hash(b"id1"), test_hash(b"id2")],
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: SettlementEntry = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_settle_confirm_payload_cbor_roundtrip() {
+        let payload = SettleConfirmPayload {
+            batch_id: test_hash(b"confirmed-batch"),
+            transaction_id: "0.0.12345@1234567890.123456789".to_string(),
+            block_number: 42,
+            timestamp: 1234567890000,
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: SettleConfirmPayload = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_peer_info_payload_cbor_roundtrip() {
+        let payload = PeerInfoPayload {
+            peer_id: PeerId([9u8; 20]),
+            public_key: PublicKey::from_bytes([10u8; 32]),
+            addresses: vec![
+                "/ip4/127.0.0.1/tcp/9000".to_string(),
+                "/ip4/10.0.0.1/tcp/9000".to_string(),
+            ],
+            capabilities: vec![Capability::Query, Capability::Channel, Capability::Settle],
+            content_count: 100,
+            uptime: 86400,
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: PeerInfoPayload = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
     }
 }

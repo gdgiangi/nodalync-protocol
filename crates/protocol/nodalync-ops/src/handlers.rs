@@ -3,10 +3,10 @@
 //! This module implements handlers for incoming protocol messages,
 //! processing requests from other nodes.
 
-use nodalync_crypto::{content_hash, Hash, PeerId, PrivateKey, PublicKey, Signature};
+use nodalync_crypto::{content_hash, Hash, PeerId, PrivateKey, Signature};
 use nodalync_econ::distribute_revenue;
 use nodalync_net::NetworkEvent;
-use nodalync_store::{ChannelStore, ContentStore, ManifestStore};
+use nodalync_store::{ChannelStore, ContentStore, ManifestStore, PeerStore};
 use nodalync_types::{Channel, ChannelState, Payment, Visibility};
 use nodalync_valid::Validator;
 use nodalync_wire::{
@@ -46,7 +46,10 @@ where
             .ok_or(OpsError::ManifestNotFound(request.hash))?;
 
         // 2. Validate access (basic visibility check)
-        if manifest.visibility == Visibility::Private {
+        if matches!(
+            manifest.visibility,
+            Visibility::Private | Visibility::Offline
+        ) {
             return Err(OpsError::AccessDenied);
         }
 
@@ -97,7 +100,10 @@ where
             .ok_or(OpsError::ManifestNotFound(request.hash))?;
 
         // 2. Validate access
-        if manifest.visibility == Visibility::Private {
+        if matches!(
+            manifest.visibility,
+            Visibility::Private | Visibility::Offline
+        ) {
             return Err(OpsError::AccessDenied);
         }
 
@@ -115,13 +121,20 @@ where
             match self.state.channels.get(requester)? {
                 Some(channel) if channel.is_open() => {
                     // Full payment validation: signature, nonce, amount, provenance
-                    // Note: We pass None for public key lookup in MVP. Full signature
-                    // verification requires a peer key registry.
+                    let requester_pubkey = self
+                        .state
+                        .peers
+                        .get(requester)
+                        .ok()
+                        .flatten()
+                        .map(|info| info.public_key)
+                        .filter(|pk| pk.0 != [0u8; 32]);
+
                     nodalync_valid::validate_payment(
                         &request.payment,
                         &channel,
                         &manifest,
-                        None, // TODO: Get requester's public key from peer registry
+                        requester_pubkey.as_ref(),
                         request.payment_nonce,
                     )
                     .map_err(|e| OpsError::PaymentValidationFailed(e.to_string()))?;
@@ -164,6 +177,24 @@ where
                     .concat(),
                 );
 
+                let payment_sig = match self.private_key() {
+                    Some(pk) => {
+                        // Create a temporary payment to compute the signing message
+                        let tmp = Payment::new(
+                            payment_id,
+                            channel.channel_id,
+                            payment_amount,
+                            self.peer_id(),
+                            request.hash,
+                            manifest.provenance.root_l0l1.clone(),
+                            timestamp,
+                            Signature::from_bytes([0u8; 64]),
+                        );
+                        let msg = nodalync_valid::construct_payment_message(&tmp);
+                        nodalync_crypto::sign(pk, &msg)
+                    }
+                    None => Signature::from_bytes([0u8; 64]),
+                };
                 let payment = Payment::new(
                     payment_id,
                     channel.channel_id,
@@ -172,7 +203,7 @@ where
                     request.hash,
                     manifest.provenance.root_l0l1.clone(),
                     timestamp,
-                    Signature::from_bytes([0u8; 64]), // Stub signature
+                    payment_sig,
                 );
 
                 // Credit our side (receive payment)
@@ -231,6 +262,23 @@ where
                 // Create a single-payment batch for immediate settlement
                 // Note: create_settlement_batch internally calls distribute_revenue
                 // to compute the same 95/5 split for all recipients
+                let settle_sig = match self.private_key() {
+                    Some(pk) => {
+                        let tmp = Payment::new(
+                            payment_id,
+                            Hash([0u8; 32]),
+                            payment_amount,
+                            manifest.owner,
+                            request.hash,
+                            manifest.provenance.root_l0l1.clone(),
+                            timestamp,
+                            Signature::from_bytes([0u8; 64]),
+                        );
+                        let msg = nodalync_valid::construct_payment_message(&tmp);
+                        nodalync_crypto::sign(pk, &msg)
+                    }
+                    None => Signature::from_bytes([0u8; 64]),
+                };
                 let payment = Payment::new(
                     payment_id,
                     Hash([0u8; 32]),
@@ -239,14 +287,19 @@ where
                     request.hash,
                     manifest.provenance.root_l0l1.clone(),
                     timestamp,
-                    nodalync_crypto::Signature::from_bytes([0u8; 64]),
+                    settle_sig,
                 );
 
                 let batch = nodalync_econ::create_settlement_batch(&[payment]);
 
-                // Submit to chain and WAIT for confirmation
-                match settlement.settle_batch(&batch).await {
-                    Ok(tx_id) => {
+                // Submit to chain and WAIT for confirmation (with timeout)
+                let settlement_timeout =
+                    std::time::Duration::from_millis(self.config.settlement_timeout_ms);
+                let settle_result =
+                    tokio::time::timeout(settlement_timeout, settlement.settle_batch(&batch)).await;
+
+                match settle_result {
+                    Ok(Ok(tx_id)) => {
                         tracing::info!(
                             payment_id = %payment_id,
                             tx_id = %tx_id,
@@ -257,7 +310,7 @@ where
                         );
                         Some(tx_id.to_string())
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         tracing::error!(
                             payment_id = %payment_id,
                             error = %e,
@@ -268,6 +321,17 @@ where
                             "Payment settlement failed: {}. Content will not be delivered without confirmed payment.",
                             e
                         )));
+                    }
+                    Err(_elapsed) => {
+                        tracing::error!(
+                            payment_id = %payment_id,
+                            hash = %request.hash,
+                            timeout_ms = self.config.settlement_timeout_ms,
+                            "On-chain settlement TIMED OUT - refusing to deliver content"
+                        );
+                        return Err(OpsError::SettlementFailed(
+                            "settlement timed out".to_string(),
+                        ));
                     }
                 }
             } else {
@@ -295,12 +359,24 @@ where
             .load(&request.hash)?
             .ok_or(OpsError::NotFound(request.hash))?;
 
+        let receipt_sig = match self.private_key() {
+            Some(pk) => {
+                let msg = nodalync_valid::construct_receipt_message(
+                    &payment_id,
+                    payment_amount,
+                    timestamp,
+                    request.payment_nonce,
+                );
+                nodalync_crypto::sign(pk, &msg)
+            }
+            None => Signature::from_bytes([0u8; 64]),
+        };
         let receipt = PaymentReceipt {
             payment_id,
             amount: payment_amount,
             timestamp,
             channel_nonce: request.payment_nonce,
-            distributor_signature: Signature::from_bytes([0u8; 64]),
+            distributor_signature: receipt_sig,
         };
 
         tracing::info!(
@@ -390,6 +466,12 @@ where
         // Search local manifests
         let manifests = self.state.manifests.list(filter)?;
 
+        // Get our listen addresses to include in results for reconnection
+        let publisher_addresses: Vec<String> = self
+            .network()
+            .map(|n| n.listen_addresses().iter().map(|a| a.to_string()).collect())
+            .unwrap_or_default();
+
         // Convert to SearchResult
         let results: Vec<WireSearchResult> = manifests
             .iter()
@@ -415,6 +497,7 @@ where
                     price: m.economics.price,
                     total_queries: m.economics.total_queries,
                     relevance_score,
+                    publisher_addresses: publisher_addresses.clone(),
                 }
             })
             .collect();
@@ -572,7 +655,6 @@ where
         requester: &PeerId,
         request: &ChannelClosePayload,
         private_key: &PrivateKey,
-        requester_public_key: Option<&PublicKey>,
     ) -> OpsResult<ChannelCloseAckPayload> {
         use nodalync_types::PendingClose;
         use nodalync_valid::{sign_channel_close, verify_channel_close_signature};
@@ -601,12 +683,20 @@ where
             return Err(OpsError::invalid_operation("channel has pending dispute"));
         }
 
-        // 2. Verify initiator's signature (if we have their public key)
-        // Note: In a production system, we'd look up the peer's public key
-        // from a registry. For now, signature verification is optional.
-        if let Some(pubkey) = requester_public_key {
+        // 2. Verify initiator's signature using peer key registry
+        // Soft-fail: if peer key is unknown, skip verification (consistent with C1/C2)
+        let requester_pubkey = self
+            .state
+            .peers
+            .get(requester)
+            .ok()
+            .flatten()
+            .map(|info| info.public_key)
+            .filter(|pk| pk.0 != [0u8; 32]);
+
+        if let Some(pubkey) = requester_pubkey {
             let valid = verify_channel_close_signature(
-                pubkey,
+                &pubkey,
                 &request.channel_id,
                 request.nonce,
                 request.final_balances.initiator,
@@ -618,6 +708,11 @@ where
                     "invalid initiator signature on close request",
                 ));
             }
+        } else {
+            tracing::debug!(
+                requester = %requester,
+                "No public key for close requester - skipping signature verification"
+            );
         }
 
         // 3. Verify proposed balances match our local state
@@ -697,39 +792,6 @@ where
             channel_id: request.channel_id,
             responder_signature,
         })
-    }
-
-    /// Handle an incoming channel close request (legacy without signature).
-    ///
-    /// This is a backward-compatible handler that doesn't require signing.
-    /// The channel is closed immediately without on-chain settlement.
-    pub fn handle_channel_close(
-        &mut self,
-        requester: &PeerId,
-        request: &ChannelClosePayload,
-    ) -> OpsResult<()> {
-        let timestamp = current_timestamp();
-
-        // Verify channel exists
-        let mut channel = self
-            .state
-            .channels
-            .get(requester)?
-            .ok_or(OpsError::ChannelNotFound)?;
-
-        // Verify channel ID matches
-        if channel.channel_id != request.channel_id {
-            return Err(OpsError::invalid_operation("channel ID mismatch"));
-        }
-
-        // Mark channel as closed (no on-chain settlement)
-        channel.mark_closing(timestamp);
-        self.state.channels.update(requester, &channel)?;
-
-        channel.mark_closed(timestamp);
-        self.state.channels.update(requester, &channel)?;
-
-        Ok(())
     }
 
     /// Handle a broadcast announcement from GossipSub.
@@ -822,9 +884,33 @@ where
                     message.payload.len()
                 );
 
-                // Use the sender from the signed message - this is the authoritative Nodalync PeerId.
-                // The sender is included in the message hash that's signed, so we can trust it
-                // as long as the signature is valid (TODO: add signature verification here).
+                // SECURITY: Verify message signature before trusting sender identity.
+                let sender_pubkey = self
+                    .state
+                    .peers
+                    .get(&message.sender)
+                    .ok()
+                    .flatten()
+                    .map(|info| info.public_key)
+                    .filter(|pk| pk.0 != [0u8; 32]);
+
+                if let Some(pubkey) = &sender_pubkey {
+                    if !nodalync_wire::verify_message_signature(&message, pubkey) {
+                        tracing::warn!(
+                            sender = %message.sender,
+                            msg_type = ?message.message_type,
+                            "Message signature verification FAILED - rejecting"
+                        );
+                        return Ok(None);
+                    }
+                } else {
+                    // Peer key not yet known — soft-fail during bootstrap.
+                    tracing::debug!(
+                        sender = %message.sender,
+                        "No public key for sender - skipping signature verification"
+                    );
+                }
+
                 let nodalync_peer = message.sender;
 
                 // Handle the request based on message type
@@ -945,10 +1031,27 @@ where
                                 OpsError::invalid_operation(format!("decode error: {}", e))
                             })?;
                         debug!("Received channel close request");
-                        // Use legacy handler for now (no private key available here)
-                        // A production implementation would need to pass the node's private key
-                        self.handle_channel_close(&nodalync_peer, &request)?;
-                        Ok(None) // No response needed for legacy close
+
+                        match self.private_key().cloned() {
+                            Some(pk) => {
+                                let ack = self.handle_channel_close_request(
+                                    &nodalync_peer,
+                                    &request,
+                                    &pk,
+                                )?;
+                                let response_bytes =
+                                    nodalync_wire::encode_payload(&ack).map_err(|e| {
+                                        OpsError::invalid_operation(format!(
+                                            "encoding error: {}",
+                                            e
+                                        ))
+                                    })?;
+                                Ok(Some((MessageType::ChannelCloseAck, response_bytes)))
+                            }
+                            None => Err(OpsError::invalid_operation(
+                                "private key required for channel close",
+                            )),
+                        }
                     }
                     MessageType::ChannelCloseAck => {
                         // This is handled by the initiator when they receive the response
@@ -1242,7 +1345,13 @@ mod tests {
 
     #[test]
     fn test_handle_channel_close() {
-        let (mut ops, _temp) = create_test_ops();
+        let (private_key, public_key) = generate_identity();
+        let peer_id = peer_id_from_public_key(&public_key);
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = NodeStateConfig::new(temp_dir.path());
+        let state = nodalync_store::NodeState::open(config).unwrap();
+        let mut ops = DefaultNodeOperations::with_defaults(state, peer_id);
 
         // First open a channel
         let requester = test_peer_id();
@@ -1256,7 +1365,7 @@ mod tests {
         };
         ops.handle_channel_open(&requester, &open_request).unwrap();
 
-        // Now close it
+        // Close it — requester is unknown peer, so soft-fail skips sig check
         let close_request = ChannelClosePayload {
             channel_id,
             nonce: 0,
@@ -1264,12 +1373,13 @@ mod tests {
             initiator_signature: Signature::from_bytes([0u8; 64]),
         };
 
-        ops.handle_channel_close(&requester, &close_request)
+        let _ack = ops
+            .handle_channel_close_request(&requester, &close_request, &private_key)
             .unwrap();
 
-        // Verify channel is closed
+        // Verify channel is closing
         let channel = ops.get_payment_channel(&requester).unwrap().unwrap();
-        assert!(channel.is_closed());
+        assert!(channel.state == nodalync_types::ChannelState::Closing || channel.is_closed());
     }
 
     #[tokio::test]
@@ -1614,5 +1724,64 @@ mod tests {
             "Paid content without channel should return ChannelRequired: {:?}",
             result
         );
+    }
+
+    #[tokio::test]
+    async fn test_handle_search_request_matches_content() {
+        let (mut ops, _temp) = create_test_ops();
+
+        // Create and publish content
+        let content = b"Blockchain and distributed ledger technology overview";
+        let meta = Metadata::new("Blockchain Guide", content.len() as u64);
+        let hash = ops.create_content(content, meta).unwrap();
+        ops.publish_content(&hash, Visibility::Shared, 50)
+            .await
+            .unwrap();
+
+        // Search for matching query
+        let requester = test_peer_id();
+        let request = SearchPayload {
+            query: "blockchain".to_string(),
+            filters: None,
+            limit: 10,
+            offset: 0,
+        };
+
+        let response = ops.handle_search_request(&requester, &request).unwrap();
+        assert!(
+            response.total_count >= 1,
+            "Should find at least one matching result"
+        );
+        assert!(response.results.iter().any(|r| r.hash == hash));
+    }
+
+    #[test]
+    fn test_handle_search_request_empty_results() {
+        let (mut ops, _temp) = create_test_ops();
+
+        // Search for content that does not exist
+        let requester = test_peer_id();
+        let request = SearchPayload {
+            query: "nonexistent_term_xyz_12345".to_string(),
+            filters: None,
+            limit: 10,
+            offset: 0,
+        };
+
+        let response = ops.handle_search_request(&requester, &request).unwrap();
+        assert_eq!(response.total_count, 0);
+        assert!(response.results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_handle_network_event_unknown_type() {
+        let (mut ops, _temp) = create_test_ops();
+
+        // Create a network event with a PeerConnected type (not a request)
+        let peer = nodalync_net::PeerId::random();
+        let event = NetworkEvent::PeerConnected { peer };
+
+        let result = ops.handle_network_event(event).await.unwrap();
+        assert!(result.is_none(), "PeerConnected should return None");
     }
 }

@@ -1,7 +1,5 @@
 //! Interactive setup wizard for CLI configuration.
 
-use std::path::PathBuf;
-
 use dialoguer::{Confirm, Input, Password, Select};
 
 use crate::config::CliConfig;
@@ -203,15 +201,8 @@ fn configure_hedera_credentials(config: &mut CliConfig, network: &str) -> CliRes
         .interact()
         .map_err(|e| CliError::user(format!("Wizard cancelled: {}", e)))?;
 
-    // Determine key file path using the same logic as config.rs
-    let data_dir = std::env::var("NODALYNC_DATA_DIR")
-        .map(PathBuf::from)
-        .ok()
-        .or_else(|| {
-            directories::ProjectDirs::from("io", "nodalync", "nodalync")
-                .map(|dirs| dirs.data_dir().to_path_buf())
-        })
-        .unwrap_or_else(|| PathBuf::from(".nodalync"));
+    // Determine key file path using the shared default data directory
+    let data_dir = nodalync_store::default_data_dir();
     let key_path = data_dir.join("hedera.key");
 
     // Create directory if needed
@@ -273,5 +264,25 @@ mod tests {
         assert!(SettlementOption::Mock.to_string().contains("Mock"));
         assert!(SettlementOption::Testnet.to_string().contains("Testnet"));
         assert!(SettlementOption::Mainnet.to_string().contains("Mainnet"));
+    }
+
+    #[test]
+    fn test_network_option_equality() {
+        assert_ne!(NetworkOption::Enabled, NetworkOption::Disabled);
+        assert_eq!(NetworkOption::Enabled, NetworkOption::Enabled);
+        assert_eq!(NetworkOption::Disabled, NetworkOption::Disabled);
+    }
+
+    #[test]
+    fn test_settlement_option_equality() {
+        // All three variants should be distinct
+        assert_ne!(SettlementOption::Mock, SettlementOption::Testnet);
+        assert_ne!(SettlementOption::Mock, SettlementOption::Mainnet);
+        assert_ne!(SettlementOption::Testnet, SettlementOption::Mainnet);
+
+        // Each variant should equal itself
+        assert_eq!(SettlementOption::Mock, SettlementOption::Mock);
+        assert_eq!(SettlementOption::Testnet, SettlementOption::Testnet);
+        assert_eq!(SettlementOption::Mainnet, SettlementOption::Mainnet);
     }
 }

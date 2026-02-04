@@ -45,7 +45,10 @@ impl SqlitePeerStore {
 
 impl PeerStore for SqlitePeerStore {
     fn upsert(&mut self, peer: &PeerInfo) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
 
         let peer_id_bytes = peer.peer_id.0.to_vec();
         let public_key_bytes = peer.public_key.0.to_vec();
@@ -74,7 +77,10 @@ impl PeerStore for SqlitePeerStore {
     }
 
     fn get(&self, peer_id: &PeerId) -> Result<Option<PeerInfo>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let peer_id_bytes = peer_id.0.to_vec();
 
         let peer = conn
@@ -90,7 +96,10 @@ impl PeerStore for SqlitePeerStore {
     }
 
     fn list(&self) -> Result<Vec<PeerInfo>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
 
         let mut stmt = conn.prepare(
             "SELECT peer_id, public_key, addresses, last_seen, reputation
@@ -106,7 +115,10 @@ impl PeerStore for SqlitePeerStore {
     }
 
     fn update_last_seen(&mut self, peer_id: &PeerId, timestamp: Timestamp) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let peer_id_bytes = peer_id.0.to_vec();
 
         let rows_affected = conn.execute(
@@ -122,7 +134,10 @@ impl PeerStore for SqlitePeerStore {
     }
 
     fn update_reputation(&mut self, peer_id: &PeerId, delta: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let peer_id_bytes = peer_id.0.to_vec();
 
         let rows_affected = conn.execute(
@@ -138,7 +153,10 @@ impl PeerStore for SqlitePeerStore {
     }
 
     fn delete(&mut self, peer_id: &PeerId) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let peer_id_bytes = peer_id.0.to_vec();
 
         conn.execute("DELETE FROM peers WHERE peer_id = ?1", [peer_id_bytes])?;
@@ -150,7 +168,10 @@ impl PeerStore for SqlitePeerStore {
 impl SqlitePeerStore {
     /// List peers with reputation above a threshold.
     pub fn list_by_reputation(&self, min_reputation: i64) -> Result<Vec<PeerInfo>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
 
         let mut stmt = conn.prepare(
             "SELECT peer_id, public_key, addresses, last_seen, reputation
@@ -167,7 +188,10 @@ impl SqlitePeerStore {
 
     /// List peers seen within a time window.
     pub fn list_recently_seen(&self, since: Timestamp) -> Result<Vec<PeerInfo>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
 
         let mut stmt = conn.prepare(
             "SELECT peer_id, public_key, addresses, last_seen, reputation
@@ -184,7 +208,10 @@ impl SqlitePeerStore {
 
     /// Count total known peers.
     pub fn count(&self) -> Result<u64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
 
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM peers", [], |row| row.get(0))?;
 

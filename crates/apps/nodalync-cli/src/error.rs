@@ -76,6 +76,14 @@ pub enum CliError {
     /// File not found.
     #[error("File not found: {0}")]
     FileNotFound(String),
+
+    /// Password required but not provided.
+    #[error("Password required. Set NODALYNC_PASSWORD env var or run in a terminal for interactive input.")]
+    PasswordRequired,
+
+    /// Confirmation or input required from user.
+    #[error("{0}")]
+    ConfirmationRequired(String),
 }
 
 impl CliError {
@@ -97,7 +105,9 @@ impl CliError {
             | Self::IdentityNotInitialized
             | Self::IdentityExists
             | Self::NodeNotRunning
-            | Self::NodeAlreadyRunning => 1,
+            | Self::NodeAlreadyRunning
+            | Self::PasswordRequired
+            | Self::ConfirmationRequired(_) => 1,
             // Not found: 2
             Self::NotFound(_) | Self::FileNotFound(_) => 2,
             // Config errors: 3
@@ -131,8 +141,12 @@ impl CliError {
             // Payment/channel errors
             Self::InsufficientBalance { .. } => ErrorCode::InsufficientBalance,
 
-            // Identity/config errors
-            Self::IdentityNotInitialized | Self::IdentityExists => ErrorCode::InvalidManifest,
+            // Identity/auth errors
+            Self::IdentityNotInitialized => ErrorCode::AccessDenied,
+            Self::IdentityExists => ErrorCode::AccessDenied,
+            Self::PasswordRequired => ErrorCode::AccessDenied,
+
+            // Config/parse errors
             Self::Config(_) | Self::Toml(_) | Self::Json(_) => ErrorCode::InvalidManifest,
 
             // Node state errors
@@ -147,8 +161,132 @@ impl CliError {
             Self::Store(_) => ErrorCode::InternalError,
             Self::Io(_) => ErrorCode::InternalError,
 
-            // User-facing errors are generic
-            Self::User(_) => ErrorCode::InternalError,
+            // User-facing errors
+            Self::User(_) => ErrorCode::AccessDenied,
+
+            // Confirmation required (missing --force, etc.)
+            Self::ConfirmationRequired(_) => ErrorCode::AccessDenied,
         }
+    }
+
+    /// Get a CLI-appropriate suggestion for recovering from this error.
+    pub fn suggestion(&self) -> Option<&str> {
+        match self {
+            Self::User(_) => None, // message itself is the guidance
+            Self::Config(_) => None, // config errors include actionable details
+            Self::Ops(_) | Self::Store(_) | Self::Io(_) => None, // too varied
+            Self::IdentityNotInitialized => Some("Run 'nodalync init' to create your identity."),
+            Self::IdentityExists => Some("Use 'nodalync init --wizard' to reinitialize."),
+            Self::NodeNotRunning => Some("Start the node with 'nodalync start'."),
+            Self::NodeAlreadyRunning => Some("Stop the node first with 'nodalync stop'."),
+            Self::NotFound(_) => Some("Use 'nodalync list' or 'nodalync search' to find content."),
+            Self::FileNotFound(_) => Some("Check that the file path exists and is readable."),
+            Self::InvalidHash(_) => Some("Hash must be exactly 64 hex characters (0-9, a-f)."),
+            Self::InsufficientBalance { .. } => {
+                Some("Deposit more funds with 'nodalync deposit <amount>'.")
+            }
+            Self::Toml(_) => Some("Check config file syntax at ~/.nodalync/config.toml."),
+            Self::Json(_) => Some("Check the JSON input format."),
+            Self::Network(_) => Some("Check network connectivity. Run 'nodalync status' to verify."),
+            Self::Settlement(_) => Some(
+                "Check Hedera configuration (HEDERA_ACCOUNT_ID, HEDERA_PRIVATE_KEY, HEDERA_CONTRACT_ID).",
+            ),
+            Self::PasswordRequired => Some(
+                "Set NODALYNC_PASSWORD env var or run in a terminal for interactive input.",
+            ),
+            Self::ConfirmationRequired(_) => None, // message itself is the guidance
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_suggestion_identity_not_initialized() {
+        let err = CliError::IdentityNotInitialized;
+        assert_eq!(
+            err.suggestion(),
+            Some("Run 'nodalync init' to create your identity.")
+        );
+    }
+
+    #[test]
+    fn test_suggestion_not_found() {
+        let err = CliError::NotFound("abc123".to_string());
+        assert_eq!(
+            err.suggestion(),
+            Some("Use 'nodalync list' or 'nodalync search' to find content.")
+        );
+    }
+
+    #[test]
+    fn test_suggestion_file_not_found() {
+        let err = CliError::FileNotFound("/tmp/missing.txt".to_string());
+        assert_eq!(
+            err.suggestion(),
+            Some("Check that the file path exists and is readable.")
+        );
+    }
+
+    #[test]
+    fn test_suggestion_invalid_hash() {
+        let err = CliError::InvalidHash("aaaa".to_string());
+        assert_eq!(
+            err.suggestion(),
+            Some("Hash must be exactly 64 hex characters (0-9, a-f).")
+        );
+    }
+
+    #[test]
+    fn test_suggestion_insufficient_balance() {
+        let err = CliError::InsufficientBalance {
+            required: 1000,
+            available: 100,
+        };
+        assert_eq!(
+            err.suggestion(),
+            Some("Deposit more funds with 'nodalync deposit <amount>'.")
+        );
+    }
+
+    #[test]
+    fn test_suggestion_user_returns_none() {
+        let err = CliError::User("some message".to_string());
+        assert!(err.suggestion().is_none());
+    }
+
+    #[test]
+    fn test_suggestion_config_returns_none() {
+        let err = CliError::Config("bad config".to_string());
+        assert!(err.suggestion().is_none());
+    }
+
+    #[test]
+    fn test_suggestion_node_not_running() {
+        let err = CliError::NodeNotRunning;
+        assert_eq!(
+            err.suggestion(),
+            Some("Start the node with 'nodalync start'.")
+        );
+    }
+
+    #[test]
+    fn test_suggestion_node_already_running() {
+        let err = CliError::NodeAlreadyRunning;
+        assert_eq!(
+            err.suggestion(),
+            Some("Stop the node first with 'nodalync stop'.")
+        );
+    }
+
+    #[test]
+    fn test_password_required_error() {
+        let err = CliError::PasswordRequired;
+        assert_eq!(err.exit_code(), 1);
+        assert_eq!(err.error_code(), ErrorCode::AccessDenied);
+        assert!(err.suggestion().is_some());
+        assert!(err.suggestion().unwrap().contains("NODALYNC_PASSWORD"));
     }
 }

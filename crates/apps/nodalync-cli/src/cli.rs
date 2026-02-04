@@ -133,6 +133,10 @@ pub enum Commands {
         /// New title (optional).
         #[arg(short, long)]
         title: Option<String>,
+
+        /// Price per query in HBAR (defaults to previous version's price).
+        #[arg(short, long)]
+        price: Option<f64>,
     },
 
     /// Change content visibility.
@@ -142,7 +146,8 @@ pub enum Commands {
         /// Hash of the content.
         hash: String,
 
-        /// New visibility level.
+        /// New visibility level (private, unlisted, or shared).
+        #[arg(short, long, alias = "visibility")]
         level: VisibilityArg,
     },
 

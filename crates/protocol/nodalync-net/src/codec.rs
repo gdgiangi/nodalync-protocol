@@ -181,4 +181,62 @@ mod tests {
         assert_eq!(req.0, vec![1, 2, 3]);
         assert_eq!(resp.0, vec![4, 5, 6]);
     }
+
+    #[tokio::test]
+    async fn test_codec_roundtrip_various_sizes() {
+        // Test with several different payload sizes
+        let sizes = [1, 100, 1000, 10000];
+
+        for size in sizes {
+            let original: Vec<u8> = (0..size).map(|i| (i % 256) as u8).collect();
+            let mut buf = Vec::new();
+
+            write_length_prefixed(&mut buf, &original).await.unwrap();
+
+            // Verify length prefix is correct
+            let len_bytes = &buf[..4];
+            let encoded_len =
+                u32::from_be_bytes([len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3]]);
+            assert_eq!(encoded_len as usize, size);
+
+            // Verify total buffer size
+            assert_eq!(buf.len(), 4 + size);
+
+            // Read back and verify data matches
+            let mut cursor = Cursor::new(buf);
+            let read_back = read_length_prefixed(&mut cursor).await.unwrap();
+            assert_eq!(read_back.len(), size);
+            assert_eq!(read_back, original);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_codec_max_message_size_rejected() {
+        // Create data larger than MAX_MESSAGE_SIZE (10 MB)
+        let oversized = vec![0u8; MAX_MESSAGE_SIZE as usize + 1];
+        let mut buf = Vec::new();
+
+        let result = write_length_prefixed(&mut buf, &oversized).await;
+        assert!(result.is_err(), "Writing oversized message should fail");
+
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            format!("{}", err).contains("message too large"),
+            "Error message should indicate the message is too large"
+        );
+    }
+
+    #[test]
+    fn test_codec_new() {
+        let codec = NodalyncCodec::new();
+        // Verify it can be created and debug-printed
+        let debug_str = format!("{:?}", codec);
+        assert!(debug_str.contains("NodalyncCodec"));
+
+        // Verify Default also works
+        let codec_default = NodalyncCodec::default();
+        let debug_default = format!("{:?}", codec_default);
+        assert!(debug_default.contains("NodalyncCodec"));
+    }
 }

@@ -309,12 +309,17 @@ mod integration_tests {
 
     /// Integration test that requests HBAR from the faucet.
     ///
-    /// Run with: cargo test -p nodalync-settle --features testnet -- --ignored
+    /// Run with: cargo test -p nodalync-settle --features testnet -- --nocapture
     #[tokio::test]
-    #[ignore]
     async fn test_faucet_request() {
-        let account_id =
-            env::var("HEDERA_ACCOUNT_ID").expect("HEDERA_ACCOUNT_ID must be set for faucet test");
+        nodalync_test_utils::try_load_dotenv();
+        let account_id = match env::var("HEDERA_ACCOUNT_ID").ok() {
+            Some(id) => id,
+            None => {
+                println!("Skipping test: HEDERA_ACCOUNT_ID not set");
+                return;
+            }
+        };
 
         let faucet = HederaFaucet::testnet();
 

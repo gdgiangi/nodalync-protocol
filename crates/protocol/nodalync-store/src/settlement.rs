@@ -44,7 +44,10 @@ impl SqliteSettlementQueue {
 
 impl SettlementQueueStore for SqliteSettlementQueue {
     fn enqueue(&mut self, distribution: QueuedDistribution) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
 
         let payment_id_bytes = distribution.payment_id.0.to_vec();
         let recipient_bytes = distribution.recipient.0.to_vec();
@@ -66,7 +69,10 @@ impl SettlementQueueStore for SqliteSettlementQueue {
     }
 
     fn get_pending(&self) -> Result<Vec<QueuedDistribution>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
 
         let mut stmt = conn.prepare(
             "SELECT id, payment_id, recipient, amount, source_hash, queued_at
@@ -82,7 +88,10 @@ impl SettlementQueueStore for SqliteSettlementQueue {
     }
 
     fn get_pending_for(&self, recipient: &PeerId) -> Result<Vec<QueuedDistribution>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let recipient_bytes = recipient.0.to_vec();
 
         let mut stmt = conn.prepare(
@@ -99,7 +108,10 @@ impl SettlementQueueStore for SqliteSettlementQueue {
     }
 
     fn get_pending_total(&self) -> Result<Amount> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
 
         let total: i64 = conn.query_row(
             "SELECT COALESCE(SUM(amount), 0) FROM settlement_queue WHERE settled = 0",
@@ -111,7 +123,10 @@ impl SettlementQueueStore for SqliteSettlementQueue {
     }
 
     fn mark_settled(&mut self, payment_ids: &[Hash], batch_id: &Hash) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let batch_id_bytes = batch_id.0.to_vec();
 
         for payment_id in payment_ids {
@@ -126,7 +141,10 @@ impl SettlementQueueStore for SqliteSettlementQueue {
     }
 
     fn get_last_settlement_time(&self) -> Result<Option<Timestamp>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
 
         let value: Option<String> = conn
             .query_row(
@@ -148,7 +166,10 @@ impl SettlementQueueStore for SqliteSettlementQueue {
     }
 
     fn set_last_settlement_time(&mut self, timestamp: Timestamp) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
 
         conn.execute(
             "INSERT OR REPLACE INTO settlement_meta (key, value) VALUES ('last_settlement_time', ?1)",
@@ -162,7 +183,10 @@ impl SettlementQueueStore for SqliteSettlementQueue {
 impl SqliteSettlementQueue {
     /// Get count of pending distributions.
     pub fn pending_count(&self) -> Result<u64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM settlement_queue WHERE settled = 0",
             [],
@@ -173,7 +197,10 @@ impl SqliteSettlementQueue {
 
     /// Get pending total for a specific recipient.
     pub fn get_pending_total_for(&self, recipient: &PeerId) -> Result<Amount> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let recipient_bytes = recipient.0.to_vec();
 
         let total: i64 = conn.query_row(
@@ -187,7 +214,10 @@ impl SqliteSettlementQueue {
 
     /// Get distributions for a specific batch.
     pub fn get_batch(&self, batch_id: &Hash) -> Result<Vec<QueuedDistribution>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let batch_id_bytes = batch_id.0.to_vec();
 
         let mut stmt = conn.prepare(
@@ -207,7 +237,10 @@ impl SqliteSettlementQueue {
     ///
     /// Returns a map of recipient -> total amount.
     pub fn aggregate_by_recipient(&self) -> Result<Vec<(PeerId, Amount)>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
 
         let mut stmt = conn.prepare(
             "SELECT recipient, SUM(amount) FROM settlement_queue
@@ -230,7 +263,10 @@ impl SqliteSettlementQueue {
     ///
     /// Used for cleanup of old settled records.
     pub fn cleanup_settled(&mut self, older_than: Timestamp) -> Result<u64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
 
         let deleted = conn.execute(
             "DELETE FROM settlement_queue WHERE settled = 1 AND queued_at < ?1",

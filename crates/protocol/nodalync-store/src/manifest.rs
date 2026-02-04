@@ -143,6 +143,7 @@ impl SqliteManifestStore {
             0 => Visibility::Private,
             1 => Visibility::Unlisted,
             2 => Visibility::Shared,
+            3 => Visibility::Offline,
             _ => Visibility::Private, // Default fallback
         };
 
@@ -210,7 +211,10 @@ impl ManifestStore for SqliteManifestStore {
             updated_at,
         ) = Self::serialize_manifest(manifest)?;
 
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         conn.execute(
             "INSERT OR IGNORE INTO manifests (
                 hash, content_type, owner, version_number, version_previous,
@@ -247,7 +251,10 @@ impl ManifestStore for SqliteManifestStore {
     }
 
     fn load(&self, hash: &Hash) -> Result<Option<Manifest>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let hash_bytes = hash.0.to_vec();
 
         let manifest = conn
@@ -289,7 +296,10 @@ impl ManifestStore for SqliteManifestStore {
             updated_at,
         ) = Self::serialize_manifest(manifest)?;
 
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let rows_affected = conn.execute(
             "UPDATE manifests SET
                 content_type = ?2, owner = ?3, version_number = ?4, version_previous = ?5,
@@ -329,14 +339,20 @@ impl ManifestStore for SqliteManifestStore {
     }
 
     fn delete(&mut self, hash: &Hash) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let hash_bytes = hash.0.to_vec();
         conn.execute("DELETE FROM manifests WHERE hash = ?1", [hash_bytes])?;
         Ok(())
     }
 
     fn list(&self, filter: ManifestFilter) -> Result<Vec<Manifest>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
 
         let mut sql = String::from(
             "SELECT hash, content_type, owner, version_number, version_previous,
@@ -416,7 +432,10 @@ impl ManifestStore for SqliteManifestStore {
     }
 
     fn get_versions(&self, version_root: &Hash) -> Result<Vec<Manifest>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let root_bytes = version_root.0.to_vec();
 
         let mut stmt = conn.prepare(
@@ -634,6 +653,18 @@ mod tests {
         assert_eq!(versions.len(), 2);
         assert_eq!(versions[0].version.number, 1);
         assert_eq!(versions[1].version.number, 2);
+    }
+
+    #[test]
+    fn test_store_and_load_offline_visibility() {
+        let mut store = setup_store();
+        let mut manifest = test_manifest();
+        manifest.visibility = Visibility::Offline;
+
+        store.store(&manifest).unwrap();
+
+        let loaded = store.load(&manifest.hash).unwrap().unwrap();
+        assert_eq!(loaded.visibility, Visibility::Offline);
     }
 
     #[test]

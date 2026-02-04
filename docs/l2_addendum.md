@@ -362,7 +362,8 @@ struct SearchResult {
     l2_summary: L2Summary?,      # If L2
     price: Amount,
     total_queries: uint64,
-    relevance_score: float64
+    relevance_score: float64,
+    publisher_addresses: string[]  # Multiaddresses for reconnection
 }
 ```
 

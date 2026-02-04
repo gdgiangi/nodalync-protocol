@@ -155,6 +155,23 @@ pub fn construct_payment_message(payment: &Payment) -> Vec<u8> {
     message
 }
 
+/// Construct the message bytes for receipt signature verification.
+///
+/// Format: `payment_id || amount (u64 BE) || timestamp (u64 BE) || channel_nonce (u64 BE)`
+pub fn construct_receipt_message(
+    payment_id: &Hash,
+    amount: u64,
+    timestamp: u64,
+    channel_nonce: u64,
+) -> Vec<u8> {
+    let mut message = Vec::with_capacity(32 + 8 + 8 + 8);
+    message.extend_from_slice(payment_id.as_ref());
+    message.extend_from_slice(&amount.to_be_bytes());
+    message.extend_from_slice(&timestamp.to_be_bytes());
+    message.extend_from_slice(&channel_nonce.to_be_bytes());
+    message
+}
+
 // =============================================================================
 // Channel Close Signature Functions
 // =============================================================================

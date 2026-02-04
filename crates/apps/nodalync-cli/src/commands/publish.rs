@@ -2,6 +2,8 @@
 
 use std::path::Path;
 
+use colored::Colorize;
+use nodalync_crypto::content_hash;
 use nodalync_types::{Metadata, Visibility};
 
 use crate::config::{ndl_to_units, CliConfig};
@@ -34,6 +36,28 @@ pub async fn publish(
 
     // Read file content
     let content = std::fs::read(file)?;
+
+    // Guard: reject empty files
+    if content.is_empty() {
+        return Err(CliError::user(
+            "Cannot publish an empty file. The file has 0 bytes of content.",
+        ));
+    }
+
+    // Guard: warn about binary content
+    // Check first 8KB for null bytes as a heuristic for binary data
+    let check_len = content.len().min(8192);
+    let has_null_bytes = content[..check_len].contains(&0);
+    if has_null_bytes && format == OutputFormat::Human {
+        eprintln!(
+            "{}: File appears to be binary. Binary content cannot be meaningfully indexed or queried.",
+            "Warning".yellow().bold()
+        );
+        if crate::prompt::is_interactive() && !crate::prompt::confirm("Publish anyway?")? {
+            return Ok("Cancelled.".to_string());
+        }
+    }
+
     spinner.set_message("Hashing content...");
 
     // Get title from filename if not provided
@@ -80,6 +104,39 @@ pub async fn publish(
             _ => "application/octet-stream",
         };
         metadata = metadata.with_mime_type(mime_type);
+    }
+
+    // Check if this content already exists (re-publish detection)
+    let computed_hash = content_hash(&content);
+    if let Ok(Some(existing)) = ctx.ops.get_content_manifest(&computed_hash) {
+        if format == OutputFormat::Human {
+            eprintln!(
+                "{}: Content with this hash already exists (title: \"{}\", price: {} units).",
+                "Warning".yellow().bold(),
+                existing.metadata.title,
+                existing.economics.price,
+            );
+            eprintln!(
+                "  Use '{}' to update metadata, or '{}' to create a new version.",
+                "nodalync publish --update".bold(),
+                "nodalync update".bold(),
+            );
+            if crate::prompt::is_interactive() {
+                if !crate::prompt::confirm("Overwrite existing metadata?")? {
+                    return Ok("Cancelled.".to_string());
+                }
+            } else {
+                return Err(CliError::user(
+                    "Content already exists. Use --force to overwrite, or 'nodalync update' to create a new version.",
+                ));
+            }
+        } else {
+            // In JSON mode, always error on re-publish to avoid silent overwrites
+            return Err(CliError::user(format!(
+                "Content already exists with hash {}. Use 'nodalync update' to create a new version.",
+                computed_hash
+            )));
+        }
     }
 
     // Create content

@@ -35,6 +35,23 @@ pub enum McpError {
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
+    /// Empty content — publish/synthesize/update with no content.
+    #[error("content cannot be empty")]
+    EmptyContent,
+
+    /// Content exceeds maximum allowed size.
+    #[error("content too large: {size} bytes exceeds maximum of {max} bytes")]
+    ContentTooLarge {
+        /// Actual content size.
+        size: usize,
+        /// Maximum allowed size.
+        max: usize,
+    },
+
+    /// Content with this hash already exists.
+    #[error("content already exists: {0}")]
+    ContentAlreadyExists(String),
+
     /// Internal server error.
     #[error("internal error: {0}")]
     Internal(String),
@@ -56,6 +73,9 @@ impl McpError {
             Self::InvalidHash(_) => ErrorCode::InvalidHash,
             Self::Ops(e) => e.error_code(),
             Self::Serialization(_) => ErrorCode::InvalidManifest,
+            Self::EmptyContent => ErrorCode::InvalidManifest,
+            Self::ContentTooLarge { .. } => ErrorCode::InvalidManifest,
+            Self::ContentAlreadyExists(_) => ErrorCode::InvalidManifest,
             Self::Internal(_) => ErrorCode::InternalError,
         }
     }

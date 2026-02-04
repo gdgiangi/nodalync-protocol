@@ -52,4 +52,11 @@ pub mod tools;
 pub use budget::{BudgetStatus, BudgetTracker};
 pub use error::{McpError, McpResult};
 pub use server::NodalyncMcpServer;
-pub use tools::{ListSourcesInput, ListSourcesOutput, QueryKnowledgeInput, QueryKnowledgeOutput};
+pub use tools::{
+    ContentEarnings, DeleteContentInput, DeleteContentOutput, GetEarningsInput, GetEarningsOutput,
+    ListSourcesInput, ListSourcesOutput, ListVersionsInput, ListVersionsOutput,
+    PreviewContentInput, PreviewContentOutput, PublishContentInput, PublishContentOutput,
+    QueryKnowledgeInput, QueryKnowledgeOutput, SetVisibilityInput, SetVisibilityOutput,
+    SynthesizeContentInput, SynthesizeContentOutput, UpdateContentInput, UpdateContentOutput,
+    VersionEntry,
+};

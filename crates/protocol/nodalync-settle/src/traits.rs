@@ -66,8 +66,15 @@ pub trait Settlement: Send + Sync {
 
     /// Open a new payment channel with a peer.
     ///
-    /// Creates an on-chain channel with the specified initial deposit.
-    async fn open_channel(&self, peer: &PeerId, deposit: u64) -> SettleResult<ChannelId>;
+    /// Registers the given `channel_id` on-chain with the specified initial deposit.
+    /// The caller is responsible for generating the channel ID consistently
+    /// so that subsequent operations (close, dispute, resolve) use the same ID.
+    async fn open_channel(
+        &self,
+        channel_id: &ChannelId,
+        peer: &PeerId,
+        deposit: u64,
+    ) -> SettleResult<TransactionId>;
 
     /// Cooperatively close a payment channel.
     ///

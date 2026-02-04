@@ -82,6 +82,10 @@ pub enum SettleError {
         current: u64,
     },
 
+    /// Internal error (lock poisoning, unexpected state).
+    #[error("internal error: {0}")]
+    Internal(String),
+
     /// IO error.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -128,9 +132,47 @@ impl SettleError {
         Self::Timeout(msg.into())
     }
 
+    /// Create a new Internal error.
+    pub fn internal(msg: impl Into<String>) -> Self {
+        Self::Internal(msg.into())
+    }
+
     /// Check if this error is retryable.
     pub fn is_retryable(&self) -> bool {
         matches!(self, Self::Network(_) | Self::Timeout(_))
+    }
+}
+
+/// Classify an SDK error into the appropriate `SettleError` variant.
+///
+/// Transient errors (timeout, gRPC failures, BUSY/PLATFORM_TRANSACTION_NOT_CREATED/UNKNOWN
+/// status codes) are mapped to retryable variants (`Timeout`, `Network`).
+/// All other SDK errors are mapped to `HederaSdk` (non-retryable).
+#[cfg(feature = "hedera-sdk")]
+pub fn classify_sdk_error(error: hiero_sdk::Error) -> SettleError {
+    match &error {
+        hiero_sdk::Error::TimedOut(_) => SettleError::Timeout(error.to_string()),
+        hiero_sdk::Error::GrpcStatus(_) => {
+            SettleError::Network(format!("gRPC error (will retry): {}", error))
+        }
+        hiero_sdk::Error::TransactionPreCheckStatus { status, .. }
+        | hiero_sdk::Error::QueryPreCheckStatus { status, .. }
+        | hiero_sdk::Error::QueryPaymentPreCheckStatus { status, .. }
+        | hiero_sdk::Error::QueryNoPaymentPreCheckStatus { status }
+        | hiero_sdk::Error::ReceiptStatus { status, .. }
+            if matches!(
+                status,
+                hiero_sdk::Status::Busy
+                    | hiero_sdk::Status::PlatformTransactionNotCreated
+                    | hiero_sdk::Status::Unknown
+            ) =>
+        {
+            SettleError::Network(format!(
+                "transient Hedera status {:?} (will retry): {}",
+                status, error
+            ))
+        }
+        _ => SettleError::HederaSdk(error.to_string()),
     }
 }
 
@@ -157,5 +199,30 @@ mod tests {
     fn test_error_display() {
         let err = SettleError::channel_not_found("ch123");
         assert_eq!(err.to_string(), "channel not found: ch123");
+    }
+
+    #[test]
+    fn test_hedera_sdk_not_retryable() {
+        let err = SettleError::hedera_sdk("INVALID_SIGNATURE");
+        assert!(!err.is_retryable());
+    }
+
+    #[test]
+    fn test_transient_network_retryable() {
+        let err = SettleError::network("transient Hedera status Busy");
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn test_timeout_retryable() {
+        let err = SettleError::timeout("request timed out");
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn test_internal_error() {
+        let err = SettleError::internal("lock poisoned");
+        assert_eq!(err.to_string(), "internal error: lock poisoned");
+        assert!(!err.is_retryable());
     }
 }

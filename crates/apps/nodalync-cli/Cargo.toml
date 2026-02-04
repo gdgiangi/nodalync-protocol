@@ -1,6 +1,6 @@
 [package]
 name = "nodalync-cli"
-version = "0.9.4"
+version = "0.10.0"
 edition.workspace = true
 description = "Command-line interface for the Nodalync protocol"
 license.workspace = true
@@ -40,9 +40,6 @@ ciborium.workspace = true
 
 # Environment variable expansion
 regex = "1"
-
-# Config and paths
-directories.workspace = true
 
 # Error handling
 thiserror.workspace = true

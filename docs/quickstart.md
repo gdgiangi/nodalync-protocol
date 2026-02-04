@@ -251,11 +251,28 @@ Add to your Claude Desktop config (`~/.config/claude/mcp.json` or similar):
 
 **Note**: The private key must be DER-encoded ECDSA format (98 hex characters starting with `303002...`).
 
-Now Claude can:
-- Search knowledge in the Nodalync network
-- Query and pay for content automatically
-- Track provenance of information
-- Settle payments on Hedera (when configured)
+### MCP Tools
+
+When the MCP server is running, AI agents have access to these tools:
+
+| Tool | Description |
+|------|-------------|
+| `query_knowledge` | Query content by hash or natural language (paid) |
+| `list_sources` | Browse available content with metadata |
+| `search_network` | Search connected peers for content (requires `--enable-network`) |
+| `preview_content` | View content metadata without paying |
+| `publish_content` | Publish new content from the agent |
+| `synthesize_content` | Create L3 synthesis from multiple sources |
+| `update_content` | Create a new version of existing content |
+| `delete_content` | Delete content and set visibility to offline |
+| `set_visibility` | Change content visibility |
+| `list_versions` | List all versions of a content item |
+| `get_earnings` | View earnings breakdown by content |
+| `status` | Node health, budget, channels, and Hedera status |
+| `deposit_hbar` | Deposit HBAR to the settlement contract |
+| `open_channel` | Open a payment channel with a peer |
+| `close_channel` | Close a payment channel |
+| `close_all_channels` | Close all open payment channels |
 
 ---
 
@@ -310,6 +327,8 @@ If you have a raw hex key, you need to DER-encode it. Check your account type at
 
 ## Common Commands Reference
 
+### Identity & Node
+
 | Command | Description |
 |---------|-------------|
 | `nodalync init --wizard` | Set up identity and config |
@@ -318,14 +337,51 @@ If you have a raw hex key, you need to DER-encode it. Check your account type at
 | `nodalync start --daemon` | Start node (background) |
 | `nodalync status` | Show node status |
 | `nodalync stop` | Stop daemon |
+| `nodalync completions <shell>` | Generate shell completions (bash, zsh, fish, powershell) |
+
+### Content
+
+| Command | Description |
+|---------|-------------|
 | `nodalync publish <file>` | Publish content |
+| `nodalync update <hash> <file>` | Create a new version of content |
+| `nodalync delete <hash>` | Delete local content |
+| `nodalync visibility <hash> --level <level>` | Change content visibility |
+| `nodalync versions <hash>` | Show version history |
 | `nodalync list` | List your content |
 | `nodalync search <query>` | Search content |
 | `nodalync preview <hash>` | View metadata (free) |
 | `nodalync query <hash>` | Get full content (paid) |
+
+### Synthesis
+
+| Command | Description |
+|---------|-------------|
+| `nodalync synthesize --sources <h1>,<h2> --output <file>` | Create L3 synthesis |
+| `nodalync build-l2 <hash1> <hash2> ...` | Build L2 entity graph from L1 sources |
+| `nodalync merge-l2 <graph1> <graph2> ...` | Merge L2 entity graphs |
+| `nodalync reference <hash>` | Reference external L3 as L0 source |
+
+### Economics & Channels
+
+| Command | Description |
+|---------|-------------|
 | `nodalync balance` | Check HBAR balance |
-| `nodalync earnings` | View earnings |
-| `nodalync mcp-server` | Start MCP server for AI |
+| `nodalync earnings` | View earnings breakdown |
+| `nodalync deposit <amount>` | Deposit HBAR to protocol balance |
+| `nodalync withdraw <amount>` | Withdraw HBAR from protocol balance |
+| `nodalync settle` | Force settlement of pending payments |
+| `nodalync open-channel <peer-id> --deposit <amount>` | Open payment channel (min 100 HBAR) |
+| `nodalync close-channel <peer-id>` | Close payment channel (cooperative) |
+| `nodalync dispute-channel <peer-id>` | Initiate dispute close (24h waiting period) |
+| `nodalync resolve-dispute <peer-id>` | Resolve dispute after waiting period |
+| `nodalync list-channels` | List all payment channels |
+
+### MCP
+
+| Command | Description |
+|---------|-------------|
+| `nodalync mcp-server` | Start MCP server for AI agents |
 
 ---
 

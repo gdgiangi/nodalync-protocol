@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/nodalync",
+    "crates/nodalync-test-utils",
     "crates/protocol/nodalync-crypto",
     "crates/protocol/nodalync-types",
     "crates/protocol/nodalync-wire",
@@ -20,7 +21,7 @@ members = [
 # Protocol crates: 0.4.x (matches spec)
 # Application crates: 0.7.x (CLI/MCP releases)
 edition = "2021"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/nodalync/nodalync"
 authors = ["Gabriel Giangi <gabegiangi@gmail.com>"]
 
@@ -45,7 +46,7 @@ tokio = { version = "1.36", features = ["full"] }
 futures = "0.3"
 
 # Networking
-libp2p = { version = "0.53", features = ["tcp", "noise", "yamux", "dns", "kad", "gossipsub", "request-response", "macros"] }
+libp2p = { version = "0.54", features = ["tcp", "noise", "yamux", "dns", "kad", "gossipsub", "request-response", "identify", "ping", "macros", "tokio"] }
 
 # CLI
 clap = { version = "4.5", features = ["derive", "env"] }
@@ -82,6 +83,7 @@ nodalync-econ = { path = "crates/protocol/nodalync-econ" }
 nodalync-ops = { path = "crates/protocol/nodalync-ops" }
 nodalync-net = { path = "crates/protocol/nodalync-net" }
 nodalync-settle = { path = "crates/protocol/nodalync-settle" }
+nodalync-test-utils = { path = "crates/nodalync-test-utils" }
 nodalync-mcp = { path = "crates/apps/nodalync-mcp" }
 
 [profile.release]

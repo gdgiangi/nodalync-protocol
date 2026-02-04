@@ -1,6 +1,6 @@
 [package]
 name = "nodalync-net"
-version = "0.6.0"
+version = "0.7.0"
 edition.workspace = true
 
 [dependencies]
@@ -10,19 +10,7 @@ nodalync-types = { workspace = true }
 nodalync-wire = { workspace = true }
 
 # libp2p with required features
-libp2p = { version = "0.54", features = [
-    "tcp",
-    "dns",
-    "noise",
-    "yamux",
-    "kad",
-    "gossipsub",
-    "request-response",
-    "identify",
-    "ping",
-    "macros",
-    "tokio",
-] }
+libp2p = { workspace = true }
 
 # Async runtime
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
@@ -46,4 +34,5 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"
 nodalync-ops = { workspace = true }
 nodalync-store = { workspace = true }
 nodalync-econ = { workspace = true }
+nodalync-test-utils = { workspace = true }
 tempfile = "3.10"

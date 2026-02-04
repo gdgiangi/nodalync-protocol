@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use crate::error::Result;
 
 /// Schema version for migration tracking.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Initialize the database schema.
 ///
@@ -66,6 +66,15 @@ fn migrate_schema(conn: &Connection, from_version: u32) -> Result<()> {
         if let Err(e) = conn.execute("ALTER TABLE channels ADD COLUMN pending_dispute TEXT", []) {
             if !e.to_string().contains("duplicate column") {
                 tracing::warn!(error = %e, "Failed to add pending_dispute column to channels");
+            }
+        }
+    }
+
+    // Migration from version 2 to 3: Add funding_tx_id column to channels
+    if from_version < 3 {
+        if let Err(e) = conn.execute("ALTER TABLE channels ADD COLUMN funding_tx_id TEXT", []) {
+            if !e.to_string().contains("duplicate column") {
+                tracing::warn!(error = %e, "Failed to add funding_tx_id column to channels");
             }
         }
     }
@@ -166,7 +175,8 @@ fn create_tables(conn: &Connection) -> Result<()> {
             nonce INTEGER NOT NULL,
             last_update INTEGER NOT NULL,
             pending_close TEXT,
-            pending_dispute TEXT
+            pending_dispute TEXT,
+            funding_tx_id TEXT
         )",
         [],
     )?;
@@ -395,5 +405,58 @@ mod tests {
             .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn test_migration_v2_to_v3() {
+        let conn = Connection::open_in_memory().unwrap();
+
+        // Simulate a v2 database by creating tables and setting version to 2
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO schema_version (version) VALUES (2)", [])
+            .unwrap();
+
+        // Create the channels table WITHOUT funding_tx_id (v2 schema)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS channels (
+                peer_id BLOB PRIMARY KEY,
+                channel_id BLOB NOT NULL,
+                state INTEGER NOT NULL,
+                my_balance INTEGER NOT NULL,
+                their_balance INTEGER NOT NULL,
+                nonce INTEGER NOT NULL,
+                last_update INTEGER NOT NULL,
+                pending_close TEXT,
+                pending_dispute TEXT
+            )",
+            [],
+        )
+        .unwrap();
+
+        // Run migration
+        initialize_schema(&conn).unwrap();
+
+        // Verify version was bumped
+        let version: u32 = conn
+            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+
+        // Verify funding_tx_id column exists by querying table_info
+        let has_column: bool = conn
+            .prepare("PRAGMA table_info(channels)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .any(|name| name == "funding_tx_id");
+        assert!(
+            has_column,
+            "funding_tx_id column should exist after migration"
+        );
     }
 }

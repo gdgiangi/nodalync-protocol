@@ -264,6 +264,7 @@ impl Metrics {
             SettleError::DisputePeriodNotElapsed => "dispute_period_not_elapsed",
             SettleError::InvalidNonce { .. } => "invalid_nonce",
             SettleError::Io(_) => "io",
+            SettleError::Internal(_) => "internal",
         }
     }
 }

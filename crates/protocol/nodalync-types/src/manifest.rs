@@ -310,7 +310,7 @@ impl Manifest {
     /// Checks visibility and access control rules.
     pub fn is_queryable_by(&self, peer: &PeerId) -> bool {
         match self.visibility {
-            Visibility::Private => false,
+            Visibility::Private | Visibility::Offline => false,
             Visibility::Unlisted | Visibility::Shared => self.access.is_peer_allowed(peer),
         }
     }
@@ -479,7 +479,12 @@ mod tests {
         manifest.visibility = Visibility::Unlisted;
         assert!(manifest.is_queryable_by(&other));
 
+        // Offline is not queryable
+        manifest.visibility = Visibility::Offline;
+        assert!(!manifest.is_queryable_by(&other));
+
         // Denylist blocks
+        manifest.visibility = Visibility::Unlisted;
         manifest.access = AccessControl::with_denylist(vec![other]);
         assert!(!manifest.is_queryable_by(&other));
     }

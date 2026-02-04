@@ -616,4 +616,101 @@ mod tests {
         let enc2 = encode_payload(&payload).unwrap();
         assert_eq!(enc1, enc2, "CBOR encoding should be deterministic");
     }
+
+    #[test]
+    fn test_content_hash_empty_data() {
+        let h1 = content_hash(b"");
+        let h2 = content_hash(b"");
+        assert_eq!(h1, h2);
+        // Empty data should still produce a valid hash (not zero)
+        assert_ne!(h1, Hash([0u8; 32]));
+    }
+
+    #[test]
+    fn test_channel_state_hash_changes_with_balances() {
+        let channel_id = crypto_hash(b"channel");
+        let b1 = ChannelBalances::new(1000, 500);
+        let b2 = ChannelBalances::new(900, 600);
+        let h1 = channel_state_hash(&channel_id, 1, &b1);
+        let h2 = channel_state_hash(&channel_id, 1, &b2);
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_validate_message_format_zero_signature() {
+        // A message with all-zero signature should fail validation
+        let peer_id = PeerId::from_bytes([1u8; 20]);
+        let current_time = 1234567890000u64;
+        let msg = Message::new(
+            nodalync_types::constants::PROTOCOL_VERSION,
+            MessageType::Ping,
+            Hash([0u8; 32]),
+            current_time,
+            peer_id,
+            vec![],
+            Signature::from_bytes([0u8; 64]),
+        );
+        let result = validate_message_format(&msg, current_time);
+        assert!(matches!(result, Err(FormatError::InvalidSignature)));
+    }
+
+    #[test]
+    fn test_encode_decode_large_payload() {
+        // Test with a message containing a large payload
+        let (private_key, _public_key, peer_id) = test_keypair();
+        let large_data = vec![0xABu8; 10000];
+        let msg = create_message(
+            MessageType::Announce,
+            large_data.clone(),
+            peer_id,
+            1234567890000,
+            &private_key,
+        );
+        let encoded = encode_message(&msg).unwrap();
+        let decoded = decode_message(&encoded).unwrap();
+        assert_eq!(decoded.payload, large_data);
+        assert_eq!(decoded.message_type, MessageType::Announce);
+    }
+
+    #[test]
+    fn test_encode_message_all_types_roundtrip() {
+        let (private_key, _public_key, peer_id) = test_keypair();
+        let types = [
+            MessageType::Announce,
+            MessageType::AnnounceUpdate,
+            MessageType::Search,
+            MessageType::SearchResponse,
+            MessageType::PreviewRequest,
+            MessageType::PreviewResponse,
+            MessageType::QueryRequest,
+            MessageType::QueryResponse,
+            MessageType::QueryError,
+            MessageType::VersionRequest,
+            MessageType::VersionResponse,
+            MessageType::ChannelOpen,
+            MessageType::ChannelAccept,
+            MessageType::ChannelUpdate,
+            MessageType::ChannelClose,
+            MessageType::ChannelDispute,
+            MessageType::ChannelCloseAck,
+            MessageType::SettleBatch,
+            MessageType::SettleConfirm,
+            MessageType::Ping,
+            MessageType::Pong,
+            MessageType::PeerInfo,
+        ];
+        for msg_type in types {
+            let msg = create_message(
+                msg_type,
+                vec![1, 2, 3],
+                peer_id,
+                1234567890000,
+                &private_key,
+            );
+            let encoded = encode_message(&msg).unwrap();
+            let decoded = decode_message(&encoded).unwrap();
+            assert_eq!(decoded.message_type, msg_type, "Failed for {:?}", msg_type);
+            assert_eq!(decoded.payload, vec![1, 2, 3]);
+        }
+    }
 }

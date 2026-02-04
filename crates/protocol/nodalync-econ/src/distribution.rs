@@ -352,4 +352,142 @@ mod tests {
         // Root: 93
         assert_eq!(root_dist.unwrap().amount, 93);
     }
+
+    #[test]
+    fn test_distribution_payment_1_tinybar() {
+        // Minimum possible non-zero payment
+        // 1 * 5 / 100 = 0 (integer division)
+        let owner = test_peer_id();
+        let root = test_peer_id();
+        let entry = ProvenanceEntry::with_weight(test_hash(b"src"), root, Visibility::Shared, 1);
+        let distributions = distribute_revenue(1, &owner, &[entry]);
+        let total: Amount = distributions.iter().map(|d| d.amount).sum();
+        assert_eq!(total, 1);
+        // Owner synthesis fee is 0 (1 * 5 / 100 = 0), root gets 1
+        let root_dist = distributions.iter().find(|d| d.recipient == root);
+        assert!(root_dist.is_some());
+        assert_eq!(root_dist.unwrap().amount, 1);
+    }
+
+    #[test]
+    fn test_distribution_payment_19() {
+        // Edge: 19 * 5/100 = 0 (integer division)
+        let owner = test_peer_id();
+        let root = test_peer_id();
+        let entry = ProvenanceEntry::with_weight(test_hash(b"src"), root, Visibility::Shared, 1);
+        let distributions = distribute_revenue(19, &owner, &[entry]);
+        let total: Amount = distributions.iter().map(|d| d.amount).sum();
+        assert_eq!(total, 19);
+        // Synthesis fee: 19 * 5 / 100 = 0
+        let synthesis_fee = calculate_synthesis_fee(19);
+        assert_eq!(synthesis_fee, 0);
+    }
+
+    #[test]
+    fn test_distribution_payment_20() {
+        // Edge: 20 * 5/100 = 1 (first non-zero synthesis fee)
+        let owner = test_peer_id();
+        let root = test_peer_id();
+        let entry = ProvenanceEntry::with_weight(test_hash(b"src"), root, Visibility::Shared, 1);
+        let distributions = distribute_revenue(20, &owner, &[entry]);
+        let total: Amount = distributions.iter().map(|d| d.amount).sum();
+        assert_eq!(total, 20);
+        // Synthesis fee: 20 * 5 / 100 = 1
+        let owner_dist = distributions.iter().find(|d| d.recipient == owner);
+        assert!(owner_dist.is_some());
+        assert_eq!(owner_dist.unwrap().amount, 1);
+        // Root pool: 20 - 1 = 19
+        let root_dist = distributions.iter().find(|d| d.recipient == root);
+        assert_eq!(root_dist.unwrap().amount, 19);
+    }
+
+    #[test]
+    fn test_distribution_100_roots_equal_weight() {
+        let owner = test_peer_id();
+        let entries: Vec<ProvenanceEntry> = (0..100u32)
+            .map(|i| {
+                let root = test_peer_id();
+                ProvenanceEntry::with_weight(
+                    test_hash(format!("src-{}", i).as_bytes()),
+                    root,
+                    Visibility::Shared,
+                    1,
+                )
+            })
+            .collect();
+
+        let payment = 10_000_000u64; // 10M tinybars
+        let distributions = distribute_revenue(payment, &owner, &entries);
+        let total: Amount = distributions.iter().map(|d| d.amount).sum();
+        assert_eq!(total, payment, "Total must equal payment");
+    }
+
+    #[test]
+    fn test_distribution_unequal_weights_1_3_6() {
+        let owner = test_peer_id();
+        let root1 = test_peer_id();
+        let root2 = test_peer_id();
+        let root3 = test_peer_id();
+
+        let e1 = ProvenanceEntry::with_weight(test_hash(b"s1"), root1, Visibility::Shared, 1);
+        let e2 = ProvenanceEntry::with_weight(test_hash(b"s2"), root2, Visibility::Shared, 3);
+        let e3 = ProvenanceEntry::with_weight(test_hash(b"s3"), root3, Visibility::Shared, 6);
+        // Total weight: 10, root_pool = 9500, per_weight = 950
+        let distributions = distribute_revenue(10000, &owner, &[e1, e2, e3]);
+
+        let root1_dist = distributions.iter().find(|d| d.recipient == root1);
+        let root2_dist = distributions.iter().find(|d| d.recipient == root2);
+        let root3_dist = distributions.iter().find(|d| d.recipient == root3);
+
+        // root1: 1 * 950 = 950
+        assert_eq!(root1_dist.unwrap().amount, 950);
+        // root2: 3 * 950 = 2850
+        assert_eq!(root2_dist.unwrap().amount, 2850);
+        // root3: 6 * 950 = 5700
+        assert_eq!(root3_dist.unwrap().amount, 5700);
+
+        let total: Amount = distributions.iter().map(|d| d.amount).sum();
+        assert_eq!(total, 10000);
+    }
+
+    #[test]
+    fn test_distribution_deterministic_ordering() {
+        // Run distribution twice with same inputs - should get same order
+        let owner = test_peer_id();
+        let root1 = test_peer_id();
+        let root2 = test_peer_id();
+        let e1 = ProvenanceEntry::with_weight(test_hash(b"s1"), root1, Visibility::Shared, 1);
+        let e2 = ProvenanceEntry::with_weight(test_hash(b"s2"), root2, Visibility::Shared, 1);
+
+        let d1 = distribute_revenue(1000, &owner, &[e1.clone(), e2.clone()]);
+        let d2 = distribute_revenue(1000, &owner, &[e1, e2]);
+
+        assert_eq!(d1.len(), d2.len());
+        for (a, b) in d1.iter().zip(d2.iter()) {
+            assert_eq!(a.recipient, b.recipient);
+            assert_eq!(a.amount, b.amount);
+        }
+    }
+
+    #[test]
+    fn test_distribution_owner_in_provenance() {
+        // Owner appears as both synthesis fee recipient and root contributor
+        let owner = test_peer_id();
+        let other_root = test_peer_id();
+        let e1 = ProvenanceEntry::with_weight(test_hash(b"s1"), owner, Visibility::Shared, 1);
+        let e2 = ProvenanceEntry::with_weight(test_hash(b"s2"), other_root, Visibility::Shared, 1);
+
+        let distributions = distribute_revenue(1000, &owner, &[e1, e2]);
+
+        // Owner gets synthesis fee (50) + root share (475) + remainder
+        // root_pool = 950, per_weight = 950/2 = 475, remainder = 0
+        let owner_dist = distributions.iter().find(|d| d.recipient == owner);
+        assert_eq!(owner_dist.unwrap().amount, 525); // 50 + 475
+
+        let other_dist = distributions.iter().find(|d| d.recipient == other_root);
+        assert_eq!(other_dist.unwrap().amount, 475);
+
+        let total: Amount = distributions.iter().map(|d| d.amount).sum();
+        assert_eq!(total, 1000);
+    }
 }

@@ -2,9 +2,10 @@
 
 use std::path::Path;
 
+use nodalync_store::ManifestStore;
 use nodalync_types::Metadata;
 
-use crate::config::CliConfig;
+use crate::config::{hbar_to_tinybars, CliConfig};
 use crate::context::{parse_hash, NodeContext};
 use crate::error::{CliError, CliResult};
 use crate::output::{OutputFormat, Render, UpdateOutput};
@@ -16,6 +17,7 @@ pub fn update(
     hash_str: &str,
     file: &Path,
     title: Option<String>,
+    price: Option<f64>,
 ) -> CliResult<String> {
     // Parse hash
     let hash = parse_hash(hash_str)?;
@@ -52,7 +54,22 @@ pub fn update(
     // Update content
     let new_hash = ctx.ops.update_content(&hash, &content, metadata)?;
 
-    // Get the new manifest to extract version info
+    // Carry forward economics from previous version
+    let new_price = match price {
+        Some(p) => hbar_to_tinybars(p),   // explicit override
+        None => existing.economics.price, // carry forward
+    };
+    {
+        let mut new_manifest = ctx
+            .ops
+            .get_content_manifest(&new_hash)?
+            .ok_or_else(|| CliError::NotFound(new_hash.to_string()))?;
+        new_manifest.economics.price = new_price;
+        new_manifest.economics.currency = existing.economics.currency;
+        ctx.ops.state.manifests.update(&new_manifest)?;
+    }
+
+    // Get the updated manifest for version info output
     let new_manifest = ctx
         .ops
         .get_content_manifest(&new_hash)?
@@ -105,6 +122,7 @@ mod tests {
             OutputFormat::Human,
             "invalidhash123",
             &file_path,
+            None,
             None,
         );
 

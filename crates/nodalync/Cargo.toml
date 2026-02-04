@@ -1,8 +1,8 @@
 [package]
 name = "nodalync"
-version = "0.9.4"
+version = "0.10.0"
 edition = "2021"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 description = "Nodalync protocol - decentralized node coordination (placeholder, full implementation coming soon)"
 repository = "https://github.com/nodalync/nodalync"
 authors = ["Gabriel Giangi <gabegiangi@gmail.com>"]

@@ -422,4 +422,65 @@ mod tests {
             assert_eq!(msg_type, recovered);
         }
     }
+
+    #[test]
+    fn test_message_type_all_variants_u16_roundtrip() {
+        // Exhaustive test of all message type u16 roundtrips
+        let all_types = [
+            (0x0100u16, MessageType::Announce),
+            (0x0101, MessageType::AnnounceUpdate),
+            (0x0110, MessageType::Search),
+            (0x0111, MessageType::SearchResponse),
+            (0x0200, MessageType::PreviewRequest),
+            (0x0201, MessageType::PreviewResponse),
+            (0x0300, MessageType::QueryRequest),
+            (0x0301, MessageType::QueryResponse),
+            (0x0302, MessageType::QueryError),
+            (0x0400, MessageType::VersionRequest),
+            (0x0401, MessageType::VersionResponse),
+            (0x0500, MessageType::ChannelOpen),
+            (0x0501, MessageType::ChannelAccept),
+            (0x0502, MessageType::ChannelUpdate),
+            (0x0503, MessageType::ChannelClose),
+            (0x0504, MessageType::ChannelDispute),
+            (0x0505, MessageType::ChannelCloseAck),
+            (0x0600, MessageType::SettleBatch),
+            (0x0601, MessageType::SettleConfirm),
+            (0x0700, MessageType::Ping),
+            (0x0701, MessageType::Pong),
+            (0x0710, MessageType::PeerInfo),
+        ];
+        for (value, expected) in all_types {
+            let parsed = MessageType::from_u16(value).unwrap();
+            assert_eq!(parsed, expected, "from_u16({:#06x}) failed", value);
+            assert_eq!(parsed.to_u16(), value, "to_u16() failed for {:?}", expected);
+        }
+    }
+
+    #[test]
+    fn test_message_payload_hash_deterministic() {
+        let msg = Message::new(
+            1,
+            MessageType::Ping,
+            Hash([0u8; 32]),
+            1234567890,
+            PeerId::from_bytes([1u8; 20]),
+            vec![1, 2, 3, 4, 5],
+            Signature::from_bytes([0u8; 64]),
+        );
+        let h1 = msg.payload_hash();
+        let h2 = msg.payload_hash();
+        assert_eq!(h1, h2);
+        // Different payload should yield different hash
+        let msg2 = Message::new(
+            1,
+            MessageType::Ping,
+            Hash([0u8; 32]),
+            1234567890,
+            PeerId::from_bytes([1u8; 20]),
+            vec![5, 4, 3, 2, 1],
+            Signature::from_bytes([0u8; 64]),
+        );
+        assert_ne!(h1, msg2.payload_hash());
+    }
 }

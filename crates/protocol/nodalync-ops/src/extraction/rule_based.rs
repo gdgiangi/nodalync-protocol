@@ -184,7 +184,8 @@ impl L1Extractor for RuleBasedExtractor {
             Err(_) => return Ok(Vec::new()), // Binary content, no mentions
         };
 
-        let sentences = Self::split_sentences(text);
+        let clean_text = strip_markdown(text);
+        let sentences = Self::split_sentences(&clean_text);
         let mut mentions = Vec::new();
 
         for (para_num, sentence) in sentences {
@@ -220,6 +221,70 @@ impl L1Extractor for RuleBasedExtractor {
 
         Ok(mentions)
     }
+}
+
+/// Strip common markdown formatting from text for cleaner mention extraction.
+fn strip_markdown(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    for line in text.lines() {
+        let trimmed = line.trim();
+        // Strip heading markers: "## Title" -> "Title"
+        let clean = if trimmed.starts_with('#') {
+            trimmed.trim_start_matches('#').trim_start()
+        } else if trimmed.starts_with('>') {
+            // Strip blockquote markers
+            trimmed.trim_start_matches('>').trim_start()
+        } else {
+            trimmed
+        };
+        // Strip bold markers (** and __)
+        let clean = clean.replace("**", "").replace("__", "");
+        // Strip inline code backticks
+        let clean = clean.replace('`', "");
+        // Strip link syntax: [text](url) -> text
+        let clean = strip_link_syntax(&clean);
+        result.push_str(&clean);
+        result.push('\n');
+    }
+    result
+}
+
+/// Convert markdown links `[text](url)` to just `text`.
+fn strip_link_syntax(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '[' {
+            let mut link_text = String::new();
+            let mut found_close = false;
+            for inner in chars.by_ref() {
+                if inner == ']' {
+                    found_close = true;
+                    break;
+                }
+                link_text.push(inner);
+            }
+            if found_close && chars.peek() == Some(&'(') {
+                chars.next(); // consume '('
+                for inner in chars.by_ref() {
+                    if inner == ')' {
+                        break;
+                    }
+                }
+                result.push_str(&link_text);
+            } else {
+                // Not a real link, preserve original
+                result.push('[');
+                result.push_str(&link_text);
+                if found_close {
+                    result.push(']');
+                }
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    result
 }
 
 /// Split text on sentence terminators while preserving the terminator.
@@ -403,5 +468,70 @@ mod tests {
         assert_eq!(truncate("short", 10), "short");
         // 10 chars - 3 for "..." = 7 chars of content
         assert_eq!(truncate("a very long string", 10), "a very ...");
+    }
+
+    #[test]
+    fn test_strip_markdown_headings() {
+        assert_eq!(strip_markdown("# Heading").trim(), "Heading");
+        assert_eq!(strip_markdown("## Sub Heading").trim(), "Sub Heading");
+        assert_eq!(strip_markdown("### Deep Heading").trim(), "Deep Heading");
+    }
+
+    #[test]
+    fn test_strip_markdown_bold() {
+        assert_eq!(strip_markdown("**bold** text").trim(), "bold text");
+        assert_eq!(strip_markdown("__also bold__").trim(), "also bold");
+    }
+
+    #[test]
+    fn test_strip_markdown_blockquote() {
+        assert_eq!(strip_markdown("> quoted text").trim(), "quoted text");
+    }
+
+    #[test]
+    fn test_strip_markdown_links() {
+        assert_eq!(
+            strip_markdown("[link text](http://example.com)").trim(),
+            "link text"
+        );
+    }
+
+    #[test]
+    fn test_strip_markdown_backticks() {
+        assert_eq!(strip_markdown("`code`").trim(), "code");
+    }
+
+    #[test]
+    fn test_strip_markdown_regular_text() {
+        assert_eq!(
+            strip_markdown("regular text unchanged").trim(),
+            "regular text unchanged"
+        );
+    }
+
+    #[test]
+    fn test_strip_markdown_preserves_list_markers() {
+        // Single * for lists should be preserved
+        assert_eq!(strip_markdown("* list item").trim(), "* list item");
+    }
+
+    #[test]
+    fn test_strip_link_syntax_not_a_link() {
+        // Brackets without parens should be preserved
+        assert_eq!(strip_link_syntax("[not a link]"), "[not a link]");
+    }
+
+    #[test]
+    fn test_extract_strips_markdown() {
+        let extractor = RuleBasedExtractor::new();
+        let content = b"# The Impact of Technology\n\nResults show **significant** improvement.";
+
+        let mentions = extractor.extract(content, Some("text/plain")).unwrap();
+
+        // Should not contain markdown syntax
+        for mention in &mentions {
+            assert!(!mention.content.contains('#'));
+            assert!(!mention.content.contains("**"));
+        }
     }
 }

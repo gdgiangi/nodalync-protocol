@@ -333,11 +333,13 @@ Kademlia scales logarithmically—lookups are O(log n). IPFS uses the same appro
 **Answer:** Currently Hedera-specific, but abstracted behind a trait:
 
 ```rust
-pub trait Settlement {
-    fn submit_batch(&self, batch: SettlementBatch) -> Result<TransactionId>;
-    fn verify_settlement(&self, tx_id: &TransactionId) -> Result<SettlementStatus>;
-    fn open_channel(&self, peer: &PeerId, deposit: Amount) -> Result<ChannelId>;
-    fn close_channel(&self, channel_id: &ChannelId) -> Result<TransactionId>;
+#[async_trait]
+pub trait Settlement: Send + Sync {
+    async fn settle_batch(&self, batch: &SettlementBatch) -> SettleResult<TransactionId>;
+    async fn verify_settlement(&self, tx_id: &TransactionId) -> SettleResult<SettlementStatus>;
+    async fn open_channel(&self, peer: &PeerId, deposit: u64) -> SettleResult<ChannelId>;
+    async fn close_channel(&self, id: &ChannelId, ...) -> SettleResult<TransactionId>;
+    // ... deposit, withdraw, dispute, account mapping, etc.
 }
 ```
 
@@ -522,5 +524,5 @@ The protocol is infrastructure—like IPFS doesn't have takedowns, but Pinata (a
 
 *Document Version: 2.0*
 *Last Updated: January 2026*
-*References: Nodalync Whitepaper, Protocol Specification v0.2.1-draft*
+*References: Nodalync Whitepaper, Protocol Specification v0.7.0*
 *Contract: 0.0.7729011 (Hedera Testnet)*

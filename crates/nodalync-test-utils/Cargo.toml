@@ -1,0 +1,19 @@
+[package]
+name = "nodalync-test-utils"
+version = "0.1.0"
+edition = "2021"
+description = "Shared test utilities for the Nodalync protocol"
+
+[dependencies]
+nodalync-crypto = { path = "../protocol/nodalync-crypto" }
+nodalync-types = { path = "../protocol/nodalync-types" }
+nodalync-wire = { path = "../protocol/nodalync-wire" }
+nodalync-store = { path = "../protocol/nodalync-store" }
+nodalync-valid = { path = "../protocol/nodalync-valid" }
+nodalync-ops = { path = "../protocol/nodalync-ops" }
+nodalync-net = { path = "../protocol/nodalync-net" }
+nodalync-settle = { path = "../protocol/nodalync-settle" }
+async-trait = "0.1"
+tokio = { version = "1", features = ["sync"] }
+tempfile = "3.10"
+libp2p = { workspace = true }

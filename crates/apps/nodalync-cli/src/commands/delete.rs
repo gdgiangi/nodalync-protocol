@@ -1,6 +1,7 @@
 //! Delete local content command.
 
-use nodalync_store::ContentStore;
+use nodalync_store::{ContentStore, ManifestStore};
+use nodalync_types::Visibility;
 
 use crate::config::CliConfig;
 use crate::context::{parse_hash, NodeContext};
@@ -34,8 +35,8 @@ pub fn delete(
     // Prompt for confirmation if not forcing
     if !force {
         if !crate::prompt::is_interactive() {
-            return Err(CliError::User(
-                "Use --force for non-interactive delete".into(),
+            return Err(CliError::ConfirmationRequired(
+                "Delete requires confirmation. Use --force to skip, or run in a terminal for interactive confirmation.".into(),
             ));
         }
         let prompt = format!(
@@ -47,8 +48,11 @@ pub fn delete(
         }
     }
 
-    // Delete content file (but preserve manifest for provenance)
+    // Take content offline (manifest preserved for provenance)
     ctx.ops.state.content.delete(&hash)?;
+    let mut updated = manifest.clone();
+    updated.visibility = Visibility::Offline;
+    ctx.ops.state.manifests.update(&updated)?;
 
     let output = DeleteOutput {
         hash: hash.to_string(),

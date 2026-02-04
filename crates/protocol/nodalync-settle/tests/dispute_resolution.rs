@@ -37,6 +37,7 @@ use tempfile::NamedTempFile;
 
 /// Get test credentials from environment variables.
 fn get_test_credentials() -> Option<(String, String, String, NamedTempFile)> {
+    nodalync_test_utils::try_load_dotenv();
     let account_id = env::var("HEDERA_ACCOUNT_ID").ok()?;
     let private_key = env::var("HEDERA_PRIVATE_KEY").ok()?;
     let contract_id = env::var("HEDERA_CONTRACT_ID").ok()?;
@@ -84,7 +85,6 @@ fn dummy_signature() -> Signature {
 
 /// Test basic channel opening (prerequisite for dispute tests).
 #[tokio::test]
-#[ignore]
 async fn test_open_channel() {
     let settlement = match create_settlement().await {
         Some(s) => s,
@@ -110,7 +110,6 @@ async fn test_open_channel() {
 ///
 /// This test opens a channel and then initiates a dispute with a claimed state.
 #[tokio::test]
-#[ignore]
 async fn test_initiate_dispute() {
     let settlement = match create_settlement().await {
         Some(s) => s,
@@ -171,7 +170,6 @@ async fn test_initiate_dispute() {
 ///
 /// This test simulates submitting a counter-dispute with a higher nonce.
 #[tokio::test]
-#[ignore]
 async fn test_counter_dispute() {
     let settlement = match create_settlement().await {
         Some(s) => s,
@@ -221,7 +219,6 @@ async fn test_counter_dispute() {
 /// Note: This cannot be fully tested without waiting 24 hours.
 /// The test validates the SDK call but expects failure.
 #[tokio::test]
-#[ignore]
 async fn test_resolve_dispute() {
     let settlement = match create_settlement().await {
         Some(s) => s,
@@ -262,7 +259,6 @@ async fn test_resolve_dispute() {
 /// 2. Show dispute-related contract functions work
 /// 3. Verify error handling for edge cases
 #[tokio::test]
-#[ignore]
 async fn test_full_dispute_flow() {
     let settlement = match create_settlement().await {
         Some(s) => s,
@@ -357,7 +353,6 @@ async fn test_full_dispute_flow() {
 
 /// Test that verifies the contract's dispute period constant.
 #[tokio::test]
-#[ignore]
 async fn test_dispute_period_constant() {
     println!("===========================================");
     println!("Dispute Period Configuration");

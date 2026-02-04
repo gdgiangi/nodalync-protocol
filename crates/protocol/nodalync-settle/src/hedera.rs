@@ -7,7 +7,7 @@ use std::str::FromStr;
 use std::sync::RwLock;
 
 use async_trait::async_trait;
-use hedera::{
+use hiero_sdk::{
     AccountBalanceQuery, AccountId as HederaAccountId, Client, ContractCallQuery,
     ContractExecuteTransaction, ContractFunctionParameters, ContractId, Hbar, PrivateKey,
     TransactionId as HederaTransactionId, TransactionReceiptQuery,
@@ -116,11 +116,12 @@ impl HederaSettlement {
     fn current_timestamp(&self) -> Timestamp {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .expect("Time went backwards")
             .as_millis() as Timestamp
     }
 
-    /// Encode a settlement entry for the contract call.
+    /// Encode a settlement entry for the contract call (legacy, uses raw AccountId bytes).
+    #[allow(dead_code)]
     fn encode_settlement_entry(
         &self,
         recipient: &AccountId,
@@ -148,20 +149,123 @@ impl HederaSettlement {
         bytes
     }
 
+    /// Encode a settlement entry using the resolved EVM address.
+    ///
+    /// The contract tracks balances by EVM address (20 bytes), not by AccountId.
+    /// This method encodes entries with the correct EVM address so `settleBatch`
+    /// credits the right on-chain identity.
+    fn encode_settlement_entry_evm(
+        &self,
+        evm_address: &str,
+        amount: u64,
+        provenance_hashes: &[Hash],
+    ) -> Vec<u8> {
+        let mut bytes = Vec::new();
+
+        // Recipient EVM address (20 bytes, decoded from 40-char hex string)
+        let address_bytes: Vec<u8> = (0..evm_address.len())
+            .step_by(2)
+            .filter_map(|i| u8::from_str_radix(&evm_address[i..i + 2], 16).ok())
+            .collect();
+        // Pad or truncate to exactly 20 bytes
+        let mut address_20 = [0u8; 20];
+        let len = address_bytes.len().min(20);
+        address_20[20 - len..].copy_from_slice(&address_bytes[..len]);
+        bytes.extend_from_slice(&address_20);
+
+        // Amount (8 bytes)
+        bytes.extend_from_slice(&amount.to_be_bytes());
+
+        // Number of provenance hashes (4 bytes)
+        bytes.extend_from_slice(&(provenance_hashes.len() as u32).to_be_bytes());
+
+        // Provenance hashes
+        for hash in provenance_hashes {
+            bytes.extend_from_slice(&hash.0);
+        }
+
+        bytes
+    }
+
     /// Wait for a transaction receipt.
     async fn wait_for_receipt(
         &self,
         tx_id: &HederaTransactionId,
-    ) -> SettleResult<hedera::TransactionReceipt> {
+    ) -> SettleResult<hiero_sdk::TransactionReceipt> {
         self.retry_policy
             .execute(|| async {
                 TransactionReceiptQuery::new()
                     .transaction_id(*tx_id)
                     .execute(&self.client)
                     .await
-                    .map_err(|e| SettleError::hedera_sdk(e.to_string()))
+                    .map_err(crate::error::classify_sdk_error)
             })
             .await
+    }
+
+    /// Resolve the EVM address for a Hedera account via the Mirror Node REST API.
+    ///
+    /// For ECDSA accounts, `AccountId::to_solidity_address()` returns the account-number-derived
+    /// address, but the contract's `msg.sender` uses the key-derived EVM address. This method
+    /// fetches the correct EVM address from the Mirror Node and caches it.
+    async fn resolve_evm_address(&self, account: &AccountId) -> SettleResult<String> {
+        // Check cache first
+        {
+            let mapper = self
+                .account_mapper
+                .read()
+                .map_err(|_| SettleError::internal("account mapper lock poisoned"))?;
+            if let Some(cached) = mapper.get_evm_address(account) {
+                return Ok(cached.to_string());
+            }
+        }
+
+        // Fetch from Mirror Node
+        let hedera_account = self.to_hedera_account(account);
+        let url = format!(
+            "{}/api/v1/accounts/{}",
+            self.config.network.mirror_node_url(),
+            hedera_account
+        );
+
+        let response = reqwest::get(&url)
+            .await
+            .map_err(|e| SettleError::network(format!("Mirror Node request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(SettleError::network(format!(
+                "Mirror Node returned status {} for account {}",
+                response.status(),
+                hedera_account
+            )));
+        }
+
+        let body: serde_json::Value = response.json().await.map_err(|e| {
+            SettleError::network(format!("Mirror Node response parse error: {}", e))
+        })?;
+
+        let raw_address = body["evm_address"].as_str().ok_or_else(|| {
+            SettleError::hedera_sdk(format!(
+                "Mirror Node response missing evm_address for account {}",
+                hedera_account
+            ))
+        })?;
+        let evm_address = raw_address
+            .strip_prefix("0x")
+            .unwrap_or(raw_address)
+            .to_string();
+
+        // Cache the result
+        {
+            let mut mapper = self
+                .account_mapper
+                .write()
+                .map_err(|_| SettleError::internal("account mapper lock poisoned"))?;
+            mapper.set_evm_address(*account, evm_address.clone());
+        }
+
+        debug!(account = %hedera_account, evm_address = %evm_address, "Resolved EVM address");
+        Ok(evm_address)
     }
 }
 
@@ -181,13 +285,13 @@ impl Settlement for HederaSettlement {
                     .function("deposit")
                     .execute(&self.client)
                     .await
-                    .map_err(|e| SettleError::hedera_sdk(e.to_string()))
+                    .map_err(crate::error::classify_sdk_error)
             })
             .await?;
 
         let receipt = self.wait_for_receipt(&tx.transaction_id).await?;
 
-        if receipt.status != hedera::Status::Success {
+        if receipt.status != hiero_sdk::Status::Success {
             return Err(SettleError::transaction_failed(format!(
                 "deposit failed: {:?}",
                 receipt.status
@@ -213,13 +317,13 @@ impl Settlement for HederaSettlement {
                     )
                     .execute(&self.client)
                     .await
-                    .map_err(|e| SettleError::hedera_sdk(e.to_string()))
+                    .map_err(crate::error::classify_sdk_error)
             })
             .await?;
 
         let receipt = self.wait_for_receipt(&tx.transaction_id).await?;
 
-        if receipt.status != hedera::Status::Success {
+        if receipt.status != hiero_sdk::Status::Success {
             return Err(SettleError::transaction_failed(format!(
                 "withdraw failed: {:?}",
                 receipt.status
@@ -245,7 +349,7 @@ impl Settlement for HederaSettlement {
                     )
                     .execute(&self.client)
                     .await
-                    .map_err(|e| SettleError::hedera_sdk(e.to_string()))
+                    .map_err(crate::error::classify_sdk_error)
             })
             .await?;
 
@@ -268,7 +372,7 @@ impl Settlement for HederaSettlement {
                     .account_id(self.operator_id)
                     .execute(&self.client)
                     .await
-                    .map_err(|e| SettleError::hedera_sdk(e.to_string()))
+                    .map_err(crate::error::classify_sdk_error)
             })
             .await?;
 
@@ -302,13 +406,13 @@ impl Settlement for HederaSettlement {
                     )
                     .execute(&self.client)
                     .await
-                    .map_err(|e| SettleError::hedera_sdk(e.to_string()))
+                    .map_err(crate::error::classify_sdk_error)
             })
             .await?;
 
         let receipt = self.wait_for_receipt(&tx.transaction_id).await?;
 
-        if receipt.status != hedera::Status::Success {
+        if receipt.status != hiero_sdk::Status::Success {
             return Err(SettleError::transaction_failed(format!(
                 "attest failed: {:?}",
                 receipt.status
@@ -323,28 +427,95 @@ impl Settlement for HederaSettlement {
         Ok(Self::from_hedera_tx_id(&tx.transaction_id))
     }
 
-    async fn get_attestation(&self, _content_hash: &Hash) -> SettleResult<Option<Attestation>> {
-        // Query contract state to get attestation
-        // This would require a ContractCallQuery in the real implementation
-        warn!("get_attestation not yet implemented for Hedera");
+    async fn get_attestation(&self, content_hash: &Hash) -> SettleResult<Option<Attestation>> {
+        // Query contract logs via Mirror Node REST API for attestation events
+        let content_hash_hex: String = content_hash
+            .0
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect();
+        let url = format!(
+            "{}/api/v1/contracts/{}/results/logs?order=desc&limit=25",
+            self.config.network.mirror_node_url(),
+            self.config.contract_id,
+        );
+
+        let response = reqwest::get(&url)
+            .await
+            .map_err(|e| SettleError::network(format!("Mirror Node request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            debug!(
+                status = %response.status(),
+                "Mirror Node returned non-success for attestation query"
+            );
+            return Ok(None);
+        }
+
+        let body: serde_json::Value = response.json().await.map_err(|e| {
+            SettleError::network(format!("Mirror Node response parse error: {}", e))
+        })?;
+
+        // Search logs for matching content hash in event topics/data.
+        // Ethereum log data is ABI-encoded: content_hash is zero-padded to 32 bytes.
+        let padded_hash = format!("{:0>64}", content_hash_hex);
+        if let Some(logs) = body["logs"].as_array() {
+            for log in logs {
+                // Check topics (indexed params) and data (non-indexed)
+                let matches_topic = log["topics"]
+                    .as_array()
+                    .map(|topics| {
+                        topics.iter().any(|t| {
+                            t.as_str()
+                                .map(|s| s.contains(&padded_hash))
+                                .unwrap_or(false)
+                        })
+                    })
+                    .unwrap_or(false);
+                let matches_data = log["data"]
+                    .as_str()
+                    .map(|d| d.contains(&padded_hash))
+                    .unwrap_or(false);
+
+                if matches_topic || matches_data {
+                    // Parse timestamp — skip this log entry if timestamp is missing
+                    let timestamp = match log["timestamp"]
+                        .as_str()
+                        .and_then(|t| t.split('.').next())
+                        .and_then(|t| t.parse::<u64>().ok())
+                    {
+                        Some(ts) => ts,
+                        None => continue,
+                    };
+
+                    return Ok(Some(Attestation::new(
+                        *content_hash,
+                        self.get_own_account(),
+                        timestamp,
+                        *content_hash, // provenance root (simplified — full extraction would require ABI decoding)
+                    )));
+                }
+            }
+        }
+
         Ok(None)
     }
 
-    async fn open_channel(&self, peer: &PeerId, deposit: u64) -> SettleResult<ChannelId> {
-        let peer_account = self.account_mapper.read().unwrap().require_account(peer)?;
+    async fn open_channel(
+        &self,
+        channel_id: &ChannelId,
+        peer: &PeerId,
+        deposit: u64,
+    ) -> SettleResult<TransactionId> {
+        let peer_account = self
+            .account_mapper
+            .read()
+            .map_err(|_| SettleError::internal("account mapper lock poisoned"))?
+            .require_account(peer)?;
 
-        let hedera_peer = self.to_hedera_account(&peer_account);
-
-        // Generate channel ID from participants
-        let channel_hash = nodalync_crypto::content_hash(
-            &[
-                &self.operator_id.num.to_be_bytes()[..],
-                &peer_account.num.to_be_bytes()[..],
-                &self.current_timestamp().to_be_bytes()[..],
-            ]
-            .concat(),
-        );
-        let channel_id = ChannelId::new(channel_hash);
+        // Resolve the peer's EVM address via Mirror Node (not to_solidity_address which
+        // returns the wrong address for ECDSA accounts)
+        let peer_evm_address = self.resolve_evm_address(&peer_account).await?;
 
         debug!(
             peer = %peer,
@@ -352,6 +523,8 @@ impl Settlement for HederaSettlement {
             channel_id = %channel_id,
             "Opening payment channel"
         );
+
+        let channel_hash = channel_id.0;
 
         let tx = self
             .retry_policy
@@ -363,19 +536,19 @@ impl Settlement for HederaSettlement {
                         "openChannel",
                         ContractFunctionParameters::new()
                             .add_bytes32(&channel_hash.0)
-                            .add_address(&hedera_peer.to_solidity_address().unwrap())
+                            .add_address(&peer_evm_address)
                             .add_uint256(deposit.into())
                             .add_uint256(0u64.into()), // peer deposit (0 initially)
                     )
                     .execute(&self.client)
                     .await
-                    .map_err(|e| SettleError::hedera_sdk(e.to_string()))
+                    .map_err(crate::error::classify_sdk_error)
             })
             .await?;
 
         let receipt = self.wait_for_receipt(&tx.transaction_id).await?;
 
-        if receipt.status != hedera::Status::Success {
+        if receipt.status != hiero_sdk::Status::Success {
             return Err(SettleError::transaction_failed(format!(
                 "open channel failed: {:?}",
                 receipt.status
@@ -383,7 +556,7 @@ impl Settlement for HederaSettlement {
         }
 
         info!(channel_id = %channel_id, "Channel opened");
-        Ok(channel_id)
+        Ok(Self::from_hedera_tx_id(&tx.transaction_id))
     }
 
     async fn close_channel(
@@ -416,13 +589,13 @@ impl Settlement for HederaSettlement {
                     )
                     .execute(&self.client)
                     .await
-                    .map_err(|e| SettleError::hedera_sdk(e.to_string()))
+                    .map_err(crate::error::classify_sdk_error)
             })
             .await?;
 
         let receipt = self.wait_for_receipt(&tx.transaction_id).await?;
 
-        if receipt.status != hedera::Status::Success {
+        if receipt.status != hiero_sdk::Status::Success {
             return Err(SettleError::transaction_failed(format!(
                 "close channel failed: {:?}",
                 receipt.status
@@ -461,13 +634,13 @@ impl Settlement for HederaSettlement {
                     )
                     .execute(&self.client)
                     .await
-                    .map_err(|e| SettleError::hedera_sdk(e.to_string()))
+                    .map_err(crate::error::classify_sdk_error)
             })
             .await?;
 
         let receipt = self.wait_for_receipt(&tx.transaction_id).await?;
 
-        if receipt.status != hedera::Status::Success {
+        if receipt.status != hiero_sdk::Status::Success {
             return Err(SettleError::transaction_failed(format!(
                 "dispute failed: {:?}",
                 receipt.status
@@ -506,13 +679,13 @@ impl Settlement for HederaSettlement {
                     )
                     .execute(&self.client)
                     .await
-                    .map_err(|e| SettleError::hedera_sdk(e.to_string()))
+                    .map_err(crate::error::classify_sdk_error)
             })
             .await?;
 
         let receipt = self.wait_for_receipt(&tx.transaction_id).await?;
 
-        if receipt.status != hedera::Status::Success {
+        if receipt.status != hiero_sdk::Status::Success {
             return Err(SettleError::transaction_failed(format!(
                 "counter-dispute failed: {:?}",
                 receipt.status
@@ -538,13 +711,13 @@ impl Settlement for HederaSettlement {
                     )
                     .execute(&self.client)
                     .await
-                    .map_err(|e| SettleError::hedera_sdk(e.to_string()))
+                    .map_err(crate::error::classify_sdk_error)
             })
             .await?;
 
         let receipt = self.wait_for_receipt(&tx.transaction_id).await?;
 
-        if receipt.status != hedera::Status::Success {
+        if receipt.status != hiero_sdk::Status::Success {
             return Err(SettleError::transaction_failed(format!(
                 "resolve dispute failed: {:?}",
                 receipt.status
@@ -567,20 +740,36 @@ impl Settlement for HederaSettlement {
             "Settling batch"
         );
 
-        // Encode entries (scope the lock to release it before async operations)
-        let encoded_entries: Vec<Vec<u8>> = {
-            let mapper = self.account_mapper.read().unwrap();
-            let mut entries = Vec::new();
-            for entry in &batch.entries {
-                let account = mapper.require_account(&entry.recipient)?;
-                entries.push(self.encode_settlement_entry(
-                    &account,
-                    entry.amount,
-                    &entry.provenance_hashes,
-                ));
-            }
-            entries
+        // 1. Collect recipient accounts (scoped lock)
+        let recipient_accounts: Vec<(AccountId, u64, Vec<Hash>)> = {
+            let mapper = self
+                .account_mapper
+                .read()
+                .map_err(|_| SettleError::internal("account mapper lock poisoned"))?;
+            batch
+                .entries
+                .iter()
+                .map(|e| {
+                    let account = mapper.require_account(&e.recipient)?;
+                    Ok((account, e.amount, e.provenance_hashes.clone()))
+                })
+                .collect::<SettleResult<Vec<_>>>()?
         };
+
+        // 2. Resolve EVM addresses for each recipient (async, outside lock)
+        let mut resolved: Vec<(String, u64, Vec<Hash>)> = Vec::new();
+        for (account, amount, prov_hashes) in &recipient_accounts {
+            let evm_address = self.resolve_evm_address(account).await?;
+            resolved.push((evm_address, *amount, prov_hashes.clone()));
+        }
+
+        // 3. Encode entries using resolved EVM addresses
+        let encoded_entries: Vec<Vec<u8>> = resolved
+            .iter()
+            .map(|(evm_address, amount, prov_hashes)| {
+                self.encode_settlement_entry_evm(evm_address, *amount, prov_hashes)
+            })
+            .collect();
 
         // Convert to slice of slices for the Hedera API
         let entries_refs: Vec<&[u8]> = encoded_entries.iter().map(|e| e.as_slice()).collect();
@@ -604,13 +793,13 @@ impl Settlement for HederaSettlement {
                     )
                     .execute(&self.client)
                     .await
-                    .map_err(|e| SettleError::hedera_sdk(e.to_string()))
+                    .map_err(crate::error::classify_sdk_error)
             })
             .await?;
 
         let receipt = self.wait_for_receipt(&tx.transaction_id).await?;
 
-        if receipt.status != hedera::Status::Success {
+        if receipt.status != hiero_sdk::Status::Success {
             return Err(SettleError::transaction_failed(format!(
                 "settle batch failed: {:?}",
                 receipt.status
@@ -637,7 +826,7 @@ impl Settlement for HederaSettlement {
             .await
         {
             Ok(receipt) => {
-                if receipt.status == hedera::Status::Success {
+                if receipt.status == hiero_sdk::Status::Success {
                     Ok(SettlementStatus::confirmed(
                         0, // Hedera doesn't have block numbers
                         self.current_timestamp(),
@@ -663,11 +852,19 @@ impl Settlement for HederaSettlement {
     }
 
     fn get_account_for_peer(&self, peer: &PeerId) -> Option<AccountId> {
-        self.account_mapper.read().unwrap().get_account(peer)
+        self.account_mapper
+            .read()
+            .map_err(|_| SettleError::internal("account mapper lock poisoned"))
+            .ok()
+            .and_then(|mapper| mapper.get_account(peer))
     }
 
     fn register_peer_account(&self, peer: &PeerId, account: AccountId) {
-        self.account_mapper.write().unwrap().register(peer, account);
+        let _ = self
+            .account_mapper
+            .write()
+            .map_err(|_| SettleError::internal("account mapper lock poisoned"))
+            .map(|mut mapper| mapper.register(peer, account));
     }
 }
 
@@ -680,13 +877,14 @@ mod tests {
     //! - HEDERA_PRIVATE_KEY: Private key for the account
     //! - HEDERA_CONTRACT_ID: Settlement contract ID
     //!
-    //! Run with: cargo test --features testnet -- --ignored
+    //! Run with: cargo test --features testnet -- --nocapture
 
     use super::*;
     use std::env;
     use tempfile::NamedTempFile;
 
     fn get_test_credentials() -> Option<(String, String, String, NamedTempFile)> {
+        nodalync_test_utils::try_load_dotenv();
         let account_id = env::var("HEDERA_ACCOUNT_ID").ok()?;
         let private_key = env::var("HEDERA_PRIVATE_KEY").ok()?;
         let contract_id = env::var("HEDERA_CONTRACT_ID").ok()?;
@@ -700,10 +898,14 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_hedera_get_balance() {
-        let (account_id, contract_id, _key, temp_file) =
-            get_test_credentials().expect("Missing testnet config");
+        let (account_id, contract_id, _key, temp_file) = match get_test_credentials() {
+            Some(creds) => creds,
+            None => {
+                println!("Skipping test: Hedera testnet credentials not set");
+                return;
+            }
+        };
 
         let config =
             HederaConfig::testnet(&account_id, temp_file.path().to_path_buf(), &contract_id);
@@ -716,10 +918,14 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_hedera_verify_settlement() {
-        let (account_id, contract_id, _key, temp_file) =
-            get_test_credentials().expect("Missing testnet config");
+        let (account_id, contract_id, _key, temp_file) = match get_test_credentials() {
+            Some(creds) => creds,
+            None => {
+                println!("Skipping test: Hedera testnet credentials not set");
+                return;
+            }
+        };
 
         let config =
             HederaConfig::testnet(&account_id, temp_file.path().to_path_buf(), &contract_id);

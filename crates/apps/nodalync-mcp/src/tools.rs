@@ -157,6 +157,28 @@ pub struct ListSourcesOutput {
 // status Tool (unified status)
 // ============================================================================
 
+/// Information about a single payment channel.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ChannelInfo {
+    /// Channel ID (base58 encoded).
+    pub channel_id: String,
+    /// Nodalync peer ID of the channel peer (starts with "ndl").
+    pub peer_id: String,
+    /// libp2p peer ID of the channel peer (starts with "12D3Koo"), if known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub libp2p_peer_id: Option<String>,
+    /// Current channel state (Opening, Open, Closing, Closed, Disputed).
+    pub state: String,
+    /// Our balance in the channel (HBAR).
+    pub my_balance_hbar: f64,
+    /// Their balance in the channel (HBAR).
+    pub their_balance_hbar: f64,
+    /// Number of pending payments not yet settled.
+    pub pending_payments: u32,
+    /// Last update timestamp (Unix milliseconds).
+    pub last_update: u64,
+}
+
 /// Output from the unified `status` tool.
 /// Combines health, budget, channel, and Hedera status in one response.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -184,6 +206,8 @@ pub struct StatusOutput {
     pub open_channels: u32,
     /// Total balance locked in channels (HBAR).
     pub channel_balance_hbar: f64,
+    /// Detailed information about each open channel.
+    pub channels: Vec<ChannelInfo>,
 
     // === Hedera Status ===
     /// Whether Hedera settlement is configured.
@@ -331,7 +355,9 @@ pub struct OpenChannelOutput {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct CloseChannelInput {
     /// Peer ID of the channel to close.
-    /// Must be a Nodalync peer ID (starts with "ndl", 20 bytes base58).
+    /// Can be either:
+    /// - A libp2p peer ID (starts with "12D3Koo")
+    /// - A Nodalync peer ID (starts with "ndl", 20 bytes base58)
     pub peer_id: String,
 }
 
@@ -340,6 +366,8 @@ pub struct CloseChannelInput {
 pub struct CloseChannelOutput {
     /// Whether the channel was successfully closed.
     pub success: bool,
+    /// How the channel was closed: "cooperative", "dispute_initiated", or "off_chain".
+    pub close_method: String,
     /// Hedera transaction ID for settlement (if on-chain settlement occurred).
     pub transaction_id: Option<String>,
     /// Final balance returned to you (tinybars).
@@ -351,13 +379,384 @@ pub struct CloseChannelOutput {
     pub hedera_account_balance_hbar: Option<f64>,
 }
 
-/// Output from the `reset_channels` tool.
+/// Result for a single channel close attempt in close_all_channels.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
-pub struct ResetChannelsOutput {
-    /// Number of channels that were cleared.
-    pub channels_cleared: u32,
-    /// Message describing what was reset.
-    pub message: String,
+pub struct ChannelCloseResult {
+    /// Peer ID of the channel.
+    pub peer_id: String,
+    /// Whether the close succeeded.
+    pub success: bool,
+    /// How the channel was closed: "cooperative", "dispute_initiated", or "failed".
+    pub close_method: String,
+    /// Transaction ID if on-chain operation occurred.
+    pub transaction_id: Option<String>,
+    /// Error message if close failed.
+    pub error: Option<String>,
+}
+
+/// Output from the `close_all_channels` tool.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct CloseAllChannelsOutput {
+    /// Number of channels that were processed.
+    pub channels_processed: u32,
+    /// Number of channels successfully closed.
+    pub channels_closed: u32,
+    /// Number of channels where disputes were initiated.
+    pub disputes_initiated: u32,
+    /// Number of channels that failed to close.
+    pub channels_failed: u32,
+    /// Details for each channel close attempt.
+    pub results: Vec<ChannelCloseResult>,
+    /// Updated Hedera account balance after all operations (HBAR).
+    pub hedera_account_balance_hbar: Option<f64>,
+}
+
+// ============================================================================
+// publish_content Tool
+// ============================================================================
+
+/// Default visibility value for serde deserialization.
+fn default_visibility() -> String {
+    "shared".to_string()
+}
+
+/// Input for the `publish_content` tool.
+///
+/// Publishes new content to the Nodalync network.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct PublishContentInput {
+    /// The content to publish (text).
+    pub content: String,
+
+    /// Content title.
+    pub title: String,
+
+    /// Optional content description.
+    #[serde(default)]
+    pub description: Option<String>,
+
+    /// Price per query in HBAR (default: 0, free).
+    #[serde(default)]
+    pub price_hbar: Option<f64>,
+
+    /// Visibility: "private", "unlisted", or "shared" (default: "shared").
+    #[serde(default = "default_visibility")]
+    pub visibility: String,
+
+    /// Optional MIME type (default: "text/plain").
+    #[serde(default)]
+    pub mime_type: Option<String>,
+
+    /// Optional tags for content discovery.
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+}
+
+/// Output from the `publish_content` tool.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct PublishContentOutput {
+    /// Content hash (base58 encoded).
+    pub hash: String,
+    /// Content title.
+    pub title: String,
+    /// Content type (always "L0" for published content).
+    pub content_type: String,
+    /// Visibility level.
+    pub visibility: String,
+    /// Price per query in HBAR.
+    pub price_hbar: f64,
+    /// Content size in bytes.
+    pub size_bytes: usize,
+    /// Number of L1 mentions extracted.
+    pub mentions_extracted: u32,
+    /// Primary topics extracted from content.
+    pub topics: Vec<String>,
+}
+
+// ============================================================================
+// preview_content Tool
+// ============================================================================
+
+/// Input for the `preview_content` tool.
+///
+/// Previews content metadata without paying for the full content.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct PreviewContentInput {
+    /// Content hash (base58 encoded).
+    pub hash: String,
+}
+
+/// Output from the `preview_content` tool.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct PreviewContentOutput {
+    /// Content hash (base58 encoded).
+    pub hash: String,
+    /// Content title.
+    pub title: String,
+    /// Content owner (peer ID string).
+    pub owner: String,
+    /// Price per query in HBAR.
+    pub price_hbar: f64,
+    /// Content type (L0, L1, L2, L3).
+    pub content_type: String,
+    /// Visibility level.
+    pub visibility: String,
+    /// Content size in bytes.
+    pub size_bytes: u64,
+    /// Number of L1 mentions.
+    pub mention_count: u32,
+    /// Preview of L1 mentions.
+    pub preview_mentions: Vec<String>,
+    /// Primary topics.
+    pub topics: Vec<String>,
+    /// Summary text.
+    pub summary: String,
+    /// Provider peer ID (libp2p), if known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_peer_id: Option<String>,
+}
+
+// ============================================================================
+// synthesize_content Tool
+// ============================================================================
+
+/// Input for the `synthesize_content` tool.
+///
+/// Creates L3 synthesized content from multiple sources.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct SynthesizeContentInput {
+    /// The synthesized content (text).
+    pub content: String,
+
+    /// Content title.
+    pub title: String,
+
+    /// Source content hashes (base58 encoded). At least one required.
+    pub sources: Vec<String>,
+
+    /// Optional description.
+    #[serde(default)]
+    pub description: Option<String>,
+
+    /// Whether to publish immediately (default: false).
+    #[serde(default)]
+    pub publish: Option<bool>,
+
+    /// Price per query in HBAR (used if publish is true).
+    #[serde(default)]
+    pub price_hbar: Option<f64>,
+
+    /// Visibility (used if publish is true): "private", "unlisted", or "shared" (default: "shared").
+    #[serde(default = "default_visibility")]
+    pub visibility: String,
+}
+
+/// Output from the `synthesize_content` tool.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct SynthesizeContentOutput {
+    /// Content hash (base58 encoded).
+    pub hash: String,
+    /// Content title.
+    pub title: String,
+    /// Content type (always "L3" for synthesized content).
+    pub content_type: String,
+    /// Source content hashes used.
+    pub sources: Vec<String>,
+    /// Provenance depth.
+    pub provenance_depth: u32,
+    /// Number of root (L0/L1) sources in the provenance chain.
+    pub root_source_count: usize,
+    /// Whether the content was published.
+    pub published: bool,
+    /// Visibility (if published).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<String>,
+    /// Price in HBAR (if published).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price_hbar: Option<f64>,
+}
+
+// ============================================================================
+// update_content Tool
+// ============================================================================
+
+/// Input for the `update_content` tool.
+///
+/// Creates a new version of existing content.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct UpdateContentInput {
+    /// Hash of the previous version (base58 encoded).
+    pub previous_hash: String,
+
+    /// New content (text).
+    pub content: String,
+
+    /// Optional new title (inherits from previous if not set).
+    #[serde(default)]
+    pub title: Option<String>,
+
+    /// Optional new description (inherits from previous if not set).
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// Output from the `update_content` tool.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct UpdateContentOutput {
+    /// New content hash (base58 encoded).
+    pub hash: String,
+    /// Previous version hash.
+    pub previous_hash: String,
+    /// Version number.
+    pub version_number: u32,
+    /// Content title.
+    pub title: String,
+    /// Content size in bytes.
+    pub size_bytes: usize,
+    /// Visibility level.
+    pub visibility: String,
+}
+
+// ============================================================================
+// delete_content Tool
+// ============================================================================
+
+/// Input for the `delete_content` tool.
+///
+/// Deletes content and sets visibility to Offline.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct DeleteContentInput {
+    /// Content hash (base58 encoded).
+    pub hash: String,
+}
+
+/// Output from the `delete_content` tool.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct DeleteContentOutput {
+    /// Content hash that was deleted.
+    pub hash: String,
+    /// Title of deleted content.
+    pub title: String,
+    /// Whether content bytes were removed.
+    pub content_removed: bool,
+    /// New visibility (always "Offline").
+    pub visibility: String,
+}
+
+// ============================================================================
+// set_visibility Tool
+// ============================================================================
+
+/// Input for the `set_visibility` tool.
+///
+/// Changes the visibility of content.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct SetVisibilityInput {
+    /// Content hash (base58 encoded).
+    pub hash: String,
+
+    /// New visibility: "private", "unlisted", or "shared".
+    pub visibility: String,
+}
+
+/// Output from the `set_visibility` tool.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct SetVisibilityOutput {
+    /// Content hash.
+    pub hash: String,
+    /// New visibility.
+    pub visibility: String,
+    /// Previous visibility.
+    pub previous_visibility: String,
+}
+
+// ============================================================================
+// list_versions Tool
+// ============================================================================
+
+/// Input for the `list_versions` tool.
+///
+/// Lists all versions of a content item.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct ListVersionsInput {
+    /// Content hash (base58 encoded). Can be any version's hash.
+    pub hash: String,
+}
+
+/// A single version entry.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct VersionEntry {
+    /// Version content hash (base58 encoded).
+    pub hash: String,
+    /// Version number.
+    pub version_number: u32,
+    /// Creation timestamp (Unix milliseconds).
+    pub timestamp: u64,
+    /// Visibility level.
+    pub visibility: String,
+    /// Price per query in HBAR.
+    pub price_hbar: f64,
+}
+
+/// Output from the `list_versions` tool.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ListVersionsOutput {
+    /// Root hash (stable identifier across all versions).
+    pub root_hash: String,
+    /// All versions.
+    pub versions: Vec<VersionEntry>,
+    /// Total number of versions.
+    pub total_versions: u32,
+}
+
+// ============================================================================
+// get_earnings Tool
+// ============================================================================
+
+/// Input for the `get_earnings` tool.
+///
+/// Gets earnings information for published content.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct GetEarningsInput {
+    /// Maximum number of content items to return (default: 20).
+    #[serde(default)]
+    pub limit: Option<u32>,
+
+    /// Filter by content type (L0, L1, L2, L3).
+    #[serde(default)]
+    pub content_type: Option<String>,
+}
+
+/// Earnings for a single content item.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ContentEarnings {
+    /// Content hash (base58 encoded).
+    pub hash: String,
+    /// Content title.
+    pub title: String,
+    /// Content type (L0, L1, L2, L3).
+    pub content_type: String,
+    /// Total queries served.
+    pub total_queries: u64,
+    /// Total revenue in HBAR.
+    pub total_revenue_hbar: f64,
+    /// Price per query in HBAR.
+    pub price_hbar: f64,
+    /// Visibility level.
+    pub visibility: String,
+}
+
+/// Output from the `get_earnings` tool.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct GetEarningsOutput {
+    /// Earnings per content item.
+    pub items: Vec<ContentEarnings>,
+    /// Total revenue across all content in HBAR.
+    pub total_revenue_hbar: f64,
+    /// Total queries across all content.
+    pub total_queries: u64,
+    /// Number of content items with earnings.
+    pub content_count: u32,
 }
 
 // ============================================================================
@@ -440,5 +839,454 @@ mod tests {
 
         assert!(input.topic.is_none());
         assert!(input.limit.is_none());
+    }
+
+    #[test]
+    fn test_deposit_hbar_input_deserialization() {
+        let json = r#"{"amount_hbar": 5.0}"#;
+        let input: DepositHbarInput = serde_json::from_str(json).unwrap();
+        assert!((input.amount_hbar - 5.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_open_channel_input_deserialization() {
+        let json = r#"{"peer_id": "12D3KooWTest"}"#;
+        let input: OpenChannelInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.peer_id, "12D3KooWTest");
+        assert!((input.deposit_hbar - 100.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_open_channel_input_with_custom_deposit() {
+        let json = r#"{"peer_id": "12D3KooWTest", "deposit_hbar": 250.0}"#;
+        let input: OpenChannelInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.peer_id, "12D3KooWTest");
+        assert!((input.deposit_hbar - 250.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_close_channel_input_deserialization() {
+        let json = r#"{"peer_id": "12D3KooWTest"}"#;
+        let input: CloseChannelInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.peer_id, "12D3KooWTest");
+    }
+
+    #[test]
+    fn test_status_output_serialization() {
+        let status = StatusOutput {
+            connected_peers: 3,
+            is_bootstrapped: true,
+            peer_id: "ndl1TestPeerId".to_string(),
+            local_content_count: 42,
+            budget_remaining_hbar: 0.75,
+            budget_total_hbar: 1.0,
+            budget_spent_hbar: 0.25,
+            open_channels: 2,
+            channel_balance_hbar: 200.0,
+            channels: vec![ChannelInfo {
+                channel_id: "ch_abc123".to_string(),
+                peer_id: "ndl1Peer1".to_string(),
+                libp2p_peer_id: Some("12D3KooWPeer1".to_string()),
+                state: "Open".to_string(),
+                my_balance_hbar: 90.0,
+                their_balance_hbar: 10.0,
+                pending_payments: 1,
+                last_update: 1700000000000,
+            }],
+            hedera_configured: true,
+            hedera_account_id: Some("0.0.7703962".to_string()),
+            hedera_network: Some("testnet".to_string()),
+            hedera_account_balance_hbar: Some(500.0),
+            hedera_contract_balance_hbar: Some(200.0),
+        };
+
+        let json_str = serde_json::to_string(&status).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+        assert_eq!(json["connected_peers"], 3);
+        assert_eq!(json["is_bootstrapped"], true);
+        assert_eq!(json["peer_id"], "ndl1TestPeerId");
+        assert_eq!(json["local_content_count"], 42);
+        assert_eq!(json["open_channels"], 2);
+        assert_eq!(json["hedera_configured"], true);
+        assert_eq!(json["hedera_account_id"], "0.0.7703962");
+        assert_eq!(json["hedera_network"], "testnet");
+    }
+
+    #[test]
+    fn test_payment_details_serialization() {
+        let payment = PaymentDetails {
+            channel_opened: true,
+            channel_id: Some("ch_test123".to_string()),
+            channel_tx_id: Some("0.0.7703962@1700000000.000".to_string()),
+            deposit_tx_id: Some("0.0.7703962@1700000001.000".to_string()),
+            deposit_amount_hbar: Some(100.0),
+            provider_peer_id: Some("12D3KooWProvider".to_string()),
+            payment_receipt_id: Some("receipt_001".to_string()),
+            hedera_account_balance_hbar: Some(400.0),
+        };
+
+        let json_str = serde_json::to_string(&payment).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+        assert_eq!(json["channel_opened"], true);
+        assert_eq!(json["channel_id"], "ch_test123");
+        assert_eq!(json["deposit_amount_hbar"], 100.0);
+        assert_eq!(json["provider_peer_id"], "12D3KooWProvider");
+    }
+
+    #[test]
+    fn test_source_info_serialization() {
+        let source = SourceInfo {
+            hash: "QmTestHash123456789abcdef".to_string(),
+            title: "Nodalync Protocol Overview".to_string(),
+            price_hbar: 0.01,
+            preview: "A protocol for fair knowledge economics".to_string(),
+            topics: vec!["protocol".to_string(), "knowledge".to_string()],
+            peer_id: Some("12D3KooWSourcePeer".to_string()),
+        };
+
+        let json_str = serde_json::to_string(&source).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+        assert_eq!(json["hash"], "QmTestHash123456789abcdef");
+        assert_eq!(json["title"], "Nodalync Protocol Overview");
+        assert_eq!(json["price_hbar"], 0.01);
+        assert_eq!(json["topics"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_channel_info_serialization() {
+        let channel = ChannelInfo {
+            channel_id: "ch_channel456".to_string(),
+            peer_id: "ndl1ChannelPeer".to_string(),
+            libp2p_peer_id: Some("12D3KooWChannelPeer".to_string()),
+            state: "Open".to_string(),
+            my_balance_hbar: 85.5,
+            their_balance_hbar: 14.5,
+            pending_payments: 3,
+            last_update: 1700000500000,
+        };
+
+        let json_str = serde_json::to_string(&channel).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+        assert_eq!(json["channel_id"], "ch_channel456");
+        assert_eq!(json["peer_id"], "ndl1ChannelPeer");
+        assert_eq!(json["libp2p_peer_id"], "12D3KooWChannelPeer");
+        assert_eq!(json["state"], "Open");
+        assert_eq!(json["my_balance_hbar"], 85.5);
+        assert_eq!(json["their_balance_hbar"], 14.5);
+        assert_eq!(json["pending_payments"], 3);
+        assert_eq!(json["last_update"], 1700000500000u64);
+    }
+
+    #[test]
+    fn test_close_all_channels_output_serialization() {
+        let output = CloseAllChannelsOutput {
+            channels_processed: 5,
+            channels_closed: 3,
+            disputes_initiated: 1,
+            channels_failed: 1,
+            results: vec![
+                ChannelCloseResult {
+                    peer_id: "ndl1Peer1".to_string(),
+                    success: true,
+                    close_method: "cooperative".to_string(),
+                    transaction_id: Some("0.0.7703962@1700000010.000".to_string()),
+                    error: None,
+                },
+                ChannelCloseResult {
+                    peer_id: "ndl1Peer2".to_string(),
+                    success: false,
+                    close_method: "failed".to_string(),
+                    transaction_id: None,
+                    error: Some("peer unreachable".to_string()),
+                },
+            ],
+            hedera_account_balance_hbar: Some(550.0),
+        };
+
+        let json_str = serde_json::to_string(&output).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+        assert_eq!(json["channels_processed"], 5);
+        assert_eq!(json["channels_closed"], 3);
+        assert_eq!(json["disputes_initiated"], 1);
+        assert_eq!(json["channels_failed"], 1);
+        assert_eq!(json["results"].as_array().unwrap().len(), 2);
+        assert_eq!(json["hedera_account_balance_hbar"], 550.0);
+    }
+
+    #[test]
+    fn test_search_result_info_serialization() {
+        let result = SearchResultInfo {
+            hash: "QmSearchResult789".to_string(),
+            title: "AI Agent Economics".to_string(),
+            price_hbar: 0.05,
+            content_type: "L1".to_string(),
+            owner: "ndl1Owner123".to_string(),
+            source: "peer".to_string(),
+            peer_id: Some("12D3KooWSearchPeer".to_string()),
+            preview: vec!["AI agents pay for knowledge".to_string()],
+            topics: vec!["economics".to_string(), "ai".to_string()],
+        };
+
+        let json_str = serde_json::to_string(&result).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+        assert_eq!(json["hash"], "QmSearchResult789");
+        assert_eq!(json["title"], "AI Agent Economics");
+        assert_eq!(json["price_hbar"], 0.05);
+        assert_eq!(json["content_type"], "L1");
+        assert_eq!(json["owner"], "ndl1Owner123");
+        assert_eq!(json["source"], "peer");
+        assert_eq!(json["peer_id"], "12D3KooWSearchPeer");
+        assert_eq!(json["preview"].as_array().unwrap().len(), 1);
+        assert_eq!(json["topics"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_search_network_input_defaults() {
+        let json = r#"{"query": "test"}"#;
+        let input: SearchNetworkInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.query, "test");
+        assert!(input.limit.is_none());
+        assert!(input.content_type.is_none());
+    }
+
+    #[test]
+    fn test_search_network_input_with_filters() {
+        let json = r#"{"query": "protocol", "limit": 25, "content_type": "L2"}"#;
+        let input: SearchNetworkInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.query, "protocol");
+        assert_eq!(input.limit, Some(25));
+        assert_eq!(input.content_type, Some("L2".to_string()));
+    }
+
+    // ====================================================================
+    // Content Production Tool Tests
+    // ====================================================================
+
+    #[test]
+    fn test_publish_content_input_deserialization() {
+        let json = r#"{"content": "Hello world", "title": "Test"}"#;
+        let input: PublishContentInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.content, "Hello world");
+        assert_eq!(input.title, "Test");
+        assert_eq!(input.visibility, "shared");
+        assert!(input.description.is_none());
+        assert!(input.price_hbar.is_none());
+        assert!(input.tags.is_none());
+    }
+
+    #[test]
+    fn test_publish_content_output_serialization() {
+        let output = PublishContentOutput {
+            hash: "QmTestHash".to_string(),
+            title: "Test Content".to_string(),
+            content_type: "L0".to_string(),
+            visibility: "Shared".to_string(),
+            price_hbar: 0.01,
+            size_bytes: 1024,
+            mentions_extracted: 5,
+            topics: vec!["test".to_string()],
+        };
+        let json_str = serde_json::to_string(&output).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(json["hash"], "QmTestHash");
+        assert_eq!(json["content_type"], "L0");
+        assert_eq!(json["size_bytes"], 1024);
+        assert_eq!(json["mentions_extracted"], 5);
+    }
+
+    #[test]
+    fn test_preview_content_input_deserialization() {
+        let json = r#"{"hash": "QmTestHash123"}"#;
+        let input: PreviewContentInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.hash, "QmTestHash123");
+    }
+
+    #[test]
+    fn test_preview_content_output_serialization() {
+        let output = PreviewContentOutput {
+            hash: "QmTestHash".to_string(),
+            title: "Test".to_string(),
+            owner: "ndl1Owner".to_string(),
+            price_hbar: 0.05,
+            content_type: "L0".to_string(),
+            visibility: "Shared".to_string(),
+            size_bytes: 2048,
+            mention_count: 3,
+            preview_mentions: vec!["mention1".to_string()],
+            topics: vec!["topic1".to_string()],
+            summary: "A test summary".to_string(),
+            provider_peer_id: Some("12D3KooWProvider".to_string()),
+        };
+        let json_str = serde_json::to_string(&output).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(json["hash"], "QmTestHash");
+        assert_eq!(json["mention_count"], 3);
+        assert_eq!(json["provider_peer_id"], "12D3KooWProvider");
+    }
+
+    #[test]
+    fn test_synthesize_content_input_deserialization() {
+        let json =
+            r#"{"content": "Synthesis", "title": "L3 Content", "sources": ["hash1", "hash2"]}"#;
+        let input: SynthesizeContentInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.content, "Synthesis");
+        assert_eq!(input.sources.len(), 2);
+        assert_eq!(input.visibility, "shared");
+        assert!(input.publish.is_none());
+    }
+
+    #[test]
+    fn test_synthesize_content_output_serialization() {
+        let output = SynthesizeContentOutput {
+            hash: "QmSynthHash".to_string(),
+            title: "Synthesis".to_string(),
+            content_type: "L3".to_string(),
+            sources: vec!["hash1".to_string(), "hash2".to_string()],
+            provenance_depth: 2,
+            root_source_count: 3,
+            published: true,
+            visibility: Some("Shared".to_string()),
+            price_hbar: Some(0.02),
+        };
+        let json_str = serde_json::to_string(&output).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(json["content_type"], "L3");
+        assert_eq!(json["provenance_depth"], 2);
+        assert_eq!(json["root_source_count"], 3);
+        assert_eq!(json["published"], true);
+    }
+
+    #[test]
+    fn test_update_content_input_deserialization() {
+        let json = r#"{"previous_hash": "QmOldHash", "content": "Updated text"}"#;
+        let input: UpdateContentInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.previous_hash, "QmOldHash");
+        assert_eq!(input.content, "Updated text");
+        assert!(input.title.is_none());
+        assert!(input.description.is_none());
+    }
+
+    #[test]
+    fn test_update_content_output_serialization() {
+        let output = UpdateContentOutput {
+            hash: "QmNewHash".to_string(),
+            previous_hash: "QmOldHash".to_string(),
+            version_number: 2,
+            title: "Updated Title".to_string(),
+            size_bytes: 512,
+            visibility: "Shared".to_string(),
+        };
+        let json_str = serde_json::to_string(&output).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(json["hash"], "QmNewHash");
+        assert_eq!(json["previous_hash"], "QmOldHash");
+        assert_eq!(json["version_number"], 2);
+    }
+
+    #[test]
+    fn test_delete_content_input_deserialization() {
+        let json = r#"{"hash": "QmDeleteMe"}"#;
+        let input: DeleteContentInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.hash, "QmDeleteMe");
+    }
+
+    #[test]
+    fn test_delete_content_output_serialization() {
+        let output = DeleteContentOutput {
+            hash: "QmDeleted".to_string(),
+            title: "Deleted Content".to_string(),
+            content_removed: true,
+            visibility: "Offline".to_string(),
+        };
+        let json_str = serde_json::to_string(&output).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(json["content_removed"], true);
+        assert_eq!(json["visibility"], "Offline");
+    }
+
+    #[test]
+    fn test_set_visibility_input_deserialization() {
+        let json = r#"{"hash": "QmTestHash", "visibility": "private"}"#;
+        let input: SetVisibilityInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.hash, "QmTestHash");
+        assert_eq!(input.visibility, "private");
+    }
+
+    #[test]
+    fn test_set_visibility_output_serialization() {
+        let output = SetVisibilityOutput {
+            hash: "QmTestHash".to_string(),
+            visibility: "Private".to_string(),
+            previous_visibility: "Shared".to_string(),
+        };
+        let json_str = serde_json::to_string(&output).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(json["visibility"], "Private");
+        assert_eq!(json["previous_visibility"], "Shared");
+    }
+
+    #[test]
+    fn test_list_versions_input_deserialization() {
+        let json = r#"{"hash": "QmVersionRoot"}"#;
+        let input: ListVersionsInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.hash, "QmVersionRoot");
+    }
+
+    #[test]
+    fn test_list_versions_output_serialization() {
+        let output = ListVersionsOutput {
+            root_hash: "QmRoot".to_string(),
+            versions: vec![VersionEntry {
+                hash: "QmV1".to_string(),
+                version_number: 1,
+                timestamp: 1700000000000,
+                visibility: "Shared".to_string(),
+                price_hbar: 0.01,
+            }],
+            total_versions: 1,
+        };
+        let json_str = serde_json::to_string(&output).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(json["root_hash"], "QmRoot");
+        assert_eq!(json["total_versions"], 1);
+        assert_eq!(json["versions"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_get_earnings_input_deserialization() {
+        let json = r#"{}"#;
+        let input: GetEarningsInput = serde_json::from_str(json).unwrap();
+        assert!(input.limit.is_none());
+        assert!(input.content_type.is_none());
+    }
+
+    #[test]
+    fn test_get_earnings_output_serialization() {
+        let output = GetEarningsOutput {
+            items: vec![ContentEarnings {
+                hash: "QmEarnings".to_string(),
+                title: "Earning Content".to_string(),
+                content_type: "L0".to_string(),
+                total_queries: 100,
+                total_revenue_hbar: 1.0,
+                price_hbar: 0.01,
+                visibility: "Shared".to_string(),
+            }],
+            total_revenue_hbar: 1.0,
+            total_queries: 100,
+            content_count: 1,
+        };
+        let json_str = serde_json::to_string(&output).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(json["total_revenue_hbar"], 1.0);
+        assert_eq!(json["total_queries"], 100);
+        assert_eq!(json["content_count"], 1);
+        assert_eq!(json["items"].as_array().unwrap().len(), 1);
     }
 }

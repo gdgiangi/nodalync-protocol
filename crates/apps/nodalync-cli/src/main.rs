@@ -70,8 +70,8 @@ fn print_error(e: &CliError) {
         e
     );
 
-    // Suggestion if available
-    if let Some(suggestion) = code.suggestion() {
+    // Suggestion if available (prefer CLI-specific hints over protocol-level ones)
+    if let Some(suggestion) = e.suggestion() {
         eprintln!("{}: {}", "Hint".cyan(), suggestion);
     }
 }
@@ -162,9 +162,12 @@ async fn run(cli: Cli) -> CliResult<()> {
             .await?
         }
 
-        Commands::Update { hash, file, title } => {
-            commands::update(config, format, &hash, &file, title)?
-        }
+        Commands::Update {
+            hash,
+            file,
+            title,
+            price,
+        } => commands::update(config, format, &hash, &file, title, price)?,
 
         Commands::Visibility { hash, level } => {
             commands::visibility(config, format, &hash, level.into()).await?

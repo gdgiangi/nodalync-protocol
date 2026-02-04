@@ -471,4 +471,25 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_merkle_proof_tampered_entry_fails() {
+        let entry1 = test_entry(100);
+        let entry2 = test_entry(200);
+        let entries = [entry1.clone(), entry2.clone()];
+
+        let root = compute_merkle_root(&entries);
+        let proof = create_merkle_proof(&entries, 0).unwrap();
+
+        // Create a tampered entry (different amount)
+        let tampered = SettlementEntry::new(
+            entry1.recipient,
+            999, // changed amount
+            entry1.provenance_hashes.clone(),
+            entry1.payment_ids.clone(),
+        );
+
+        // Proof should fail for tampered entry
+        assert!(!verify_merkle_proof(&root, &tampered, &proof));
+    }
 }

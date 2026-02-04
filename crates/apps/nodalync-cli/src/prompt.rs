@@ -49,9 +49,7 @@ pub fn get_identity_password() -> CliResult<String> {
         return Ok(pwd);
     }
     if !is_interactive() {
-        return Err(CliError::User(
-            "Set NODALYNC_PASSWORD or run interactively".into(),
-        ));
+        return Err(CliError::PasswordRequired);
     }
     password("Enter password to unlock identity")
         .map_err(|e| CliError::User(format!("Failed to read password: {}", e)))

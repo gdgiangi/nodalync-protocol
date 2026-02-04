@@ -1,6 +1,6 @@
 # Nodalync Protocol Specification
 
-**Version:** 0.6.0
+**Version:** 0.7.0
 **Author:** Gabriel Giangi
 **Date:** January 2026
 **Status:** Draft
@@ -273,7 +273,8 @@ Its value surfaces when you create L3 insights that others find valuable enough 
 enum Visibility : uint8 {
     Private   = 0x00,   # Local only, not served
     Unlisted  = 0x01,   # Served if hash known, not announced
-    Shared    = 0x02    # Announced to DHT, publicly queryable
+    Shared    = 0x02,   # Announced to DHT, publicly queryable
+    Offline   = 0x03    # Taken offline by owner, manifest preserved for provenance
 }
 ```
 
@@ -810,6 +811,7 @@ enum MessageType : uint16 {
     CHANNEL_UPDATE   = 0x0502,
     CHANNEL_CLOSE    = 0x0503,
     CHANNEL_DISPUTE  = 0x0504,
+    CHANNEL_CLOSE_ACK= 0x0505,
     
     # Settlement (0x06xx)
     SETTLE_BATCH     = 0x0600,
@@ -877,7 +879,8 @@ struct SearchResult {
     l1_summary: L1Summary,
     price: Amount,
     total_queries: uint64,
-    relevance_score: float64    # 0.0 - 1.0
+    relevance_score: float64,    # 0.0 - 1.0
+    publisher_addresses: string[] # Multiaddresses for reconnection
 }
 ```
 
@@ -1014,6 +1017,12 @@ struct ChannelClosePayload {
     channel_id: Hash,
     final_balances: ChannelBalances,
     settlement_tx: bytes        # Proposed on-chain settlement
+}
+
+# CHANNEL_CLOSE_ACK - Acknowledge cooperative close
+struct ChannelCloseAckPayload {
+    channel_id: Hash,
+    responder_signature: Signature  # Responder's signature over the close message
 }
 
 # CHANNEL_DISPUTE - Dispute channel state
@@ -1678,6 +1687,10 @@ Valid transitions:
     Unlisted → Private:  UNPUBLISH
     Shared → Unlisted:   UNPUBLISH(keep_unlisted=true)
     Shared → Private:    UNPUBLISH
+    Shared → Offline:    TAKE_OFFLINE (manifest preserved for provenance)
+    Unlisted → Offline:  TAKE_OFFLINE
+    Offline → Shared:    PUBLISH(visibility=Shared)
+    Offline → Unlisted:  PUBLISH(visibility=Unlisted)
     Any → Deleted:       DELETE (local only, provenance persists)
 ```
 
@@ -1757,7 +1770,7 @@ Rules:
     5. len(manifest.metadata.tags) <= 20
     6. For each tag: len(tag) <= 50
     7. manifest.content_type in {L0, L1, L2, L3}
-    8. manifest.visibility in {Private, Unlisted, Shared}
+    8. manifest.visibility in {Private, Unlisted, Shared, Offline}
     
     # L2-specific validation
     9. If manifest.content_type == L2:
@@ -2452,6 +2465,7 @@ nodalync/
 *End of Protocol Specification*
 
 **Version History:**
+- 0.7.1 (February 2026): Added CHANNEL_CLOSE_ACK message type; added Offline transitions to content state machine; fixed validation rule §9.1 to include Offline visibility
 - 0.3.0 (January 2026): Added SEARCH protocol for network-wide content discovery, ManifestFilter with text search
 - 0.2.1-draft (January 2026): Changed currency from NDL token to HBAR (Hedera native)
 - 0.2.0-draft (January 2026): Added L2 Entity Graph as protocol-level content type

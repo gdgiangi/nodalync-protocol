@@ -95,7 +95,9 @@ where
             // Verify it's L1 content
             if manifest.content_type != ContentType::L1 {
                 return Err(OpsError::invalid_operation(format!(
-                    "source {} is not L1 content (is {:?})",
+                    "source {} is {:?} content, but build-l2 requires L1 hashes. \
+                     Use 'nodalync preview <hash>' to see L1 mentions extracted from your L0 content, \
+                     then pass those L1 hashes to build-l2.",
                     l1_hash, manifest.content_type
                 )));
             }

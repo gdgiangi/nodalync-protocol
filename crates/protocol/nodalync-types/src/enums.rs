@@ -63,6 +63,8 @@ pub enum Visibility {
     Unlisted = 0x01,
     /// Announced to DHT, publicly queryable
     Shared = 0x02,
+    /// Content taken offline by owner. Manifest preserved for provenance.
+    Offline = 0x03,
 }
 
 /// Type of location reference within source content.
@@ -231,6 +233,7 @@ mod tests {
         assert_eq!(Visibility::Private as u8, 0x00);
         assert_eq!(Visibility::Unlisted as u8, 0x01);
         assert_eq!(Visibility::Shared as u8, 0x02);
+        assert_eq!(Visibility::Offline as u8, 0x03);
     }
 
     #[test]
@@ -288,6 +291,20 @@ mod tests {
         assert_eq!(json, "\"Shared\"");
         let deserialized: Visibility = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, v);
+    }
+
+    #[test]
+    fn test_visibility_offline_serialization() {
+        let v = Visibility::Offline;
+        let json = serde_json::to_string(&v).unwrap();
+        assert_eq!(json, "\"Offline\"");
+        let deserialized: Visibility = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, v);
+    }
+
+    #[test]
+    fn test_visibility_offline_debug() {
+        assert_eq!(format!("{:?}", Visibility::Offline), "Offline");
     }
 
     #[test]

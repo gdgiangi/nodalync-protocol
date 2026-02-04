@@ -143,9 +143,9 @@ pub struct AlertPayload {
     pub timestamp: u64,
     /// Current metrics.
     pub metrics: AlertMetrics,
-    /// CLI version (e.g., "0.9.4").
+    /// CLI version (e.g., "0.10.0").
     pub cli_version: String,
-    /// Protocol version (e.g., "0.6.0").
+    /// Protocol version (e.g., "0.7.0").
     pub protocol_version: String,
 }
 
@@ -896,16 +896,16 @@ mod tests {
                 connected_peers: 5,
                 uptime_secs: 100,
             },
-            "0.9.4".to_string(),
-            "0.6.0".to_string(),
+            "0.10.0".to_string(),
+            "0.7.0".to_string(),
         );
 
         assert_eq!(payload.alert_type, AlertType::NodeStarted);
         assert_eq!(payload.severity, AlertSeverity::Info);
         assert_eq!(payload.message, "Test message");
         assert_eq!(payload.metrics.connected_peers, 5);
-        assert_eq!(payload.cli_version, "0.9.4");
-        assert_eq!(payload.protocol_version, "0.6.0");
+        assert_eq!(payload.cli_version, "0.10.0");
+        assert_eq!(payload.protocol_version, "0.7.0");
     }
 
     #[test]
@@ -920,8 +920,8 @@ mod tests {
                 connected_peers: 0,
                 uptime_secs: 60,
             },
-            "0.9.4".to_string(),
-            "0.6.0".to_string(),
+            "0.10.0".to_string(),
+            "0.7.0".to_string(),
         );
 
         let json = format_generic(&payload);
@@ -943,8 +943,8 @@ mod tests {
                 connected_peers: 0,
                 uptime_secs: 60,
             },
-            "0.9.4".to_string(),
-            "0.6.0".to_string(),
+            "0.10.0".to_string(),
+            "0.7.0".to_string(),
         );
 
         let json = format_slack(&payload);
@@ -952,7 +952,7 @@ mod tests {
         assert!(json.contains("#ff0000")); // Critical color
         assert!(json.contains("test-node"));
         assert!(json.contains("CLI Version"));
-        assert!(json.contains("0.9.4"));
+        assert!(json.contains("0.10.0"));
     }
 
     #[test]
@@ -967,8 +967,8 @@ mod tests {
                 connected_peers: 3,
                 uptime_secs: 120,
             },
-            "0.9.4".to_string(),
-            "0.6.0".to_string(),
+            "0.10.0".to_string(),
+            "0.7.0".to_string(),
         );
 
         let json = format_discord(&payload);
@@ -976,8 +976,8 @@ mod tests {
         assert!(json.contains("3581519")); // Green color (0x36a64f) as decimal
         assert!(json.contains("CLI Version"));
         assert!(json.contains("Protocol"));
-        assert!(json.contains("0.9.4"));
-        assert!(json.contains("0.6.0"));
+        assert!(json.contains("0.10.0"));
+        assert!(json.contains("0.7.0"));
     }
 
     #[test]
@@ -992,8 +992,8 @@ mod tests {
                 connected_peers: 0,
                 uptime_secs: 60,
             },
-            "0.9.4".to_string(),
-            "0.6.0".to_string(),
+            "0.10.0".to_string(),
+            "0.7.0".to_string(),
         );
 
         let json = format_pagerduty(&payload);
@@ -1015,8 +1015,8 @@ mod tests {
                 connected_peers: 3,
                 uptime_secs: 120,
             },
-            "0.9.4".to_string(),
-            "0.6.0".to_string(),
+            "0.10.0".to_string(),
+            "0.7.0".to_string(),
         );
 
         let json = format_pagerduty(&payload);
@@ -1127,6 +1127,68 @@ mod tests {
             let state = manager.state.lock().await;
             assert_eq!(state.health_state, HealthState::LowPeers);
         }
+    }
+
+    #[test]
+    fn test_alert_config_defaults() {
+        let config = AlertingConfig::default();
+        assert!(!config.enabled);
+        assert!(config.webhooks.is_empty());
+        assert!(config.node_name.is_none());
+        assert!(config.region.is_none());
+        assert!(config.heartbeat.is_none());
+    }
+
+    #[test]
+    fn test_webhook_type_as_str() {
+        assert_eq!(WebhookType::Generic.as_str(), "generic");
+        assert_eq!(WebhookType::Slack.as_str(), "slack");
+        assert_eq!(WebhookType::Discord.as_str(), "discord");
+        assert_eq!(WebhookType::Pagerduty.as_str(), "pagerduty");
+    }
+
+    #[test]
+    fn test_alert_severity_color() {
+        // All severity colors should be valid hex color strings
+        let info_color = AlertSeverity::Info.color();
+        let warning_color = AlertSeverity::Warning.color();
+        let critical_color = AlertSeverity::Critical.color();
+
+        assert!(info_color.starts_with('#'));
+        assert!(warning_color.starts_with('#'));
+        assert!(critical_color.starts_with('#'));
+
+        // Should be 7 chars long (#RRGGBB)
+        assert_eq!(info_color.len(), 7);
+        assert_eq!(warning_color.len(), 7);
+        assert_eq!(critical_color.len(), 7);
+    }
+
+    #[test]
+    fn test_heartbeat_interval_none() {
+        let config = AlertingConfig {
+            heartbeat: None,
+            ..AlertingConfig::default()
+        };
+        let manager = AlertManager::new(config, "peer123".to_string());
+        assert!(manager.heartbeat_interval().is_none());
+    }
+
+    #[test]
+    fn test_heartbeat_interval_some() {
+        use crate::config::HeartbeatConfig;
+
+        let config = AlertingConfig {
+            heartbeat: Some(HeartbeatConfig {
+                interval_secs: 120,
+                include_metrics: true,
+            }),
+            ..AlertingConfig::default()
+        };
+        let manager = AlertManager::new(config, "peer123".to_string());
+        let interval = manager.heartbeat_interval();
+        assert!(interval.is_some());
+        assert_eq!(interval.unwrap(), Duration::from_secs(120));
     }
 
     #[test]

@@ -228,16 +228,37 @@ where
     }
 }
 
-/// Default NodeOperations with DefaultValidator and RuleBasedExtractor.
-pub type DefaultNodeOperations =
-    NodeOperations<nodalync_valid::DefaultValidator, crate::extraction::RuleBasedExtractor>;
+/// Default NodeOperations with DefaultValidator (using PeerStoreKeyLookup) and RuleBasedExtractor.
+pub type DefaultNodeOperations = NodeOperations<
+    nodalync_valid::DefaultValidator<
+        crate::peer_key_lookup::PeerStoreKeyLookup,
+        nodalync_valid::NoopBondChecker,
+    >,
+    crate::extraction::RuleBasedExtractor,
+>;
+
+/// Helper to create a validator with PeerStoreKeyLookup from a NodeState.
+fn create_default_validator(
+    state: &NodeState,
+) -> nodalync_valid::DefaultValidator<
+    crate::peer_key_lookup::PeerStoreKeyLookup,
+    nodalync_valid::NoopBondChecker,
+> {
+    let key_lookup = crate::peer_key_lookup::PeerStoreKeyLookup::from_state(state);
+    nodalync_valid::DefaultValidator::with_dependencies(
+        nodalync_valid::ValidatorConfig::default(),
+        key_lookup,
+        nodalync_valid::NoopBondChecker,
+    )
+}
 
 impl DefaultNodeOperations {
     /// Create a new NodeOperations with default validator and extractor (no network).
     pub fn with_defaults(state: NodeState, peer_id: PeerId) -> Self {
+        let validator = create_default_validator(&state);
         Self::new(
             state,
-            nodalync_valid::DefaultValidator::new(),
+            validator,
             crate::extraction::RuleBasedExtractor::new(),
             OpsConfig::default(),
             peer_id,
@@ -246,9 +267,10 @@ impl DefaultNodeOperations {
 
     /// Create with custom configuration (no network).
     pub fn with_config(state: NodeState, peer_id: PeerId, config: OpsConfig) -> Self {
+        let validator = create_default_validator(&state);
         Self::new(
             state,
-            nodalync_valid::DefaultValidator::new(),
+            validator,
             crate::extraction::RuleBasedExtractor::new(),
             config,
             peer_id,
@@ -261,9 +283,10 @@ impl DefaultNodeOperations {
         peer_id: PeerId,
         network: Arc<dyn Network>,
     ) -> Self {
+        let validator = create_default_validator(&state);
         Self::with_network(
             state,
-            nodalync_valid::DefaultValidator::new(),
+            validator,
             crate::extraction::RuleBasedExtractor::new(),
             OpsConfig::default(),
             peer_id,
@@ -278,9 +301,10 @@ impl DefaultNodeOperations {
         config: OpsConfig,
         network: Arc<dyn Network>,
     ) -> Self {
+        let validator = create_default_validator(&state);
         Self::with_network(
             state,
-            nodalync_valid::DefaultValidator::new(),
+            validator,
             crate::extraction::RuleBasedExtractor::new(),
             config,
             peer_id,
@@ -294,9 +318,10 @@ impl DefaultNodeOperations {
         peer_id: PeerId,
         settlement: Arc<dyn Settlement>,
     ) -> Self {
+        let validator = create_default_validator(&state);
         Self::with_settlement(
             state,
-            nodalync_valid::DefaultValidator::new(),
+            validator,
             crate::extraction::RuleBasedExtractor::new(),
             OpsConfig::default(),
             peer_id,
@@ -311,9 +336,10 @@ impl DefaultNodeOperations {
         config: OpsConfig,
         settlement: Arc<dyn Settlement>,
     ) -> Self {
+        let validator = create_default_validator(&state);
         Self::with_settlement(
             state,
-            nodalync_valid::DefaultValidator::new(),
+            validator,
             crate::extraction::RuleBasedExtractor::new(),
             config,
             peer_id,
@@ -328,9 +354,10 @@ impl DefaultNodeOperations {
         network: Arc<dyn Network>,
         settlement: Arc<dyn Settlement>,
     ) -> Self {
+        let validator = create_default_validator(&state);
         Self::with_network_and_settlement(
             state,
-            nodalync_valid::DefaultValidator::new(),
+            validator,
             crate::extraction::RuleBasedExtractor::new(),
             OpsConfig::default(),
             peer_id,
@@ -347,9 +374,10 @@ impl DefaultNodeOperations {
         network: Arc<dyn Network>,
         settlement: Arc<dyn Settlement>,
     ) -> Self {
+        let validator = create_default_validator(&state);
         Self::with_network_and_settlement(
             state,
-            nodalync_valid::DefaultValidator::new(),
+            validator,
             crate::extraction::RuleBasedExtractor::new(),
             config,
             peer_id,
@@ -404,5 +432,89 @@ mod tests {
         let ts = current_timestamp();
         // Should be a reasonable timestamp (after 2020)
         assert!(ts > 1577836800000); // Jan 1, 2020
+    }
+
+    #[test]
+    fn test_set_clear_network() {
+        use nodalync_test_utils::MockNetwork;
+
+        let (mut ops, _temp) = create_test_node_ops();
+
+        // Initially no network
+        assert!(!ops.has_network());
+
+        // Set network
+        let mock_net = MockNetwork::new();
+        ops.set_network(Arc::new(mock_net));
+        assert!(ops.has_network());
+        assert!(ops.network().is_some());
+
+        // Clear network
+        ops.clear_network();
+        assert!(!ops.has_network());
+        assert!(ops.network().is_none());
+    }
+
+    #[test]
+    fn test_set_clear_settlement() {
+        use nodalync_test_utils::MockSettlement;
+
+        let (mut ops, _temp) = create_test_node_ops();
+
+        // Initially no settlement
+        assert!(!ops.has_settlement());
+
+        // Set settlement
+        let mock_settle = MockSettlement::new();
+        ops.set_settlement(Arc::new(mock_settle));
+        assert!(ops.has_settlement());
+        assert!(ops.settlement().is_some());
+
+        // Clear settlement
+        ops.clear_settlement();
+        assert!(!ops.has_settlement());
+        assert!(ops.settlement().is_none());
+    }
+
+    #[test]
+    fn test_set_clear_private_key() {
+        let (mut ops, _temp) = create_test_node_ops();
+
+        // Initially no private key
+        assert!(!ops.has_private_key());
+        assert!(ops.private_key().is_none());
+
+        // Set private key
+        let (private_key, _) = generate_identity();
+        ops.set_private_key(private_key);
+        assert!(ops.has_private_key());
+        assert!(ops.private_key().is_some());
+
+        // Clear private key
+        ops.clear_private_key();
+        assert!(!ops.has_private_key());
+        assert!(ops.private_key().is_none());
+    }
+
+    #[test]
+    fn test_has_network_and_settlement() {
+        use nodalync_test_utils::{MockNetwork, MockSettlement};
+
+        let (mut ops, _temp) = create_test_node_ops();
+
+        // Initially neither
+        assert!(!ops.has_network());
+        assert!(!ops.has_settlement());
+
+        // Set both
+        ops.set_network(Arc::new(MockNetwork::new()));
+        ops.set_settlement(Arc::new(MockSettlement::new()));
+        assert!(ops.has_network());
+        assert!(ops.has_settlement());
+
+        // Clear one, verify the other persists
+        ops.clear_network();
+        assert!(!ops.has_network());
+        assert!(ops.has_settlement());
     }
 }

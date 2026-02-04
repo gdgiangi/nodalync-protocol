@@ -68,11 +68,14 @@ pub struct InitOutput {
 impl Render for InitOutput {
     fn render_human(&self) -> String {
         format!(
-            "{} {}\n{} {}",
+            "{} {}\n{} {}\n\n{}\n  {}  Publish content\n  {}  Check node status",
             "Identity created:".green().bold(),
             self.peer_id,
             "Configuration saved to:".green(),
-            self.config_path
+            self.config_path,
+            "Next steps:".bold(),
+            "nodalync publish <file> --title \"My Document\"".cyan(),
+            "nodalync status".cyan(),
         )
     }
 
@@ -210,6 +213,26 @@ impl Render for ListOutput {
             for m in private {
                 lines.push(format_manifest_line(m));
             }
+            lines.push(String::new());
+        }
+
+        let offline: Vec<_> = self
+            .manifests
+            .iter()
+            .filter(|m| m.visibility == "Offline")
+            .collect();
+
+        if !offline.is_empty() {
+            lines.push(format!("{} ({})", "OFFLINE".dimmed().bold(), offline.len()));
+            for m in offline {
+                lines.push(format!(
+                    "  {} \"{}\" v{} {}",
+                    short_hash(&m.hash).dimmed(),
+                    m.title.as_str().dimmed(),
+                    m.version,
+                    "[offline]".dimmed()
+                ));
+            }
         }
 
         lines.join("\n")
@@ -330,14 +353,23 @@ pub struct BalanceOutput {
     pub protocol_balance: u64,
     pub pending_earnings: u64,
     pub pending_payments: u32,
+    /// Whether balance was fetched offline (Hedera not configured).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub offline: bool,
 }
 
 impl Render for BalanceOutput {
     fn render_human(&self) -> String {
+        let offline_note = if self.offline {
+            format!(" {}", "(offline — Hedera not configured)".dimmed())
+        } else {
+            String::new()
+        };
         format!(
-            "{} {}\n{} {}\n{} {} payments",
+            "{} {}{}\n{} {}\n{} {} payments",
             "Protocol Balance:".bold(),
             format_ndl(self.protocol_balance).green(),
+            offline_note,
             "Pending Earnings:".bold(),
             format_ndl(self.pending_earnings),
             "Pending Settlement:".bold(),
@@ -1123,8 +1155,13 @@ mod tests {
 
         let human = output.render(OutputFormat::Human);
         assert!(human.contains("Identity created"));
+        assert!(human.contains("Next steps"));
+        assert!(human.contains("nodalync publish"));
+        assert!(human.contains("nodalync status"));
 
         let json = output.render(OutputFormat::Json);
         assert!(json.contains("peer_id"));
+        // JSON should remain machine-readable, no next steps decoration
+        assert!(!json.contains("Next steps"));
     }
 }

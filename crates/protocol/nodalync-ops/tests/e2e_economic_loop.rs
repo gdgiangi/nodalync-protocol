@@ -12,10 +12,12 @@
 //!    - Verify that paid queries REQUIRE on-chain settlement
 //!    - Verify access control and payment validation
 //!
-//! 2. **Full Settlement Tests** (require Hedera testnet, ignored by default):
+//! 2. **Full Settlement Tests** (run by default, use mock settlement):
 //!    - Test complete Publish → Query → Pay → Settle flow
-//!    - Require HEDERA_* environment variables
-//!    - Run with: cargo test --features testnet -- --ignored
+//!    - Use `MockSettlement` to satisfy the settlement requirement without Hedera
+//!    - `force_settlement()` routes through the mock and returns success
+
+use std::sync::Arc;
 
 use nodalync_crypto::{
     content_hash, generate_identity, peer_id_from_public_key, Hash, PeerId, Signature,
@@ -24,16 +26,18 @@ use nodalync_ops::{DefaultNodeOperations, OpsError};
 use nodalync_store::{
     ContentStore, ManifestStore, NodeState, NodeStateConfig, SettlementQueueStore,
 };
+use nodalync_test_utils::MockSettlement;
 use nodalync_types::{ContentType, Manifest, Metadata, Provenance, ProvenanceEntry, Visibility};
 use nodalync_wire::QueryRequestPayload;
 use tempfile::TempDir;
 
 // ============ TEST HARNESS ============
 
-/// A test node with its own identity and storage.
+/// A test node with its own identity, storage, and mock settlement.
 struct TestNode {
     ops: DefaultNodeOperations,
     peer_id: PeerId,
+    mock_settle: MockSettlement,
     _temp_dir: TempDir,
 }
 
@@ -46,10 +50,16 @@ impl TestNode {
         let (_, public_key) = generate_identity();
         let peer_id = peer_id_from_public_key(&public_key);
 
-        let ops = DefaultNodeOperations::with_defaults(state, peer_id);
+        let mock_settle = MockSettlement::new();
+        let ops = DefaultNodeOperations::with_defaults_and_settlement(
+            state,
+            peer_id,
+            Arc::new(mock_settle.clone()),
+        );
         Self {
             ops,
             peer_id,
+            mock_settle,
             _temp_dir: temp_dir,
         }
     }
@@ -109,11 +119,7 @@ fn open_channel_between(
 /// - Alice publishes L0 content with price = 100
 /// - Bob queries Alice's content
 /// - Payment flows: 100 → Alice (100% since she's the only contributor)
-///
-/// REQUIRES: Hedera testnet credentials (HEDERA_ACCOUNT_ID, HEDERA_PRIVATE_KEY, HEDERA_CONTRACT_ID)
-/// Run with: cargo test --features testnet -- --ignored test_e2e_simple_l0_publish_query_settle
 #[tokio::test]
-#[ignore = "Requires Hedera testnet - paid queries require on-chain settlement"]
 async fn test_e2e_simple_l0_publish_query_settle() {
     // === SETUP ===
     let mut alice = TestNode::new();
@@ -178,38 +184,29 @@ async fn test_e2e_simple_l0_publish_query_settle() {
     assert_eq!(response.content, content.to_vec());
     assert_eq!(response.payment_receipt.amount, 100);
 
-    // === VERIFY SETTLEMENT QUEUE ===
-    let pending_total = alice.ops.get_pending_settlement_total().unwrap();
+    // === VERIFY IMMEDIATE SETTLEMENT VIA MOCK ===
+    // With immediate settlement, the handler settles on-chain before delivering content.
+    // The mock records all settled batches for inspection.
+    let batches = alice.mock_settle.settled_batches();
     assert_eq!(
-        pending_total, 100,
-        "Settlement queue should have 100 pending"
+        batches.len(),
+        1,
+        "One batch should have been settled immediately"
     );
-
-    // Get pending distributions
-    let pending = alice.ops.state.settlement.get_pending().unwrap();
-    assert!(!pending.is_empty(), "Should have pending distributions");
 
     // For L0 content, Alice gets 100% (she's the only root contributor)
-    // The 95/5 split only applies when there are multiple contributors
-    let alice_dist: u64 = pending
-        .iter()
-        .filter(|d| d.recipient == alice.peer_id())
-        .map(|d| d.amount)
-        .sum();
-    assert_eq!(alice_dist, 100, "Alice should receive full payment for L0");
-
-    // === SETTLE ===
-    let batch_id = alice.ops.force_settlement().await.unwrap();
-    assert!(batch_id.is_some(), "Settlement batch should be created");
-
-    // Verify queue is now empty
-    let pending_after = alice.ops.get_pending_settlement_total().unwrap();
+    let total_settled: u64 = batches[0].entries.iter().map(|e| e.amount).sum();
     assert_eq!(
-        pending_after, 0,
-        "Settlement queue should be empty after settle"
+        total_settled, 100,
+        "Total settled should equal payment amount"
     );
 
-    println!("✅ E2E Simple L0: Publish → Query → Pay → Settle completed successfully");
+    // Verify economics updated
+    let manifest_after = alice.ops.get_content_manifest(&hash).unwrap().unwrap();
+    assert_eq!(manifest_after.economics.total_queries, 1);
+    assert_eq!(manifest_after.economics.total_revenue, 100);
+
+    println!("E2E Simple L0: Publish -> Query -> Pay -> Settle completed successfully");
 }
 
 /// Test 2: Multi-hop provenance - L0 → L1 → L3 → Query → All get paid
@@ -220,11 +217,7 @@ async fn test_e2e_simple_l0_publish_query_settle() {
 /// - Bob creates L3 synthesis from Alice's L1
 /// - Carol queries Bob's L3
 /// - Payment distribution: 95% to Alice (root), 5% to Bob (synthesis fee)
-///
-/// REQUIRES: Hedera testnet credentials
-/// Run with: cargo test --features testnet -- --ignored test_e2e_multihop_provenance_distribution
 #[tokio::test]
-#[ignore = "Requires Hedera testnet - paid queries require on-chain settlement"]
 async fn test_e2e_multihop_provenance_distribution() {
     // === SETUP ===
     let mut alice = TestNode::new();
@@ -331,18 +324,23 @@ async fn test_e2e_multihop_provenance_distribution() {
 
     assert_eq!(response.content, l3_content.to_vec());
 
-    // === VERIFY 95/5 DISTRIBUTION ===
-    let pending = bob.ops.state.settlement.get_pending().unwrap();
+    // === VERIFY 95/5 DISTRIBUTION VIA MOCK SETTLEMENT ===
+    // With immediate settlement, the batch is settled on-chain before content delivery.
+    let batches = bob.mock_settle.settled_batches();
+    assert_eq!(
+        batches.len(),
+        1,
+        "One batch should have been settled immediately"
+    );
 
-    // Calculate distributions per recipient
+    // Verify 95/5 split in the settled batch entries
     let mut alice_total: u64 = 0;
     let mut bob_total: u64 = 0;
-
-    for dist in &pending {
-        if dist.recipient == alice.peer_id() {
-            alice_total += dist.amount;
-        } else if dist.recipient == bob.peer_id() {
-            bob_total += dist.amount;
+    for entry in &batches[0].entries {
+        if entry.recipient == alice.peer_id() {
+            alice_total += entry.amount;
+        } else if entry.recipient == bob.peer_id() {
+            bob_total += entry.amount;
         }
     }
 
@@ -350,11 +348,7 @@ async fn test_e2e_multihop_provenance_distribution() {
     assert_eq!(alice_total, 95, "Alice (root) should receive 95%");
     assert_eq!(bob_total, 5, "Bob (synthesizer) should receive 5%");
 
-    // === SETTLE ===
-    let batch_id = bob.ops.force_settlement().await.unwrap();
-    assert!(batch_id.is_some());
-
-    println!("✅ E2E Multi-hop: L0→L3→Query with 95/5 split completed successfully");
+    println!("E2E Multi-hop: L0->L3->Query with 95/5 split completed successfully");
     println!("   Alice (root L0): {} HBAR", alice_total);
     println!("   Bob (L3 synth):  {} HBAR", bob_total);
 }
@@ -366,14 +360,7 @@ async fn test_e2e_multihop_provenance_distribution() {
 /// - Bob queries 3 times
 /// - Carol queries 2 times
 /// - All 5 payments batch settle together
-///
-/// NOTE: With immediate settlement, each query settles on-chain immediately.
-/// This test validates the batch settlement pattern which requires Hedera testnet.
-///
-/// REQUIRES: Hedera testnet credentials
-/// Run with: cargo test --features testnet -- --ignored test_e2e_batch_settlement
 #[tokio::test]
-#[ignore = "Requires Hedera testnet - paid queries require on-chain settlement"]
 async fn test_e2e_batch_settlement() {
     let mut alice = TestNode::new();
     let bob = TestNode::new();
@@ -449,26 +436,33 @@ async fn test_e2e_batch_settlement() {
             .unwrap();
     }
 
-    // Verify accumulated payments
-    let pending_total = alice.ops.get_pending_settlement_total().unwrap();
-    assert_eq!(pending_total, 50, "5 queries × 10 = 50 pending");
+    // === VERIFY IMMEDIATE SETTLEMENT VIA MOCK ===
+    // With immediate settlement, each query settles on-chain individually.
+    let batches = alice.mock_settle.settled_batches();
+    assert_eq!(
+        batches.len(),
+        5,
+        "5 queries should produce 5 immediate settlements"
+    );
 
-    // Batch settle all at once
-    let batch_id = alice.ops.force_settlement().await.unwrap();
-    assert!(batch_id.is_some());
+    // Verify total amount settled across all batches
+    let total_settled: u64 = batches
+        .iter()
+        .flat_map(|b| b.entries.iter())
+        .map(|e| e.amount)
+        .sum();
+    assert_eq!(total_settled, 50, "5 queries x 10 = 50 total settled");
 
-    // All settled
-    assert_eq!(alice.ops.get_pending_settlement_total().unwrap(), 0);
+    // Verify economics updated on the manifest
+    let manifest_after = alice.ops.get_content_manifest(&hash).unwrap().unwrap();
+    assert_eq!(manifest_after.economics.total_queries, 5);
+    assert_eq!(manifest_after.economics.total_revenue, 50);
 
-    println!("✅ E2E Batch Settlement: 5 queries settled in single batch");
+    println!("E2E Batch Settlement: 5 queries settled individually via immediate settlement");
 }
 
 /// Test 4: Verify economics are tracked correctly
-///
-/// REQUIRES: Hedera testnet credentials
-/// Run with: cargo test --features testnet -- --ignored test_e2e_economics_tracking
 #[tokio::test]
-#[ignore = "Requires Hedera testnet - paid queries require on-chain settlement"]
 async fn test_e2e_economics_tracking() {
     let mut alice = TestNode::new();
     let bob = TestNode::new();

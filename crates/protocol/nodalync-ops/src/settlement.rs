@@ -4,7 +4,7 @@
 //! as specified in Protocol Specification §7.5.
 
 use nodalync_crypto::Hash;
-use nodalync_econ::{compute_batch_id, create_settlement_batch, should_settle};
+use nodalync_econ::{create_settlement_batch, should_settle};
 use nodalync_store::SettlementQueueStore;
 use nodalync_types::Payment;
 use nodalync_valid::Validator;
@@ -75,7 +75,7 @@ where
 
         // 3. Create batch via create_settlement_batch
         let batch = create_settlement_batch(&payments);
-        let batch_id = compute_batch_id(&batch.entries);
+        let batch_id = batch.batch_id;
 
         // 4. Submit to Hedera if settlement configured
         let transaction_id = if let Some(settlement) = self.settlement().cloned() {
@@ -85,8 +85,8 @@ where
                     tx_id.to_string()
                 }
                 Err(e) => {
-                    warn!(batch_id = %batch_id, error = %e, "On-chain settlement failed");
-                    format!("failed-{}", batch_id)
+                    warn!(batch_id = %batch_id, error = %e, "On-chain settlement failed, keeping queue intact");
+                    return Err(crate::error::OpsError::SettlementFailed(e.to_string()));
                 }
             }
         } else {
@@ -165,7 +165,7 @@ where
 
         // Create batch
         let batch = create_settlement_batch(&payments);
-        let batch_id = compute_batch_id(&batch.entries);
+        let batch_id = batch.batch_id;
 
         // Submit to Hedera if settlement configured
         let transaction_id = if let Some(settlement) = self.settlement().cloned() {
@@ -175,8 +175,8 @@ where
                     tx_id.to_string()
                 }
                 Err(e) => {
-                    warn!(batch_id = %batch_id, error = %e, "On-chain force settlement failed");
-                    format!("failed-{}", batch_id)
+                    warn!(batch_id = %batch_id, error = %e, "On-chain force settlement failed, keeping queue intact");
+                    return Err(crate::error::OpsError::SettlementFailed(e.to_string()));
                 }
             }
         } else {
@@ -315,20 +315,182 @@ mod tests {
         assert!(!ops_no_settle.has_settlement());
     }
 
-    // Integration tests for Hedera settlement.
-    // Run with: cargo test -p nodalync-ops --features hedera-sdk -- --ignored
-    // Requires: HEDERA_ACCOUNT_ID, HEDERA_PRIVATE_KEY, HEDERA_CONTRACT_ID env vars
+    // Integration test for Hedera settlement.
+    // Run with: cargo test -p nodalync-ops --features testnet test_settlement_with_hedera
+    // Requires: HEDERA_ACCOUNT_ID, HEDERA_PRIVATE_KEY, HEDERA_CONTRACT_ID env vars (or .env file)
+    #[cfg(feature = "testnet")]
     #[tokio::test]
-    #[ignore = "requires Hedera testnet credentials"]
     async fn test_settlement_with_hedera() {
-        // This test requires actual Hedera credentials to run.
-        // It verifies the full settlement flow with on-chain transactions.
-        //
-        // To run:
-        // HEDERA_ACCOUNT_ID=0.0.xxxxx \
-        // HEDERA_PRIVATE_KEY=302e... \
-        // HEDERA_CONTRACT_ID=0.0.7729011 \
-        // cargo test -p nodalync-ops test_settlement_with_hedera -- --ignored
-        todo!("Implement Hedera integration test")
+        use nodalync_settle::{HederaConfig, HederaSettlement, Settlement};
+        use nodalync_test_utils::{get_hedera_credentials, try_load_dotenv};
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        try_load_dotenv();
+        let (account_id, private_key, contract_id) = match get_hedera_credentials() {
+            Some(creds) => creds,
+            None => {
+                println!("Skipping: Hedera credentials not available");
+                return;
+            }
+        };
+
+        // Write private key to temp file (strip 0x prefix if present)
+        let key_str = private_key.strip_prefix("0x").unwrap_or(&private_key);
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(key_str.as_bytes()).unwrap();
+
+        let config =
+            HederaConfig::testnet(&account_id, temp_file.path().to_path_buf(), &contract_id);
+
+        let settlement = HederaSettlement::new(config).await.unwrap();
+
+        // Verify we can query the balance
+        let balance_before = settlement.get_balance().await.unwrap();
+        println!("Balance before deposit: {} tinybars", balance_before);
+
+        // Deposit a small amount (1 tinybar)
+        let tx_id = settlement.deposit(1).await.unwrap();
+        println!("Deposit tx: {}", tx_id);
+
+        // Verify balance increased
+        let balance_after = settlement.get_balance().await.unwrap();
+        println!("Balance after deposit: {} tinybars", balance_after);
+        assert!(
+            balance_after >= balance_before + 1,
+            "Balance should increase after deposit"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_trigger_settlement_with_mock_settlement() {
+        use nodalync_test_utils::*;
+
+        let (mut ops, _mock_net, mock_settle, _temp) = create_test_ops_with_mocks();
+
+        // Enqueue distributions
+        let dist1 = QueuedDistribution::new(
+            content_hash(b"mock-payment1"),
+            test_peer_id(),
+            100,
+            content_hash(b"mock-source1"),
+            current_timestamp(),
+        );
+        ops.state.settlement.enqueue(dist1).unwrap();
+
+        let dist2 = QueuedDistribution::new(
+            content_hash(b"mock-payment2"),
+            test_peer_id(),
+            200,
+            content_hash(b"mock-source2"),
+            current_timestamp(),
+        );
+        ops.state.settlement.enqueue(dist2).unwrap();
+
+        // Force settlement to bypass threshold check
+        let batch_id = ops.force_settlement().await.unwrap();
+        assert!(batch_id.is_some(), "Should have settled a batch");
+
+        // Verify MockSettlement received the batch
+        let batches = mock_settle.settled_batches();
+        assert_eq!(
+            batches.len(),
+            1,
+            "MockSettlement should have received one batch"
+        );
+
+        // Queue should be empty after settlement
+        let pending = ops.state.settlement.get_pending().unwrap();
+        assert!(pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_trigger_settlement_below_threshold_no_action() {
+        use nodalync_test_utils::*;
+
+        let (mut ops, _mock_net, mock_settle, _temp) = create_test_ops_with_mocks();
+
+        // Set a recent last_settlement_time so interval trigger doesn't fire
+        let recent_time = current_timestamp();
+        ops.state
+            .settlement
+            .set_last_settlement_time(recent_time)
+            .unwrap();
+
+        // Add a small distribution (below default threshold)
+        let dist = QueuedDistribution::new(
+            content_hash(b"small-payment"),
+            test_peer_id(),
+            1, // very small amount
+            content_hash(b"small-source"),
+            current_timestamp(),
+        );
+        ops.state.settlement.enqueue(dist).unwrap();
+
+        // Trigger settlement - should not settle due to threshold + recent settlement
+        let result = ops.trigger_settlement_batch().await.unwrap();
+        assert!(
+            result.is_none(),
+            "Should not settle below threshold with recent settlement"
+        );
+
+        // Verify MockSettlement was not called
+        let batches = mock_settle.settled_batches();
+        assert!(batches.is_empty(), "No batches should have been sent");
+    }
+
+    #[tokio::test]
+    async fn test_force_settlement_with_mock() {
+        use nodalync_test_utils::*;
+
+        let mock_settle = MockSettlement::new().with_balance(10000);
+        let (mut ops, _temp) =
+            create_test_ops_with_settlement(std::sync::Arc::new(mock_settle.clone()));
+
+        // Enqueue a distribution
+        let dist = QueuedDistribution::new(
+            content_hash(b"force-payment"),
+            test_peer_id(),
+            500,
+            content_hash(b"force-source"),
+            current_timestamp(),
+        );
+        ops.state.settlement.enqueue(dist).unwrap();
+
+        // Force settlement
+        let batch_id = ops.force_settlement().await.unwrap();
+        assert!(batch_id.is_some());
+
+        // Verify the mock received the batch
+        let batches = mock_settle.settled_batches();
+        assert_eq!(batches.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_settlement_broadcasts_confirm() {
+        use nodalync_test_utils::*;
+
+        let (mut ops, mock_net, _mock_settle, _temp) = create_test_ops_with_mocks();
+
+        // Enqueue a distribution
+        let dist = QueuedDistribution::new(
+            content_hash(b"broadcast-payment"),
+            test_peer_id(),
+            300,
+            content_hash(b"broadcast-source"),
+            current_timestamp(),
+        );
+        ops.state.settlement.enqueue(dist).unwrap();
+
+        // Force settlement (triggers broadcast_settlement_confirm)
+        let batch_id = ops.force_settlement().await.unwrap();
+        assert!(batch_id.is_some());
+
+        // MockNetwork's broadcast_settlement_confirm is a no-op that returns Ok,
+        // so this test verifies the settlement path completes without errors
+        // when a network is present. The settlement confirm is broadcast via
+        // the network which is configured in the ops instance.
+        // We can at least verify the batch was settled and no errors occurred.
+        assert_eq!(mock_net.sent_message_count(), 0); // No point-to-point messages for settlement
     }
 }

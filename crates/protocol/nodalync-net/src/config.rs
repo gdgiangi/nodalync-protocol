@@ -172,4 +172,63 @@ mod tests {
         assert_eq!(config.bootstrap_nodes[0].0, peer_id);
         assert_eq!(config.bootstrap_nodes[0].1, addr);
     }
+
+    #[test]
+    fn test_network_config_defaults() {
+        let config = NetworkConfig::default();
+
+        // Listen address: /ip4/0.0.0.0/tcp/0
+        assert_eq!(config.listen_addresses.len(), 1);
+        let expected_addr: Multiaddr = "/ip4/0.0.0.0/tcp/0".parse().unwrap();
+        assert_eq!(config.listen_addresses[0], expected_addr);
+
+        // Timeout: 30s (MESSAGE_TIMEOUT_MS = 30_000)
+        assert_eq!(config.request_timeout, Duration::from_millis(30_000));
+
+        // DHT parameters from spec
+        assert_eq!(config.dht_bucket_size, 20);
+        assert_eq!(config.dht_alpha, 3);
+        assert_eq!(config.dht_replication, 20);
+
+        // GossipSub topic
+        assert_eq!(config.gossipsub_topic, "/nodalync/announce/1.0.0");
+
+        // Retry settings
+        assert_eq!(config.max_retries, 3);
+        assert_eq!(config.retry_base_delay, Duration::from_millis(100));
+
+        // mDNS disabled by default
+        assert!(!config.enable_mdns);
+
+        // Bootstrap nodes empty by default
+        assert!(config.bootstrap_nodes.is_empty());
+
+        // DHT query timeout
+        assert_eq!(config.dht_query_timeout, Duration::from_secs(60));
+
+        // Idle connection timeout
+        assert_eq!(config.idle_connection_timeout, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_network_config_with_custom_timeout() {
+        let config = NetworkConfig::new().with_request_timeout(Duration::from_secs(120));
+
+        assert_eq!(config.request_timeout, Duration::from_secs(120));
+
+        // Other defaults should remain unchanged
+        assert_eq!(config.max_retries, 3);
+        assert_eq!(config.dht_bucket_size, 20);
+    }
+
+    #[test]
+    fn test_network_config_with_retry_delay() {
+        let config = NetworkConfig::new().with_retry_base_delay(Duration::from_millis(500));
+
+        assert_eq!(config.retry_base_delay, Duration::from_millis(500));
+
+        // Other defaults should remain unchanged
+        assert_eq!(config.request_timeout, Duration::from_millis(30_000));
+        assert_eq!(config.max_retries, 3);
+    }
 }

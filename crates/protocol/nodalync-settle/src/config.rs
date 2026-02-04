@@ -29,6 +29,15 @@ impl HederaNetwork {
             Self::Previewnet => "previewnet",
         }
     }
+
+    /// Get the Mirror Node REST API base URL for this network.
+    pub fn mirror_node_url(&self) -> &'static str {
+        match self {
+            Self::Mainnet => "https://mainnet-public.mirrornode.hedera.com",
+            Self::Testnet => "https://testnet.mirrornode.hedera.com",
+            Self::Previewnet => "https://previewnet.mirrornode.hedera.com",
+        }
+    }
 }
 
 impl std::fmt::Display for HederaNetwork {
@@ -243,5 +252,49 @@ mod tests {
         };
         let account = config.parse_account_id().unwrap();
         assert_eq!(account.num, 12345);
+    }
+
+    #[test]
+    fn test_hedera_config_testnet_defaults() {
+        let config =
+            HederaConfig::testnet("0.0.7703962", PathBuf::from("/tmp/test.key"), "0.0.7729011");
+        assert_eq!(config.network, HederaNetwork::Testnet);
+        assert_eq!(config.account_id, "0.0.7703962");
+        assert_eq!(config.contract_id, "0.0.7729011");
+        // Gas defaults should be applied
+        assert_eq!(config.gas.max_gas_deposit, 100_000);
+        assert_eq!(config.gas.max_gas_settle, 500_000);
+        // Retry defaults should be applied
+        assert_eq!(config.retry.max_attempts, 3);
+    }
+
+    #[test]
+    fn test_hedera_config_mainnet_defaults() {
+        let config =
+            HederaConfig::mainnet("0.0.12345", PathBuf::from("/tmp/mainnet.key"), "0.0.67890");
+        assert_eq!(config.network, HederaNetwork::Mainnet);
+        assert_eq!(config.account_id, "0.0.12345");
+        assert_eq!(config.contract_id, "0.0.67890");
+        // Gas and retry should still use defaults
+        assert_eq!(
+            config.gas.max_gas_deposit,
+            GasConfig::default().max_gas_deposit
+        );
+        assert_eq!(
+            config.retry.max_attempts,
+            RetryConfig::default().max_attempts
+        );
+    }
+
+    #[test]
+    fn test_gas_config_defaults() {
+        let gas = GasConfig::default();
+        assert_eq!(gas.max_gas_deposit, 100_000);
+        assert_eq!(gas.max_gas_attest, 100_000);
+        assert_eq!(gas.max_gas_settle, 500_000);
+        assert_eq!(gas.max_gas_channel_open, 200_000);
+        assert_eq!(gas.max_gas_channel_close, 200_000);
+        assert_eq!(gas.max_gas_dispute, 300_000);
+        assert_eq!(gas.max_gas_withdraw, 100_000);
     }
 }

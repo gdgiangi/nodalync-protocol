@@ -96,6 +96,30 @@ use nodalync_crypto::Hash;
 use nodalync_wire::AnnouncePayload;
 use rusqlite::Connection;
 
+/// Get the default data directory for Nodalync node state.
+///
+/// Priority:
+/// 1. `NODALYNC_DATA_DIR` environment variable (if set)
+/// 2. Platform-specific data directory (e.g., `~/Library/Application Support/io.nodalync.nodalync` on macOS)
+/// 3. Fallback to `$HOME/.nodalync`
+///
+/// Both the CLI and MCP server should use this function to ensure they
+/// share the same storage location on a single machine.
+pub fn default_data_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("NODALYNC_DATA_DIR") {
+        return PathBuf::from(dir);
+    }
+
+    directories::ProjectDirs::from("io", "nodalync", "nodalync")
+        .map(|dirs| dirs.data_dir().to_path_buf())
+        .unwrap_or_else(|| {
+            std::env::var("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(".nodalync")
+        })
+}
+
 /// Configuration for NodeState.
 #[derive(Debug, Clone)]
 pub struct NodeStateConfig {
@@ -213,6 +237,7 @@ impl NodeState {
 
         // Open database connection
         let db_path = config.database_path();
+        tracing::info!(db_path = %db_path.display(), "Opening node state database");
         let conn = Connection::open(&db_path)?;
 
         // Initialize schema
@@ -309,7 +334,21 @@ impl NodeState {
     /// This persists the announcement to SQLite so that preview/query can discover
     /// content from the network even after restart.
     pub fn store_announcement(&self, payload: AnnouncePayload) {
-        let conn = self.conn.lock().unwrap();
+        tracing::info!(
+            hash = %payload.hash,
+            title = %payload.title,
+            addresses_count = payload.addresses.len(),
+            publisher_peer_id = ?payload.publisher_peer_id,
+            "Storing announcement"
+        );
+
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(_) => {
+                tracing::error!("database connection lock poisoned");
+                return;
+            }
+        };
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -347,7 +386,13 @@ impl NodeState {
     pub fn get_announcement(&self, hash: &Hash) -> Option<AnnouncePayload> {
         use nodalync_types::{ContentType, L1Summary};
 
-        let conn = self.conn.lock().unwrap();
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(_) => {
+                tracing::error!("database connection lock poisoned");
+                return None;
+            }
+        };
         conn.query_row(
             "SELECT content_type, title, l1_summary, price, addresses, publisher_peer_id FROM announcements WHERE hash = ?1",
             [hash.0.as_slice()],
@@ -381,7 +426,13 @@ impl NodeState {
     pub fn list_announcements(&self) -> Vec<AnnouncePayload> {
         use nodalync_types::{ContentType, L1Summary};
 
-        let conn = self.conn.lock().unwrap();
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(_) => {
+                tracing::error!("database connection lock poisoned");
+                return Vec::new();
+            }
+        };
         let mut stmt = match conn.prepare(
             "SELECT hash, content_type, title, l1_summary, price, addresses, publisher_peer_id FROM announcements ORDER BY received_at DESC",
         ) {
@@ -438,7 +489,13 @@ impl NodeState {
     ) -> Vec<AnnouncePayload> {
         use nodalync_types::{ContentType, L1Summary};
 
-        let conn = self.conn.lock().unwrap();
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(_) => {
+                tracing::error!("database connection lock poisoned");
+                return Vec::new();
+            }
+        };
         let pattern = format!("%{}%", query.to_lowercase());
 
         let (sql, params): (&str, Vec<Box<dyn rusqlite::ToSql>>) = if let Some(ct) = content_type {
@@ -515,7 +572,13 @@ impl NodeState {
     /// Removes announcements older than the specified TTL (time-to-live) in seconds.
     /// Returns the number of announcements deleted.
     pub fn cleanup_old_announcements(&self, ttl_seconds: i64) -> u32 {
-        let conn = self.conn.lock().unwrap();
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(_) => {
+                tracing::error!("database connection lock poisoned");
+                return 0;
+            }
+        };
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -537,7 +600,13 @@ impl NodeState {
 
     /// Get the count of stored announcements.
     pub fn announcement_count(&self) -> u32 {
-        let conn = self.conn.lock().unwrap();
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(_) => {
+                tracing::error!("database connection lock poisoned");
+                return 0;
+            }
+        };
         conn.query_row("SELECT COUNT(*) FROM announcements", [], |row| row.get(0))
             .unwrap_or(0)
     }

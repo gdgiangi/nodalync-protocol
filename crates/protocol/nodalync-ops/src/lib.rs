@@ -129,6 +129,7 @@ pub mod helpers;
 pub mod l2;
 pub mod node_ops;
 pub mod ops;
+pub mod peer_key_lookup;
 pub mod publish;
 pub mod query;
 pub mod settlement;
@@ -159,6 +160,9 @@ pub use helpers::{
     generate_channel_id, generate_payment_id, is_queryable_by, merge_provenance_entries,
     total_provenance_weight, truncate_string, unique_owners, verify_content_hash,
 };
+
+// Peer key lookup
+pub use peer_key_lookup::PeerStoreKeyLookup;
 
 // Channel payment helpers
 pub use channel::{create_signed_payment, create_signed_payment_for_manifest, sign_payment};
@@ -260,7 +264,7 @@ mod tests {
         assert!(!channel.is_open()); // Opening state
 
         // Accept another channel
-        let (_, pk2) = generate_identity();
+        let (private_key2, pk2) = generate_identity();
         let peer2 = peer_id_from_public_key(&pk2);
         let channel_id = content_hash(b"channel2");
 
@@ -269,10 +273,15 @@ mod tests {
             .unwrap();
         assert!(channel2.is_open());
 
-        // Close channel (use simple version for tests without private key)
-        ops.close_payment_channel_simple(&peer2).await.unwrap();
-        let closed = ops.get_payment_channel(&peer2).unwrap().unwrap();
-        assert!(closed.is_closed());
+        // Close channel (will report peer unresponsive since no network)
+        let result = ops
+            .close_payment_channel(&peer2, &private_key2)
+            .await
+            .unwrap();
+        // Without network, peer is unresponsive but pending close is set
+        assert!(matches!(result, CloseResult::PeerUnresponsive { .. }));
+        let channel = ops.get_payment_channel(&peer2).unwrap().unwrap();
+        assert!(channel.pending_close.is_some());
     }
 
     /// Integration test: Settlement queue

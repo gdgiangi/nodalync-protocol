@@ -39,6 +39,7 @@ impl SqliteChannelStore {
         i64,
         Option<String>,
         Option<String>,
+        Option<String>,
     ) {
         let pending_close_json = channel
             .pending_close
@@ -59,6 +60,7 @@ impl SqliteChannelStore {
             channel.last_update as i64,
             pending_close_json,
             pending_dispute_json,
+            channel.funding_tx_id.clone(),
         )
     }
 
@@ -95,7 +97,7 @@ impl SqliteChannelStore {
             nonce: nonce as u64,
             last_update: last_update as Timestamp,
             pending_payments: Vec::new(), // Loaded separately
-            funding_tx_id: None,          // TODO: Load from DB when schema is updated
+            funding_tx_id: row.get::<_, Option<String>>(9).ok().flatten(),
             pending_close,
             pending_dispute,
         })
@@ -161,7 +163,10 @@ impl SqliteChannelStore {
 
 impl ChannelStore for SqliteChannelStore {
     fn create(&mut self, peer: &PeerId, channel: Channel) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
 
         // Check if channel already exists
         let peer_bytes = peer.0.to_vec();
@@ -188,24 +193,28 @@ impl ChannelStore for SqliteChannelStore {
             last_update,
             pending_close,
             pending_dispute,
+            funding_tx_id,
         ) = Self::serialize_channel(peer, &channel);
 
         conn.execute(
-            "INSERT INTO channels (peer_id, channel_id, state, my_balance, their_balance, nonce, last_update, pending_close, pending_dispute)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![peer_bytes, channel_id, state, my_balance, their_balance, nonce, last_update, pending_close, pending_dispute],
+            "INSERT INTO channels (peer_id, channel_id, state, my_balance, their_balance, nonce, last_update, pending_close, pending_dispute, funding_tx_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![peer_bytes, channel_id, state, my_balance, their_balance, nonce, last_update, pending_close, pending_dispute, funding_tx_id],
         )?;
 
         Ok(())
     }
 
     fn get(&self, peer: &PeerId) -> Result<Option<Channel>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let peer_bytes = peer.0.to_vec();
 
         let channel = conn
             .query_row(
-                "SELECT peer_id, channel_id, state, my_balance, their_balance, nonce, last_update, pending_close, pending_dispute
+                "SELECT peer_id, channel_id, state, my_balance, their_balance, nonce, last_update, pending_close, pending_dispute, funding_tx_id
                  FROM channels WHERE peer_id = ?1",
                 [&peer_bytes],
                 Self::deserialize_channel,
@@ -223,7 +232,10 @@ impl ChannelStore for SqliteChannelStore {
     }
 
     fn update(&mut self, peer: &PeerId, channel: &Channel) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
 
         let (
             peer_bytes,
@@ -235,12 +247,14 @@ impl ChannelStore for SqliteChannelStore {
             last_update,
             pending_close,
             pending_dispute,
+            funding_tx_id,
         ) = Self::serialize_channel(peer, channel);
 
         let rows_affected = conn.execute(
             "UPDATE channels SET
                 channel_id = ?2, state = ?3, my_balance = ?4, their_balance = ?5,
-                nonce = ?6, last_update = ?7, pending_close = ?8, pending_dispute = ?9
+                nonce = ?6, last_update = ?7, pending_close = ?8, pending_dispute = ?9,
+                funding_tx_id = ?10
              WHERE peer_id = ?1",
             params![
                 peer_bytes,
@@ -251,7 +265,8 @@ impl ChannelStore for SqliteChannelStore {
                 nonce,
                 last_update,
                 pending_close,
-                pending_dispute
+                pending_dispute,
+                funding_tx_id
             ],
         )?;
 
@@ -263,10 +278,13 @@ impl ChannelStore for SqliteChannelStore {
     }
 
     fn list_open(&self) -> Result<Vec<(PeerId, Channel)>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
 
         let mut stmt = conn.prepare(
-            "SELECT peer_id, channel_id, state, my_balance, their_balance, nonce, last_update, pending_close, pending_dispute
+            "SELECT peer_id, channel_id, state, my_balance, their_balance, nonce, last_update, pending_close, pending_dispute, funding_tx_id
              FROM channels WHERE state = ?1",
         )?;
 
@@ -295,7 +313,10 @@ impl ChannelStore for SqliteChannelStore {
     }
 
     fn clear_all(&mut self) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         // Try to clear pending_payments if the table exists (ignore errors if it doesn't)
         let _ = conn.execute("DELETE FROM pending_payments", []);
         // Clear channels table
@@ -304,7 +325,10 @@ impl ChannelStore for SqliteChannelStore {
     }
 
     fn add_payment(&mut self, peer: &PeerId, payment: Payment) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
 
         let (
             id,
@@ -328,12 +352,18 @@ impl ChannelStore for SqliteChannelStore {
     }
 
     fn get_pending_payments(&self, peer: &PeerId) -> Result<Vec<Payment>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         self.load_pending_payments(&conn, peer)
     }
 
     fn clear_payments(&mut self, peer: &PeerId, payment_ids: &[Hash]) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let peer_bytes = peer.0.to_vec();
 
         for payment_id in payment_ids {
@@ -368,7 +398,10 @@ impl SqliteChannelStore {
 
     /// Delete a channel and all its payments.
     pub fn delete(&mut self, peer: &PeerId) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let peer_bytes = peer.0.to_vec();
 
         conn.execute(
@@ -714,5 +747,59 @@ mod tests {
         // Verify it was cleared
         let loaded = store.get(&peer).unwrap().unwrap();
         assert!(loaded.pending_close.is_none());
+    }
+
+    #[test]
+    fn test_funding_tx_id_roundtrip() {
+        let mut store = setup_store();
+        let peer = test_peer_id();
+        let mut channel = test_channel(peer);
+
+        // Set a funding_tx_id
+        channel.funding_tx_id = Some("0.0.12345@1234567890.000000000".to_string());
+        store.create(&peer, channel.clone()).unwrap();
+
+        // Reload and verify it persisted
+        let loaded = store.get(&peer).unwrap().unwrap();
+        assert_eq!(
+            loaded.funding_tx_id,
+            Some("0.0.12345@1234567890.000000000".to_string())
+        );
+
+        // Update to a different value
+        channel.funding_tx_id = Some("0.0.99999@9999999999.000000000".to_string());
+        store.update(&peer, &channel).unwrap();
+
+        let loaded = store.get(&peer).unwrap().unwrap();
+        assert_eq!(
+            loaded.funding_tx_id,
+            Some("0.0.99999@9999999999.000000000".to_string())
+        );
+
+        // Clear funding_tx_id
+        channel.funding_tx_id = None;
+        store.update(&peer, &channel).unwrap();
+
+        let loaded = store.get(&peer).unwrap().unwrap();
+        assert!(loaded.funding_tx_id.is_none());
+    }
+
+    #[test]
+    fn test_funding_tx_id_none_by_default() {
+        let mut store = setup_store();
+        let peer = test_peer_id();
+        let channel = test_channel(peer);
+
+        // Channel::new should have funding_tx_id = None
+        assert!(channel.funding_tx_id.is_none());
+
+        store.create(&peer, channel).unwrap();
+
+        // Reload and verify it's None
+        let loaded = store.get(&peer).unwrap().unwrap();
+        assert!(
+            loaded.funding_tx_id.is_none(),
+            "funding_tx_id should be None by default"
+        );
     }
 }

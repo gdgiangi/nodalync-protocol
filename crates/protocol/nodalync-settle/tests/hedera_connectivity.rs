@@ -15,42 +15,10 @@
 
 #![cfg(feature = "hedera-sdk")]
 
-use hedera::{AccountBalanceQuery, AccountId, Client, PrivateKey};
+use hiero_sdk::{AccountBalanceQuery, AccountId, Client, PrivateKey};
 use std::env;
 use std::path::PathBuf;
 use std::str::FromStr;
-
-/// Try to load .env file from project root
-fn try_load_dotenv() {
-    // Find project root by looking for Cargo.toml
-    if let Ok(manifest_dir) = env::var("CARGO_MANIFEST_DIR") {
-        let mut path = PathBuf::from(manifest_dir);
-        // Go up to project root (from crates/nodalync-settle to root)
-        path.pop(); // crates
-        path.pop(); // root
-        path.push(".env");
-
-        if path.exists() {
-            // Read and parse .env file manually (no external dependency)
-            if let Ok(contents) = std::fs::read_to_string(&path) {
-                for line in contents.lines() {
-                    let line = line.trim();
-                    if line.is_empty() || line.starts_with('#') {
-                        continue;
-                    }
-                    if let Some((key, value)) = line.split_once('=') {
-                        let key = key.trim();
-                        let value = value.trim().trim_matches('"').trim_matches('\'');
-                        // Only set if not already set
-                        if env::var(key).is_err() {
-                            env::set_var(key, value);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
 
 /// Try to load private key from ~/.nodalync/hedera.key
 fn try_load_key_file() -> Option<String> {
@@ -64,7 +32,7 @@ fn try_load_key_file() -> Option<String> {
 /// Get test credentials from environment, .env file, or key file
 fn get_credentials() -> Option<(String, String)> {
     // First try loading .env file
-    try_load_dotenv();
+    nodalync_test_utils::try_load_dotenv();
 
     // Get account ID from environment
     let account_id = env::var("HEDERA_ACCOUNT_ID").ok()?;
@@ -155,7 +123,7 @@ async fn test_hedera_account_info() {
     client.set_operator(account_id, private_key.clone());
 
     // Query account info (this is a paid query, may fail on testnet)
-    match hedera::AccountInfoQuery::new()
+    match hiero_sdk::AccountInfoQuery::new()
         .account_id(account_id)
         .execute(&client)
         .await

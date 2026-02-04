@@ -283,26 +283,10 @@ impl Default for DisplayConfig {
 
 /// Get the default base directory for nodalync data.
 ///
-/// Priority:
-/// 1. `NODALYNC_DATA_DIR` environment variable (if set)
-/// 2. Platform-specific data directory (e.g., `~/.local/share/nodalync` on Linux)
-/// 3. Fallback to `~/.nodalync`
+/// Delegates to [`nodalync_store::default_data_dir`] to ensure the CLI and MCP
+/// server always resolve to the same storage location.
 pub fn default_base_dir() -> PathBuf {
-    // Check environment variable first
-    if let Ok(dir) = std::env::var("NODALYNC_DATA_DIR") {
-        return PathBuf::from(dir);
-    }
-
-    // Use platform-specific data directory
-    directories::ProjectDirs::from("io", "nodalync", "nodalync")
-        .map(|dirs| dirs.data_dir().to_path_buf())
-        .unwrap_or_else(|| {
-            // Fallback to home directory
-            std::env::var("HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from("."))
-                .join(".nodalync")
-        })
+    nodalync_store::default_data_dir()
 }
 
 /// Get the default config file path.
@@ -502,6 +486,124 @@ mod tests {
             config.economics.default_price,
             parsed.economics.default_price
         );
+    }
+
+    #[test]
+    fn test_hbar_to_tinybars_zero() {
+        assert_eq!(hbar_to_tinybars(0.0), 0);
+    }
+
+    #[test]
+    fn test_hbar_to_tinybars_fractional() {
+        assert_eq!(hbar_to_tinybars(0.001), 100_000);
+    }
+
+    #[test]
+    fn test_tinybars_to_hbar_roundtrip() {
+        let original = 1.5;
+        let tinybars = hbar_to_tinybars(original);
+        let back = tinybars_to_hbar(tinybars);
+        assert!((original - back).abs() < 1e-8);
+    }
+
+    #[test]
+    fn test_ndl_to_units_alias() {
+        let amount = 3.14;
+        assert_eq!(ndl_to_units(amount), hbar_to_tinybars(amount));
+    }
+
+    #[test]
+    fn test_units_to_ndl_alias() {
+        let units = 500_000_000u64;
+        assert_eq!(units_to_ndl(units), tinybars_to_hbar(units));
+    }
+
+    #[test]
+    fn test_format_hbar_large() {
+        let result = format_hbar(1_000_000_000_000);
+        assert!(result.contains("HBAR"));
+        // 1_000_000_000_000 tinybars = 10_000 HBAR
+        assert_eq!(result, "10000.00 HBAR");
+    }
+
+    #[test]
+    fn test_format_ndl_alias() {
+        let units = 50_000_000u64;
+        assert_eq!(format_ndl(units), format_hbar(units));
+    }
+
+    #[test]
+    fn test_default_base_dir() {
+        let dir = default_base_dir();
+        assert!(!dir.as_os_str().is_empty());
+    }
+
+    #[test]
+    fn test_default_config_path() {
+        let path = default_config_path();
+        assert!(path.ends_with("config.toml"));
+    }
+
+    #[test]
+    fn test_config_save_and_load_roundtrip() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+
+        let config = CliConfig::default();
+        config.save(&config_path).unwrap();
+
+        let loaded = CliConfig::load(&config_path).unwrap();
+        assert_eq!(
+            config.economics.default_price,
+            loaded.economics.default_price
+        );
+        assert_eq!(config.settlement.network, loaded.settlement.network);
+        assert_eq!(config.network.enabled, loaded.network.enabled);
+    }
+
+    #[test]
+    fn test_config_load_nonexistent_returns_default() {
+        let path = Path::new("/tmp/nodalync_nonexistent_12345/config.toml");
+        let config = CliConfig::load(path).unwrap();
+        let default = CliConfig::default();
+        assert_eq!(
+            config.economics.default_price,
+            default.economics.default_price
+        );
+        assert_eq!(config.settlement.network, default.settlement.network);
+    }
+
+    #[test]
+    fn test_economics_default_price_units() {
+        let econ = EconomicsConfig::default();
+        // default_price is 0.10 HBAR = 10_000_000 tinybars
+        assert_eq!(econ.default_price_units(), hbar_to_tinybars(0.10));
+    }
+
+    #[test]
+    fn test_economics_auto_settle_threshold() {
+        let econ = EconomicsConfig::default();
+        // auto_settle_threshold is 100.0 HBAR = 10_000_000_000 tinybars
+        assert_eq!(econ.auto_settle_threshold_units(), hbar_to_tinybars(100.0));
+    }
+
+    #[test]
+    fn test_storage_base_dir() {
+        let storage = StorageConfig::default();
+        let base = storage.base_dir();
+        assert!(!base.as_os_str().is_empty());
+        // base_dir should be the parent of content_dir
+        assert_eq!(base, storage.content_dir.parent().unwrap().to_path_buf());
+    }
+
+    #[test]
+    fn test_alerting_config_defaults() {
+        let alerting = AlertingConfig::default();
+        assert!(!alerting.enabled);
+        assert!(alerting.webhooks.is_empty());
+        assert!(alerting.node_name.is_none());
+        assert!(alerting.region.is_none());
+        assert!(alerting.heartbeat.is_none());
     }
 
     #[test]
