@@ -54,6 +54,9 @@ tracing-subscriber.workspace = true
 # Metrics
 prometheus.workspace = true
 
+# Vendor OpenSSL so we don't need a system installation (used by hiero-sdk)
+openssl = { version = "0.10", features = ["vendored"], optional = true }
+
 # Unix process management
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -66,7 +69,7 @@ tempfile.workspace = true
 [features]
 default = ["hedera-sdk"]
 # Enable Hedera settlement integration (requires protoc installed)
-hedera-sdk = ["nodalync-settle/hedera-sdk", "nodalync-mcp/hedera-sdk"]
+hedera-sdk = ["nodalync-settle/hedera-sdk", "nodalync-mcp/hedera-sdk", "openssl"]
 # Alias for hedera-sdk
 hedera = ["hedera-sdk"]
 

@@ -94,6 +94,10 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install protoc
 
+      - name: Install Perl and NASM (Windows, needed for vendored OpenSSL build)
+        if: runner.os == 'Windows'
+        run: choco install nasm strawberryperl
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
