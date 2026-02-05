@@ -196,7 +196,7 @@ This repository uses split versioning:
 
 ## Contributors
 
-Gabriel Giangi, Thomas Blanc Bolelli
+Gabriel Giangi
 
 ## License
 
