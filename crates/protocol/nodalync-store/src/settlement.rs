@@ -5,6 +5,7 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 use std::sync::{Arc, Mutex};
+use tracing::warn;
 
 use nodalync_crypto::{Hash, PeerId, Timestamp};
 use nodalync_types::Amount;
@@ -81,7 +82,13 @@ impl SettlementQueueStore for SqliteSettlementQueue {
 
         let distributions: Vec<QueuedDistribution> = stmt
             .query_map([], Self::deserialize_distribution)?
-            .filter_map(|r| r.ok())
+            .filter_map(|r| match r {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    warn!(error = %e, "Failed to deserialize pending settlement distribution");
+                    None
+                }
+            })
             .collect();
 
         Ok(distributions)
@@ -101,7 +108,13 @@ impl SettlementQueueStore for SqliteSettlementQueue {
 
         let distributions: Vec<QueuedDistribution> = stmt
             .query_map([recipient_bytes], Self::deserialize_distribution)?
-            .filter_map(|r| r.ok())
+            .filter_map(|r| match r {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    warn!(error = %e, "Failed to deserialize pending settlement distribution for recipient");
+                    None
+                }
+            })
             .collect();
 
         Ok(distributions)
@@ -227,7 +240,13 @@ impl SqliteSettlementQueue {
 
         let distributions: Vec<QueuedDistribution> = stmt
             .query_map([batch_id_bytes], Self::deserialize_distribution)?
-            .filter_map(|r| r.ok())
+            .filter_map(|r| match r {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    warn!(error = %e, "Failed to deserialize batch settlement distribution");
+                    None
+                }
+            })
             .collect();
 
         Ok(distributions)
@@ -253,7 +272,13 @@ impl SqliteSettlementQueue {
                 let total: i64 = row.get(1)?;
                 Ok((bytes_to_peer_id(&recipient_bytes), total as Amount))
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(|r| match r {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    warn!(error = %e, "Failed to deserialize settlement aggregate");
+                    None
+                }
+            })
             .collect();
 
         Ok(aggregates)
