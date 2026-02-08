@@ -167,12 +167,13 @@ where
         // 5. Update channel state (credit - they pay us)
         if let Some(mut channel) = self.state.channels.get(requester)? {
             if channel.is_open() && payment_amount > 0 {
-                // Create payment record
+                // Create payment record (include nonce for uniqueness across rapid queries)
                 let payment_id = content_hash(
                     &[
                         request.hash.0.as_slice(),
                         &timestamp.to_be_bytes(),
                         &payment_amount.to_be_bytes(),
+                        &request.payment_nonce.to_be_bytes(),
                     ]
                     .concat(),
                 );
@@ -222,9 +223,15 @@ where
             }
         }
 
-        // 6. Generate payment ID
-        let payment_id =
-            content_hash(&[request.hash.0.as_slice(), &timestamp.to_be_bytes()].concat());
+        // 6. Generate payment ID (include nonce for uniqueness)
+        let payment_id = content_hash(
+            &[
+                request.hash.0.as_slice(),
+                &timestamp.to_be_bytes(),
+                &request.payment_nonce.to_be_bytes(),
+            ]
+            .concat(),
+        );
 
         // 7. Calculate 95/5 distribution (CORE PROTOCOL FEATURE)
         // - 5% synthesis fee goes to the content owner

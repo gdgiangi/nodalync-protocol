@@ -83,8 +83,17 @@ fn create_payment(
     channel_id: Hash,
     provenance: Vec<ProvenanceEntry>,
 ) -> nodalync_types::Payment {
+    // Use a random nonce to ensure unique payment IDs for repeated queries
+    let nonce: u64 = rand::random();
     nodalync_types::Payment::new(
-        content_hash(&[query_hash.0.as_slice(), &amount.to_be_bytes()].concat()),
+        content_hash(
+            &[
+                query_hash.0.as_slice(),
+                &amount.to_be_bytes(),
+                &nonce.to_be_bytes(),
+            ]
+            .concat(),
+        ),
         channel_id,
         amount,
         recipient,
