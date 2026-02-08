@@ -288,7 +288,7 @@ pub struct BudgetStatus {
 
 /// Convert HBAR to tinybars.
 pub fn hbar_to_tinybars(hbar: f64) -> Amount {
-    (hbar * TINYBARS_PER_HBAR as f64) as Amount
+    (hbar * TINYBARS_PER_HBAR as f64).round() as Amount
 }
 
 /// Convert tinybars to HBAR.
@@ -309,6 +309,20 @@ mod tests {
         assert_eq!(tinybars_to_hbar(100_000_000), 1.0);
         assert_eq!(tinybars_to_hbar(50_000_000), 0.5);
         assert_eq!(tinybars_to_hbar(1_000_000), 0.01);
+    }
+
+    #[test]
+    fn test_hbar_to_tinybars_rounds_instead_of_truncating() {
+        // Verify rounding at larger scales where f64 precision is reliable
+        // 0.005000009 HBAR = 500000.9 tinybars, should round to 500001 not truncate to 500000
+        assert_eq!(hbar_to_tinybars(0.005_000_009), 500_001);
+        // 0.005000001 HBAR = 500000.1 tinybars, should round to 500000
+        assert_eq!(hbar_to_tinybars(0.005_000_001), 500_000);
+        // 0.005000005 HBAR = 500000.5 tinybars, should round to 500001
+        assert_eq!(hbar_to_tinybars(0.005_000_005), 500_001);
+        // Verify existing conversions still work
+        assert_eq!(hbar_to_tinybars(1.0), 100_000_000);
+        assert_eq!(hbar_to_tinybars(0.5), 50_000_000);
     }
 
     #[test]
