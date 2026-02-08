@@ -521,9 +521,17 @@ where
         let timestamp = current_timestamp();
 
         // Get Nodalync peer ID from mapping
-        let recipient = network
-            .nodalync_peer_id(&libp2p_peer)
-            .unwrap_or(UNKNOWN_PEER_ID);
+        let recipient = match network.nodalync_peer_id(&libp2p_peer) {
+            Some(peer_id) if peer_id != UNKNOWN_PEER_ID => peer_id,
+            _ => {
+                // For paid content, we must know the recipient's identity
+                if payment_amount > 0 {
+                    return Err(OpsError::PeerIdNotFound);
+                }
+                // For free content, UNKNOWN_PEER_ID is acceptable
+                UNKNOWN_PEER_ID
+            }
+        };
 
         // For paid content, we need a channel and private key
         let (payment, payment_nonce) = if payment_amount > 0 {
