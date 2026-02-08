@@ -54,7 +54,7 @@ impl SettlementQueueStore for SqliteSettlementQueue {
         let source_hash_bytes = distribution.source_hash.0.to_vec();
 
         conn.execute(
-            "INSERT INTO settlement_queue (payment_id, recipient, amount, source_hash, queued_at, settled)
+            "INSERT OR IGNORE INTO settlement_queue (payment_id, recipient, amount, source_hash, queued_at, settled)
              VALUES (?1, ?2, ?3, ?4, ?5, 0)",
             params![
                 payment_id_bytes,
@@ -474,6 +474,32 @@ mod tests {
 
         let batch = queue.get_batch(&batch_id).unwrap();
         assert_eq!(batch.len(), 2);
+    }
+
+    #[test]
+    fn test_enqueue_duplicate_payment_id_recipient_ignored() {
+        // Regression test: enqueuing the same payment_id+recipient twice
+        // should not create duplicates (INSERT OR IGNORE + UNIQUE index).
+        let mut queue = setup_queue();
+        let recipient = test_peer_id();
+
+        let dist = QueuedDistribution {
+            payment_id: content_hash(b"same-payment"),
+            recipient,
+            amount: 100,
+            source_hash: content_hash(b"source"),
+            queued_at: 1234567890,
+        };
+
+        // First enqueue succeeds
+        queue.enqueue(dist.clone()).unwrap();
+
+        // Second enqueue with same payment_id+recipient is silently ignored
+        queue.enqueue(dist.clone()).unwrap();
+
+        let pending = queue.get_pending().unwrap();
+        assert_eq!(pending.len(), 1, "Duplicate payment_id+recipient should be ignored");
+        assert_eq!(pending[0].amount, 100);
     }
 
     #[test]
