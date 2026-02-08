@@ -14,6 +14,9 @@ pub const SCHEMA_VERSION: u32 = 3;
 /// Creates all tables and indexes if they don't exist.
 /// This function is idempotent - calling it multiple times is safe.
 pub fn initialize_schema(conn: &Connection) -> Result<()> {
+    // Enable WAL mode for better concurrent read/write performance
+    conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+
     // Create schema version table
     conn.execute(
         "CREATE TABLE IF NOT EXISTS schema_version (
@@ -348,6 +351,21 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         let result = initialize_schema(&conn);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_wal_mode_enabled() {
+        // Note: WAL mode doesn't persist for in-memory databases, so we
+        // test with a temporary file database instead.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let conn = Connection::open(&db_path).unwrap();
+        initialize_schema(&conn).unwrap();
+
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal", "WAL mode should be enabled after initialization");
     }
 
     #[test]
