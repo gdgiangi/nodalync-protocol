@@ -127,16 +127,18 @@ impl SettlementQueueStore for SqliteSettlementQueue {
             .conn
             .lock()
             .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
+        let tx = conn.unchecked_transaction()?;
         let batch_id_bytes = batch_id.0.to_vec();
 
         for payment_id in payment_ids {
             let payment_id_bytes = payment_id.0.to_vec();
-            conn.execute(
+            tx.execute(
                 "UPDATE settlement_queue SET settled = 1, batch_id = ?2 WHERE payment_id = ?1",
                 params![payment_id_bytes, batch_id_bytes],
             )?;
         }
 
+        tx.commit()?;
         Ok(())
     }
 
@@ -477,6 +479,7 @@ mod tests {
     }
 
     #[test]
+<<<<<<< HEAD
     fn test_enqueue_duplicate_payment_id_recipient_ignored() {
         // Regression test: enqueuing the same payment_id+recipient twice
         // should not create duplicates (INSERT OR IGNORE + UNIQUE index).
@@ -500,6 +503,32 @@ mod tests {
         let pending = queue.get_pending().unwrap();
         assert_eq!(pending.len(), 1, "Duplicate payment_id+recipient should be ignored");
         assert_eq!(pending[0].amount, 100);
+=======
+    fn test_mark_settled_is_atomic() {
+        // Regression test: mark_settled must be wrapped in a transaction so that
+        // if it fails midway, none of the payments are marked as settled.
+        let mut queue = setup_queue();
+        let recipient = test_peer_id();
+
+        let dist1 = test_distribution(recipient, 100);
+        let dist2 = test_distribution(recipient, 200);
+
+        queue.enqueue(dist1.clone()).unwrap();
+        queue.enqueue(dist2.clone()).unwrap();
+
+        // Mark both settled atomically
+        let batch_id = content_hash(b"atomic-batch");
+        queue
+            .mark_settled(&[dist1.payment_id, dist2.payment_id], &batch_id)
+            .unwrap();
+
+        // Both should be settled
+        let pending = queue.get_pending().unwrap();
+        assert_eq!(pending.len(), 0, "All payments should be settled atomically");
+
+        let batch = queue.get_batch(&batch_id).unwrap();
+        assert_eq!(batch.len(), 2, "Both payments should be in the batch");
+>>>>>>> fix/settlement-transaction
     }
 
     #[test]
