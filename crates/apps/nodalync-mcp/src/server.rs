@@ -2513,6 +2513,53 @@ impl rmcp::ServerHandler for NodalyncMcpServer {
             let price = preview.manifest.economics.price;
             let price_hbar = tinybars_to_hbar(price);
 
+            // Auto-open payment channel if needed (aligned with query_knowledge)
+            if price > 0 {
+                let libp2p_peer_opt = preview
+                    .provider_peer_id
+                    .as_ref()
+                    .and_then(|s| s.parse::<LibP2pPeerId>().ok());
+
+                if let Some(libp2p_peer) = libp2p_peer_opt {
+                    let existing_nodalync_id = self
+                        .network
+                        .as_ref()
+                        .and_then(|n| n.nodalync_peer_id(&libp2p_peer));
+
+                    let has_channel = existing_nodalync_id
+                        .map(|id| ops.has_open_channel(&id).unwrap_or(false))
+                        .unwrap_or(false);
+
+                    if !has_channel {
+                        let channel_deposit = hbar_to_tinybars(1.0);
+                        info!(
+                            provider_libp2p = %libp2p_peer,
+                            deposit_hbar = 1.0,
+                            "Auto-opening payment channel for resource read"
+                        );
+
+                        if let Err(e) = ops
+                            .open_payment_channel_to_libp2p(libp2p_peer, channel_deposit)
+                            .await
+                        {
+                            warn!(error = %e, "Failed to auto-open payment channel");
+                        }
+                    }
+                } else if preview.manifest.owner != UNKNOWN_PEER_ID {
+                    let peer = preview.manifest.owner;
+                    if !ops.has_open_channel(&peer).unwrap_or(false) {
+                        let channel_deposit = hbar_to_tinybars(1.0);
+                        if let Err(e) =
+                            ops.open_payment_channel(&peer, channel_deposit).await
+                        {
+                            warn!(error = %e, "Failed to auto-open payment channel");
+                        } else {
+                            tokio::time::sleep(Duration::from_millis(500)).await;
+                        }
+                    }
+                }
+            }
+
             // Reserve budget before query
             if price > 0 && self.budget.spend(price).is_none() {
                 return Err(McpError::invalid_request(
@@ -2525,9 +2572,44 @@ impl rmcp::ServerHandler for NodalyncMcpServer {
                 ));
             }
 
-            // Execute query
+            // Execute query with retry on channel requirement (aligned with query_knowledge)
             let response = match ops.query_content(&hash, price, None).await {
                 Ok(r) => r,
+                Err(nodalync_ops::OpsError::ChannelRequiredWithPeerInfo {
+                    nodalync_peer_id,
+                    libp2p_peer_id,
+                }) => {
+                    info!("Server requires payment channel - auto-opening and retrying");
+                    let channel_deposit = hbar_to_tinybars(1.0);
+
+                    if let Some(ref libp2p_str) = libp2p_peer_id {
+                        if let Ok(libp2p_peer) = libp2p_str.parse::<LibP2pPeerId>() {
+                            let _ = ops
+                                .open_payment_channel_to_libp2p(libp2p_peer, channel_deposit)
+                                .await;
+                        }
+                    } else if let Some(ref nodalync_id) = nodalync_peer_id {
+                        if let Ok(_channel) =
+                            ops.open_payment_channel(nodalync_id, channel_deposit).await
+                        {
+                            tokio::time::sleep(Duration::from_millis(500)).await;
+                        }
+                    }
+
+                    // Retry query
+                    match ops.query_content(&hash, price, None).await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            if price > 0 {
+                                self.budget.refund(price);
+                            }
+                            return Err(McpError::internal_error(
+                                format!("Query failed after channel retry: {}", e),
+                                None,
+                            ));
+                        }
+                    }
+                }
                 Err(e) => {
                     // Refund on failure
                     if price > 0 {
