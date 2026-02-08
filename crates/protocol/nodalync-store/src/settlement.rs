@@ -504,7 +504,6 @@ mod tests {
     }
 
     #[test]
-<<<<<<< HEAD
     fn test_enqueue_duplicate_payment_id_recipient_ignored() {
         // Regression test: enqueuing the same payment_id+recipient twice
         // should not create duplicates (INSERT OR IGNORE + UNIQUE index).
@@ -528,7 +527,9 @@ mod tests {
         let pending = queue.get_pending().unwrap();
         assert_eq!(pending.len(), 1, "Duplicate payment_id+recipient should be ignored");
         assert_eq!(pending[0].amount, 100);
-=======
+    }
+
+    #[test]
     fn test_mark_settled_is_atomic() {
         // Regression test: mark_settled must be wrapped in a transaction so that
         // if it fails midway, none of the payments are marked as settled.
@@ -553,7 +554,6 @@ mod tests {
 
         let batch = queue.get_batch(&batch_id).unwrap();
         assert_eq!(batch.len(), 2, "Both payments should be in the batch");
->>>>>>> fix/settlement-transaction
     }
 
     #[test]

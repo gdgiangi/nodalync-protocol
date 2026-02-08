@@ -2,6 +2,7 @@
 //!
 //! Uses the RMCP SDK to expose Nodalync knowledge querying to AI assistants.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -110,6 +111,9 @@ impl Default for McpServerConfig {
     }
 }
 
+/// Maximum number of cached query results per session.
+const MAX_CACHE_ENTRIES: usize = 100;
+
 /// Nodalync MCP Server.
 ///
 /// Implements the MCP server handler with `query_knowledge`, `list_sources`,
@@ -128,6 +132,8 @@ pub struct NodalyncMcpServer {
     settlement: Option<Arc<dyn nodalync_settle::Settlement>>,
     /// Hedera configuration (if enabled).
     hedera_config: Option<HederaConfig>,
+    /// Session-scoped cache for query results (content is immutable by hash).
+    query_cache: Arc<Mutex<HashMap<nodalync_crypto::Hash, String>>>,
 }
 
 #[tool_router]
@@ -374,6 +380,7 @@ impl NodalyncMcpServer {
             network,
             settlement,
             hedera_config: config.hedera.clone(),
+            query_cache: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -499,6 +506,15 @@ impl NodalyncMcpServer {
                 return Ok(tool_error(&NodalyncMcpError::InvalidHash(e)));
             }
         };
+
+        // Check session cache (content is immutable by hash, so cache is always valid)
+        {
+            let cache = self.query_cache.lock().await;
+            if let Some(cached_json) = cache.get(&hash) {
+                debug!(hash = %input.query, "Returning cached query result");
+                return Ok(CallToolResult::success(vec![Content::text(cached_json.clone())]));
+            }
+        }
 
         // Track all payment operations for the response
         let mut payment_details = PaymentDetails {
@@ -776,6 +792,18 @@ impl NodalyncMcpServer {
 
         let json = serde_json::to_string_pretty(&output)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        // Store in session cache (evict oldest if full)
+        {
+            let mut cache = self.query_cache.lock().await;
+            if cache.len() >= MAX_CACHE_ENTRIES {
+                // Remove an arbitrary entry to make room
+                if let Some(key) = cache.keys().next().cloned() {
+                    cache.remove(&key);
+                }
+            }
+            cache.insert(hash, json.clone());
+        }
 
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
@@ -3003,5 +3031,70 @@ mod tests {
         assert!(config.hedera.is_none());
         // Default should include bootstrap nodes
         assert!(!config.bootstrap_nodes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_query_cache_returns_cached_result() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = test_config(&temp_dir);
+        let server = NodalyncMcpServer::new(config).await.unwrap();
+
+        // Publish free content so we can query it
+        let input: PublishContentInput = serde_json::from_str(
+            r#"{"title": "Cache Test", "content": "Cached content for testing", "price_hbar": 0.0}"#,
+        )
+        .unwrap();
+        let pub_result = server.publish_content(Parameters(input)).await.unwrap();
+        assert!(!pub_result.is_error.unwrap_or(false));
+
+        // Extract the hash from the publish output
+        let pub_text = match &pub_result.content[0].raw {
+            RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text content"),
+        };
+        let pub_json: serde_json::Value = serde_json::from_str(&pub_text).unwrap();
+        let hash_str = pub_json["hash"].as_str().unwrap().to_string();
+
+        // Query the content - should cache the result
+        let query_input: QueryKnowledgeInput =
+            serde_json::from_str(&format!(r#"{{"query": "{}"}}"#, hash_str)).unwrap();
+        let result1 = server
+            .query_knowledge(Parameters(query_input))
+            .await
+            .unwrap();
+        assert!(!result1.is_error.unwrap_or(false));
+
+        // Verify cache has an entry
+        let cache = server.query_cache.lock().await;
+        assert_eq!(cache.len(), 1, "Cache should have one entry after first query");
+        drop(cache);
+
+        // Query again - should return cached result
+        let query_input2: QueryKnowledgeInput =
+            serde_json::from_str(&format!(r#"{{"query": "{}"}}"#, hash_str)).unwrap();
+        let result2 = server
+            .query_knowledge(Parameters(query_input2))
+            .await
+            .unwrap();
+        assert!(!result2.is_error.unwrap_or(false));
+
+        // Cache should still have exactly one entry (not two)
+        let cache = server.query_cache.lock().await;
+        assert_eq!(
+            cache.len(),
+            1,
+            "Cache should still have one entry after second query (cache hit)"
+        );
+
+        // Both results should have the same content
+        let text1 = match &result1.content[0].raw {
+            RawContent::Text(t) => &t.text,
+            _ => panic!("Expected text"),
+        };
+        let text2 = match &result2.content[0].raw {
+            RawContent::Text(t) => &t.text,
+            _ => panic!("Expected text"),
+        };
+        assert_eq!(text1, text2, "Cached result should match original");
     }
 }
