@@ -1,5 +1,7 @@
 # Build stage
-FROM rust:1.85-bookworm AS builder
+FROM rust:1.88-bookworm AS builder
+
+ARG VERSION=dev
 
 WORKDIR /app
 
@@ -78,6 +80,8 @@ USER nodalync
 RUN mkdir -p /home/nodalync/.nodalync
 
 # Set environment
+ARG VERSION=dev
+ENV NODALYNC_VERSION=${VERSION}
 ENV NODALYNC_DATA_DIR=/home/nodalync/.nodalync
 ENV RUST_LOG=nodalync=info
 

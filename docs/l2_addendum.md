@@ -2,7 +2,7 @@
 
 **Version:** 0.2.0-draft  
 **Date:** January 2026  
-**Status:** Draft Addendum to v0.1.0
+**Status:** Draft Addendum to v0.7.1
 
 ---
 

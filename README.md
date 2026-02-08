@@ -150,7 +150,7 @@ Nodalync provides the provenance and economic layer. We are building toward a co
 <details>
 <summary><strong>Building from source</strong></summary>
 
-**Prerequisites:** Rust 1.85+, SQLite dev headers, (optional) `protoc` for Hedera SDK
+**Prerequisites:** Rust 1.88+, SQLite dev headers, (optional) `protoc` for Hedera SDK
 
 ```bash
 git clone https://github.com/gdgiangi/nodalync-protocol.git

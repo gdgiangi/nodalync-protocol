@@ -289,16 +289,20 @@ deploy_container() {
         --name "$CONTAINER_NAME" \
         --yes 2>/dev/null || true
 
-    # Build environment variables
-    local env_vars="RUST_LOG=nodalync=info NODALYNC_PASSWORD=$NODALYNC_PASSWORD"
+    # Build environment variables as an array to prevent word-splitting issues
+    # with values that may contain special characters (e.g., passwords).
+    local env_vars=(
+        "RUST_LOG=nodalync=info"
+        "NODALYNC_PASSWORD=$NODALYNC_PASSWORD"
+    )
 
     # Enable Hedera testnet settlement if credentials are provided
     if [[ -n "$HEDERA_ACCOUNT_ID" && -n "$HEDERA_PRIVATE_KEY" ]]; then
         log_info "Hedera credentials detected - enabling testnet settlement"
-        env_vars="$env_vars HEDERA_NETWORK=hedera-testnet"
-        env_vars="$env_vars HEDERA_ACCOUNT_ID=$HEDERA_ACCOUNT_ID"
-        env_vars="$env_vars HEDERA_PRIVATE_KEY=$HEDERA_PRIVATE_KEY"
-        env_vars="$env_vars HEDERA_CONTRACT_ID=${HEDERA_CONTRACT_ID:-0.0.7729011}"
+        env_vars+=("HEDERA_NETWORK=hedera-testnet")
+        env_vars+=("HEDERA_ACCOUNT_ID=$HEDERA_ACCOUNT_ID")
+        env_vars+=("HEDERA_PRIVATE_KEY=$HEDERA_PRIVATE_KEY")
+        env_vars+=("HEDERA_CONTRACT_ID=${HEDERA_CONTRACT_ID:-0.0.7729011}")
     else
         log_warn "No Hedera credentials - using mock settlement"
     fi
@@ -321,7 +325,7 @@ deploy_container() {
         --azure-file-volume-account-key "$STORAGE_KEY" \
         --azure-file-volume-share-name "$SHARE_NAME" \
         --azure-file-volume-mount-path /home/nodalync/.nodalync \
-        --environment-variables $env_vars \
+        --environment-variables "${env_vars[@]}" \
         --command-line "nodalync start --health" \
         --output none
 

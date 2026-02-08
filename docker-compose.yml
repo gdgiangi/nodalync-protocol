@@ -49,7 +49,7 @@ services:
       - HEDERA_CONTRACT_ID=${HEDERA_CONTRACT_ID:-0.0.7729011}
     command: ["start", "--health"]
     healthcheck:
-      test: ["CMD", "nodalync", "status"]
+      test: ["CMD-SHELL", "nodalync status --format json | grep -q '\"running\": true'"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -78,7 +78,7 @@ services:
       - HEDERA_CONTRACT_ID=${HEDERA_CONTRACT_ID:-0.0.7729011}
     command: ["start", "--health"]
     healthcheck:
-      test: ["CMD", "nodalync", "status"]
+      test: ["CMD-SHELL", "nodalync status --format json | grep -q '\"running\": true'"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -110,7 +110,7 @@ services:
       - HEDERA_CONTRACT_ID=${HEDERA_CONTRACT_ID:-0.0.7729011}
     command: ["start", "--health"]
     healthcheck:
-      test: ["CMD", "nodalync", "status"]
+      test: ["CMD-SHELL", "nodalync status --format json | grep -q '\"running\": true'"]
       interval: 10s
       timeout: 5s
       retries: 5

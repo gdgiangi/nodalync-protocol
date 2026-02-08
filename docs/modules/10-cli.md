@@ -39,50 +39,50 @@ nodalync whoami
 nodalync publish <file> [--price <amount>] [--visibility <private|unlisted|shared>]
 > Hashing content...
 > Extracting L1 mentions... (23 found)
-> Published: QmXyz...
+> Published: a1b2c3d4e5f6...
 > Price: 0.10 HBAR
 > Visibility: shared
 
 # List local content
 nodalync list [--visibility <filter>]
 > SHARED (3)
->   QmXyz... "Research Paper" v3, 0.10 HBAR, 847 queries
->   QmAbc... "Analysis" v1, 0.05 HBAR, 234 queries
+>   a1b2c3d4e5f6... "Research Paper" v3, 0.10 HBAR, 847 queries
+>   b7c8d9e0f1a2... "Analysis" v1, 0.05 HBAR, 234 queries
 >
 > PRIVATE (2)
->   QmJkl... "Draft Ideas" v4
->   QmMno... "Personal Notes" v1
+>   d9e0f1a2b3c4... "Draft Ideas" v4
+>   e5f6a7b8c9d0... "Personal Notes" v1
 
 # Update content (new version)
 nodalync update <hash> <new-file>
-> Previous: QmXyz... (v1)
-> New: QmAbc... (v2)
-> Version root: QmXyz...
+> Previous: a1b2c3d4e5f6... (v1)
+> New: b7c8d9e0f1a2... (v2)
+> Version root: a1b2c3d4e5f6...
 
 # Show versions
 nodalync versions <hash>
-> Version root: QmXyz...
-> v1: QmXyz... (2025-01-15) - shared
-> v2: QmAbc... (2025-01-20) - shared [latest]
+> Version root: a1b2c3d4e5f6...
+> v1: a1b2c3d4e5f6... (2025-01-15) - shared
+> v2: b7c8d9e0f1a2... (2025-01-20) - shared [latest]
 
 # Change visibility
 nodalync visibility <hash> --level <private|unlisted|shared>
-> Visibility updated: QmXyz... → shared
+> Visibility updated: a1b2c3d4e5f6... → shared
 
 # Delete (local only)
 nodalync delete <hash>
-> Deleted: QmXyz... (local copy only, provenance preserved)
+> Deleted: a1b2c3d4e5f6... (local copy only, provenance preserved)
 ```
 
 ### Discovery & Querying
 
 ```bash
 # Search network
-nodalync search "climate change mitigation" [--max-price <amount>] [--limit <n>]
+nodalync search "climate change mitigation" [--limit <n>]
 > Found 47 results
-> [1] QmAbc... "IPCC Report Summary" by ndl1def... (0.05/query, 847 queries)
+> [1] b7c8d9e0f1a2... "IPCC Report Summary" by ndl1def... (0.05/query, 847 queries)
 >     Preview: Global temperatures have risen 1.1°C since pre-industrial...
-> [2] QmDef... "Carbon Capture Analysis" by ndl1ghi... (0.12/query, 234 queries)
+> [2] c3d4e5f6a7b8... "Carbon Capture Analysis" by ndl1ghi... (0.12/query, 234 queries)
 >     Preview: Current carbon capture technology can sequester...
 
 # Preview content (free)
@@ -99,9 +99,9 @@ nodalync preview <hash>
 
 # Query content (paid)
 nodalync query <hash>
-> Querying QmAbc...
+> Querying b7c8d9e0f1a2...
 > Payment: 0.05 HBAR
-> Content saved to ./cache/QmAbc...
+> Content saved to ./cache/b7c8d9e0f1a2...
 ```
 
 ### Synthesis
@@ -111,14 +111,14 @@ nodalync query <hash>
 nodalync synthesize --sources <hash1>,<hash2>,... --output <file>
 > Verifying sources queried... ✓
 > Computing provenance (12 roots)...
-> L3 hash: QmNew...
+> L3 hash: f1a2b3c4d5e6...
 > 
 > Publish now? [y/n/set price]: 0.15
-> Published: QmNew... (0.15 HBAR, shared)
+> Published: f1a2b3c4d5e6... (0.15 HBAR, shared)
 
 # Reference external L3 as L0
 nodalync reference <l3-hash>
-> Referencing QmXyz... as L0 for future derivations
+> Referencing a1b2c3d4e5f6... as L0 for future derivations
 ```
 
 ### Economics
@@ -137,8 +137,8 @@ nodalync balance
 # Earnings by content
 nodalync earnings [--content <hash>]
 > Top earning content:
->   QmXyz... "Research Paper": 45.30 HBAR (234 queries)
->   QmAbc... "Analysis": 23.10 HBAR (462 queries, as root)
+>   a1b2c3d4e5f6... "Research Paper": 45.30 HBAR (234 queries)
+>   b7c8d9e0f1a2... "Analysis": 23.10 HBAR (462 queries, as root)
 
 # Deposit tokens
 nodalync deposit <amount>
@@ -155,7 +155,7 @@ nodalync withdraw <amount>
 # Force settlement
 nodalync settle
 > Settling 12 pending payments...
-> Batch ID: QmBatch...
+> Batch ID: 0a1b2c3d4e5f...
 > Transaction: 0x...
 > Settled: 4.23 HBAR to 5 recipients
 ```
@@ -165,7 +165,7 @@ nodalync settle
 ```bash
 # Open payment channel with peer
 nodalync open-channel <peer-id> --deposit 100
-> Channel opened: QmChan...
+> Channel opened: 4d5e6f7a8b9c...
 > Peer: ndl1abc123...
 > State: Open
 > My Balance: 100.00 HBAR
@@ -174,13 +174,13 @@ nodalync open-channel <peer-id> --deposit 100
 # List all payment channels
 nodalync list-channels
 > Payment Channels: 3 channels (2 open)
->   QmChan1... ndl1abc... [Open] my: 0.85 HBAR / their: 1.15 HBAR
->   QmChan2... ndl1def... [Open] my: 2.30 HBAR / their: 0.70 HBAR (5 pending)
->   QmChan3... ndl1ghi... [Closed] my: 0.00 HBAR / their: 0.00 HBAR
+>   1a2b3c4d5e6f... ndl1abc... [Open] my: 0.85 HBAR / their: 1.15 HBAR
+>   2b3c4d5e6f7a... ndl1def... [Open] my: 2.30 HBAR / their: 0.70 HBAR (5 pending)
+>   3c4d5e6f7a8b... ndl1ghi... [Closed] my: 0.00 HBAR / their: 0.00 HBAR
 
 # Close payment channel
 nodalync close-channel <peer-id>
-> Channel closed: QmChan...
+> Channel closed: 4d5e6f7a8b9c...
 > Peer: ndl1abc123...
 > Final Balance: my: 0.85 HBAR / their: 1.15 HBAR
 ```
@@ -292,8 +292,6 @@ pub enum Commands {
     /// Search network
     Search {
         query: String,
-        #[arg(long)]
-        max_price: Option<f64>,
         #[arg(short, long, default_value = "10")]
         limit: u32,
     },

@@ -21,18 +21,18 @@ services:
       - ./config/node1-config.toml:/home/nodalync/.nodalync/config.toml:ro
     environment:
       - NODALYNC_PASSWORD=${NODALYNC_PASSWORD:-testpassword}
-      - RUST_LOG=nodalync=info
+      - RUST_LOG=${RUST_LOG:-nodalync=info}
       # Hedera credentials (optional, for settlement)
       - HEDERA_ACCOUNT_ID=${HEDERA_ACCOUNT_ID:-}
       - HEDERA_PRIVATE_KEY=${HEDERA_PRIVATE_KEY:-}
       - HEDERA_CONTRACT_ID=${HEDERA_CONTRACT_ID:-0.0.7729011}
     command: ["start", "--health"]
     healthcheck:
-      test: ["CMD", "nodalync", "status"]
+      test: ["CMD-SHELL", "nodalync status --format json | grep -q '\"running\": true'"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 15s
     restart: unless-stopped
 
   node2:
@@ -50,17 +50,17 @@ services:
       - ./config/node2-config.toml:/home/nodalync/.nodalync/config.toml:ro
     environment:
       - NODALYNC_PASSWORD=${NODALYNC_PASSWORD:-testpassword}
-      - RUST_LOG=nodalync=info
+      - RUST_LOG=${RUST_LOG:-nodalync=info}
       - HEDERA_ACCOUNT_ID=${HEDERA_ACCOUNT_ID:-}
       - HEDERA_PRIVATE_KEY=${HEDERA_PRIVATE_KEY:-}
       - HEDERA_CONTRACT_ID=${HEDERA_CONTRACT_ID:-0.0.7729011}
     command: ["start", "--health"]
     healthcheck:
-      test: ["CMD", "nodalync", "status"]
+      test: ["CMD-SHELL", "nodalync status --format json | grep -q '\"running\": true'"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 15s
     depends_on:
       node1:
         condition: service_healthy
@@ -81,17 +81,17 @@ services:
       - ./config/node3-config.toml:/home/nodalync/.nodalync/config.toml:ro
     environment:
       - NODALYNC_PASSWORD=${NODALYNC_PASSWORD:-testpassword}
-      - RUST_LOG=nodalync=info
+      - RUST_LOG=${RUST_LOG:-nodalync=info}
       - HEDERA_ACCOUNT_ID=${HEDERA_ACCOUNT_ID:-}
       - HEDERA_PRIVATE_KEY=${HEDERA_PRIVATE_KEY:-}
       - HEDERA_CONTRACT_ID=${HEDERA_CONTRACT_ID:-0.0.7729011}
     command: ["start", "--health"]
     healthcheck:
-      test: ["CMD", "nodalync", "status"]
+      test: ["CMD-SHELL", "nodalync status --format json | grep -q '\"running\": true'"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 15s
     depends_on:
       node1:
         condition: service_healthy

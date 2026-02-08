@@ -44,7 +44,7 @@ docker run -d --name nodalync-node \
 
 ### Option C: Build from Source
 
-Requires Rust 1.85+ (and `protoc` for Hedera support):
+Requires Rust 1.88+ (and `protoc` for Hedera support):
 
 ```bash
 # Clone the repo
@@ -379,6 +379,115 @@ The root `docker-compose.yml` is useful if you want to customize the cluster (ad
 
 ---
 
+## Manual Two-Node Testing (No Docker)
+
+Test the full publish-query-payment flow between two local nodes without Docker.
+This requires two terminal windows and uses separate data directories for each node.
+
+### 1. Set Up Two Identities
+
+```bash
+# Terminal A — Node A (publisher)
+export NODALYNC_PASSWORD=testpassword
+export NODALYNC_DATA_DIR=/tmp/nodalync-node-a
+nodalync init
+
+# Terminal B — Node B (querier)
+export NODALYNC_PASSWORD=testpassword
+export NODALYNC_DATA_DIR=/tmp/nodalync-node-b
+nodalync init
+```
+
+### 2. Get Node A's Peer ID and Start It
+
+```bash
+# Terminal A
+nodalync whoami
+# Note the libp2p PeerId (12D3KooW...)
+
+nodalync start
+# Note the listening address, e.g. /ip4/127.0.0.1/tcp/9000
+```
+
+### 3. Configure Node B to Bootstrap from Node A
+
+Edit Node B's config to point at Node A as a bootstrap peer:
+
+```bash
+# Terminal B — edit the config file
+# The config is at $NODALYNC_DATA_DIR/config.toml
+```
+
+In `config.toml`, set the bootstrap node to Node A's address:
+
+```toml
+[network]
+bootstrap_nodes = [
+    "/ip4/127.0.0.1/tcp/9000/p2p/<NODE_A_PEER_ID>"
+]
+listen_addresses = ["/ip4/0.0.0.0/tcp/9001"]
+```
+
+Replace `<NODE_A_PEER_ID>` with the libp2p PeerId from step 2. Note the different listen port (9001) to avoid conflicts.
+
+### 4. Publish Content on Node A
+
+```bash
+# Terminal A (keep the node running in another terminal, or use --daemon)
+# If running in foreground, open a third terminal with the same env vars:
+export NODALYNC_PASSWORD=testpassword
+export NODALYNC_DATA_DIR=/tmp/nodalync-node-a
+
+echo "This is test knowledge content for the Nodalync network." > /tmp/test-content.txt
+nodalync publish /tmp/test-content.txt --price 0.01 --title "Test Content"
+# Note the content hash from the output
+```
+
+### 5. Start Node B and Search
+
+```bash
+# Terminal B
+nodalync start
+# Wait a few seconds for peer discovery
+
+# In another terminal with Node B's env:
+export NODALYNC_PASSWORD=testpassword
+export NODALYNC_DATA_DIR=/tmp/nodalync-node-b
+
+nodalync search "Test Content" --all
+```
+
+### 6. Open a Payment Channel (Requires Hedera)
+
+If you have Hedera testnet credentials configured:
+
+```bash
+# Terminal B — open a channel to Node A
+nodalync open-channel <NODE_A_PEER_ID> --deposit 100
+```
+
+### 7. Query Content and Verify Payment
+
+```bash
+# Terminal B — query the content (paid)
+nodalync query <CONTENT_HASH>
+
+# Verify payment on both sides
+# Terminal A:
+nodalync earnings
+# Terminal B:
+nodalync balance
+```
+
+### 8. Clean Up
+
+```bash
+# Stop both nodes (Ctrl+C if foreground, or nodalync stop if daemon)
+rm -rf /tmp/nodalync-node-a /tmp/nodalync-node-b /tmp/test-content.txt
+```
+
+---
+
 ## Environment Variables
 
 The easiest way to configure Hedera is to use the `.env` file in the repo root:
@@ -410,6 +519,19 @@ set -a && source .env && set +a
 
 If you have a raw hex key, you need to DER-encode it. Check your account type at HashScan:
 `https://hashscan.io/testnet/account/<account_id>`
+
+To create a Hedera testnet account, visit the [Hedera Portal](https://portal.hedera.com/).
+
+### CLI vs MCP Key Formats
+
+The CLI and MCP server handle Hedera private keys differently:
+
+| Context | Variable / Flag | Value Type |
+|---------|----------------|------------|
+| CLI settlement | `HEDERA_PRIVATE_KEY` env var | Inline hex string (DER-encoded ECDSA) |
+| MCP server | `--hedera-private-key` flag or `NODALYNC_HEDERA_KEY_PATH` env var | **File path** to a key file on disk |
+
+If using the MCP server, write your key to a file first and pass the path, rather than the inline hex value.
 
 ---
 
