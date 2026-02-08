@@ -789,6 +789,10 @@ async fn run_swarm(
         ResponseChannel<NodalyncResponse>,
     > = HashMap::new();
 
+    // Per-peer GossipSub rate limiter: 50 messages per 10 seconds
+    let mut gossip_rate_limiter =
+        GossipRateLimiter::new(50, std::time::Duration::from_secs(10));
+
     loop {
         tokio::select! {
             // Process swarm events
@@ -812,6 +816,12 @@ async fn run_swarm(
                     }
 
                     SwarmEvent::Behaviour(NodalyncBehaviourEvent::Gossipsub(gs_event)) => {
+                        if let libp2p::gossipsub::Event::Message { propagation_source, .. } = &gs_event {
+                            if !gossip_rate_limiter.check(propagation_source) {
+                                warn!("Rate limiting GossipSub messages from {}", propagation_source);
+                                continue;
+                            }
+                        }
                         handle_gossipsub_event(gs_event, &event_tx).await;
                     }
 
@@ -1068,6 +1078,40 @@ async fn handle_request_response_event(
     }
 }
 
+/// Per-peer rate limiter for GossipSub messages.
+struct GossipRateLimiter {
+    /// Map of peer -> (message count, window start)
+    peers: HashMap<PeerId, (u32, std::time::Instant)>,
+    /// Maximum messages per peer per window
+    max_per_window: u32,
+    /// Window duration
+    window: std::time::Duration,
+}
+
+impl GossipRateLimiter {
+    fn new(max_per_window: u32, window: std::time::Duration) -> Self {
+        Self {
+            peers: HashMap::new(),
+            max_per_window,
+            window,
+        }
+    }
+
+    fn check(&mut self, peer: &PeerId) -> bool {
+        let now = std::time::Instant::now();
+        let entry = self.peers.entry(*peer).or_insert((0, now));
+        if now.duration_since(entry.1) > self.window {
+            *entry = (1, now);
+            true
+        } else if entry.0 < self.max_per_window {
+            entry.0 += 1;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// Handle GossipSub events.
 async fn handle_gossipsub_event(
     event: libp2p::gossipsub::Event,
@@ -1130,5 +1174,44 @@ mod tests {
         // Should have a valid peer ID
         let peer_id = node.local_peer_id();
         assert!(!peer_id.to_string().is_empty());
+    }
+
+    #[test]
+    fn test_gossip_rate_limiter_allows_within_limit() {
+        let mut limiter = GossipRateLimiter::new(3, std::time::Duration::from_secs(10));
+        let peer = PeerId::random();
+
+        assert!(limiter.check(&peer));
+        assert!(limiter.check(&peer));
+        assert!(limiter.check(&peer));
+        // 4th message should be rejected
+        assert!(!limiter.check(&peer));
+    }
+
+    #[test]
+    fn test_gossip_rate_limiter_independent_peers() {
+        let mut limiter = GossipRateLimiter::new(2, std::time::Duration::from_secs(10));
+        let peer1 = PeerId::random();
+        let peer2 = PeerId::random();
+
+        assert!(limiter.check(&peer1));
+        assert!(limiter.check(&peer1));
+        assert!(!limiter.check(&peer1)); // peer1 exhausted
+
+        // peer2 should still be allowed
+        assert!(limiter.check(&peer2));
+        assert!(limiter.check(&peer2));
+        assert!(!limiter.check(&peer2)); // peer2 exhausted
+    }
+
+    #[test]
+    fn test_gossip_rate_limiter_resets_after_window() {
+        let mut limiter = GossipRateLimiter::new(2, std::time::Duration::from_millis(0));
+        let peer = PeerId::random();
+
+        assert!(limiter.check(&peer));
+        assert!(limiter.check(&peer));
+        // Window is 0ms so it should immediately reset
+        assert!(limiter.check(&peer));
     }
 }
