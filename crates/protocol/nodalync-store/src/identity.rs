@@ -142,10 +142,11 @@ impl IdentityStore {
             public_key: public_key.0,
         };
 
-        // Write to file
+        // Write to file with restricted permissions (owner-only read/write)
         let json = serde_json::to_string_pretty(&stored)?;
         let mut file = File::create(self.keypair_path())?;
         file.write_all(json.as_bytes())?;
+        set_owner_only_permissions(&self.keypair_path())?;
 
         // Store peer_id in plaintext for quick lookup
         let peer_id = peer_id_from_public_key(public_key);
@@ -260,6 +261,19 @@ impl IdentityStore {
         }
         Ok(())
     }
+}
+
+/// Set file permissions to owner-only read/write (0o600) on Unix.
+/// On non-Unix platforms, this is a no-op.
+fn set_owner_only_permissions(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        std::fs::set_permissions(path, perms)?;
+    }
+    let _ = path; // Suppress unused warning on non-Unix
+    Ok(())
 }
 
 /// Base64 encode bytes.
@@ -477,5 +491,24 @@ mod tests {
         // Verify it matches what we'd get by loading
         let (_, loaded_pk) = store.load(password).unwrap();
         assert_eq!(public_key.0, loaded_pk.0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_keypair_file_has_restricted_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let store = IdentityStore::new(temp_dir.path()).unwrap();
+
+        store.generate("test_password").unwrap();
+
+        let metadata = std::fs::metadata(store.keypair_path()).unwrap();
+        let mode = metadata.permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "keypair.key should have 0600 permissions, got {:o}",
+            mode
+        );
     }
 }
