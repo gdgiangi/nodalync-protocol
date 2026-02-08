@@ -46,6 +46,7 @@ pub use identity::{
 pub use signature::{sign, verify, SignedMessage};
 
 use ed25519_dalek::SigningKey;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// A 32-byte SHA-256 hash.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -75,7 +76,8 @@ impl AsRef<[u8]> for Hash {
 /// An Ed25519 private key (32 bytes).
 ///
 /// This should be kept secret and never exposed.
-#[derive(Clone)]
+/// Implements Zeroize + ZeroizeOnDrop to clear key material from memory.
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct PrivateKey([u8; 32]);
 
 impl PrivateKey {
@@ -254,5 +256,23 @@ mod tests {
         let debug = format!("{:?}", private_key);
         assert!(debug.contains("REDACTED"));
         assert!(!debug.contains(&format!("{:02x}", private_key.0[0])));
+    }
+
+    #[test]
+    fn test_private_key_implements_zeroize() {
+        // Regression test: PrivateKey must implement Zeroize so key material
+        // is cleared from memory when dropped.
+        use zeroize::Zeroize;
+
+        let (mut private_key, _) = generate_identity();
+        // Verify key has non-zero bytes
+        assert!(private_key.0.iter().any(|&b| b != 0));
+
+        // Zeroize should clear the key
+        private_key.zeroize();
+        assert!(
+            private_key.0.iter().all(|&b| b == 0),
+            "PrivateKey bytes should be zeroed after zeroize()"
+        );
     }
 }
