@@ -215,6 +215,42 @@ pub struct SettlementConfig {
     pub key_path: Option<PathBuf>,
     /// Settlement contract ID for Hedera.
     pub contract_id: Option<String>,
+    /// Enable auto-deposit on startup and when accepting channels.
+    /// When enabled, the node will automatically deposit HBAR to the settlement
+    /// contract to ensure it can accept payment channels from other peers.
+    /// Default: false (opt-in for security).
+    #[serde(default = "default_auto_deposit")]
+    pub auto_deposit: bool,
+    /// Minimum balance to maintain in the settlement contract (in HBAR).
+    /// If the balance falls below this, auto-deposit will trigger.
+    #[serde(default = "default_min_contract_balance")]
+    pub min_contract_balance_hbar: f64,
+    /// Amount to deposit when auto-deposit triggers (in HBAR).
+    #[serde(default = "default_auto_deposit_amount")]
+    pub auto_deposit_amount_hbar: f64,
+    /// Maximum deposit to accept/match when a peer opens a channel (in HBAR).
+    /// Caps how much you'll commit when accepting a channel request.
+    /// This is a security measure to prevent unbounded commitment.
+    #[serde(default = "default_max_accept_deposit")]
+    pub max_accept_deposit_hbar: f64,
+}
+
+fn default_auto_deposit() -> bool {
+    // SECURITY: Default to false (opt-in) to prevent automatic deposits
+    // without explicit user consent. Users must explicitly enable this.
+    false
+}
+
+fn default_min_contract_balance() -> f64 {
+    100.0 // 100 HBAR minimum
+}
+
+fn default_auto_deposit_amount() -> f64 {
+    200.0 // Deposit 200 HBAR when triggered
+}
+
+fn default_max_accept_deposit() -> f64 {
+    500.0 // 500 HBAR max accept deposit per channel
 }
 
 impl Default for SettlementConfig {
@@ -224,6 +260,10 @@ impl Default for SettlementConfig {
             account_id: None,
             key_path: None,
             contract_id: None,
+            auto_deposit: default_auto_deposit(),
+            min_contract_balance_hbar: default_min_contract_balance(),
+            auto_deposit_amount_hbar: default_auto_deposit_amount(),
+            max_accept_deposit_hbar: default_max_accept_deposit(),
         }
     }
 }
@@ -508,7 +548,7 @@ mod tests {
 
     #[test]
     fn test_ndl_to_units_alias() {
-        let amount = 3.14;
+        let amount = 3.5;
         assert_eq!(ndl_to_units(amount), hbar_to_tinybars(amount));
     }
 

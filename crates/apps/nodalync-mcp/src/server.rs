@@ -2566,8 +2566,23 @@ pub async fn run_server(
 
     let server = NodalyncMcpServer::new(config).await?;
     let server_clone = server.clone();
-    let service = server.serve(stdio()).await?;
-    service.waiting().await?;
+
+    // Serve on stdio. If the transport fails (e.g., stdin already closed),
+    // treat it as a clean exit rather than an error.
+    let service = match server.serve(stdio()).await {
+        Ok(s) => s,
+        Err(e) => {
+            info!("MCP transport closed during setup: {}", e);
+            server_clone.shutdown().await;
+            return Ok(());
+        }
+    };
+
+    // Wait for the service to complete. Connection close (e.g., client
+    // disconnect, stdin EOF) is expected and not an error condition.
+    if let Err(e) = service.waiting().await {
+        info!("MCP transport closed: {}", e);
+    }
 
     // Server is shutting down - close all payment channels
     info!("MCP server stopping, cleaning up...");

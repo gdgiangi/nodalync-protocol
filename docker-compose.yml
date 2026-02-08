@@ -1,3 +1,21 @@
+# Nodalync 3-Node Local Test Network
+#
+# Quick start:
+#   1. Build the image:    docker compose build
+#   2. Initialize nodes:   cd infra/local && make init
+#   3. Start the cluster:  cd infra/local && make up
+#   4. Run E2E tests:      cd infra/local && make test
+#
+# For the full cluster workflow with identity generation, peer discovery
+# configs, and E2E tests, use infra/local/Makefile which wraps this compose.
+#
+# Architecture:
+#   node-bootstrap (node1) -- seed node, other nodes connect to it first
+#   node-alice     (node2) -- publishing node
+#   node-bob       (node3) -- querying node
+#
+# All nodes form a full-mesh via libp2p after bootstrap.
+
 networks:
   nodalync-net:
     driver: bridge
@@ -6,7 +24,11 @@ networks:
         - subnet: 172.28.0.0/16
 
 services:
-  node1:
+  # ---- Bootstrap / Seed Node ----
+  node-bootstrap:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: nodalync:latest
     container_name: nodalync-node1
     hostname: node1
@@ -14,15 +36,14 @@ services:
       nodalync-net:
         ipv4_address: 172.28.0.10
     ports:
-      - "9001:9000"
-      - "8081:8080"
+      - "9001:9000"   # libp2p
+      - "8081:8080"   # health endpoint
     volumes:
-      - ./data/node1:/home/nodalync/.nodalync
-      - ./config/node1-config.toml:/home/nodalync/.nodalync/config.toml:ro
+      - ./infra/local/data/node1:/home/nodalync/.nodalync
+      - ./infra/local/config/node1-config.toml:/home/nodalync/.nodalync/config.toml:ro
     environment:
       - NODALYNC_PASSWORD=${NODALYNC_PASSWORD:-testpassword}
-      - RUST_LOG=nodalync=info
-      # Hedera credentials (optional, for settlement)
+      - RUST_LOG=${RUST_LOG:-nodalync=info}
       - HEDERA_ACCOUNT_ID=${HEDERA_ACCOUNT_ID:-}
       - HEDERA_PRIVATE_KEY=${HEDERA_PRIVATE_KEY:-}
       - HEDERA_CONTRACT_ID=${HEDERA_CONTRACT_ID:-0.0.7729011}
@@ -32,10 +53,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 15s
     restart: unless-stopped
 
-  node2:
+  # ---- Alice (Publisher) ----
+  node-alice:
     image: nodalync:latest
     container_name: nodalync-node2
     hostname: node2
@@ -46,11 +68,11 @@ services:
       - "9002:9000"
       - "8082:8080"
     volumes:
-      - ./data/node2:/home/nodalync/.nodalync
-      - ./config/node2-config.toml:/home/nodalync/.nodalync/config.toml:ro
+      - ./infra/local/data/node2:/home/nodalync/.nodalync
+      - ./infra/local/config/node2-config.toml:/home/nodalync/.nodalync/config.toml:ro
     environment:
       - NODALYNC_PASSWORD=${NODALYNC_PASSWORD:-testpassword}
-      - RUST_LOG=nodalync=info
+      - RUST_LOG=${RUST_LOG:-nodalync=info}
       - HEDERA_ACCOUNT_ID=${HEDERA_ACCOUNT_ID:-}
       - HEDERA_PRIVATE_KEY=${HEDERA_PRIVATE_KEY:-}
       - HEDERA_CONTRACT_ID=${HEDERA_CONTRACT_ID:-0.0.7729011}
@@ -60,13 +82,14 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 15s
     depends_on:
-      node1:
+      node-bootstrap:
         condition: service_healthy
     restart: unless-stopped
 
-  node3:
+  # ---- Bob (Querier) ----
+  node-bob:
     image: nodalync:latest
     container_name: nodalync-node3
     hostname: node3
@@ -77,11 +100,11 @@ services:
       - "9003:9000"
       - "8083:8080"
     volumes:
-      - ./data/node3:/home/nodalync/.nodalync
-      - ./config/node3-config.toml:/home/nodalync/.nodalync/config.toml:ro
+      - ./infra/local/data/node3:/home/nodalync/.nodalync
+      - ./infra/local/config/node3-config.toml:/home/nodalync/.nodalync/config.toml:ro
     environment:
       - NODALYNC_PASSWORD=${NODALYNC_PASSWORD:-testpassword}
-      - RUST_LOG=nodalync=info
+      - RUST_LOG=${RUST_LOG:-nodalync=info}
       - HEDERA_ACCOUNT_ID=${HEDERA_ACCOUNT_ID:-}
       - HEDERA_PRIVATE_KEY=${HEDERA_PRIVATE_KEY:-}
       - HEDERA_CONTRACT_ID=${HEDERA_CONTRACT_ID:-0.0.7729011}
@@ -91,8 +114,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 15s
     depends_on:
-      node1:
+      node-bootstrap:
         condition: service_healthy
     restart: unless-stopped

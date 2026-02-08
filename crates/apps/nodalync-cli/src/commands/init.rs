@@ -23,7 +23,7 @@ pub fn init(config: CliConfig, format: OutputFormat, wizard: bool) -> CliResult<
                 )));
             }
         } else {
-            return Err(CliError::IdentityExists);
+            return Err(CliError::IdentityExists(identity_dir.display().to_string()));
         }
     }
 
@@ -105,7 +105,38 @@ mod tests {
 
         // Second init without wizard should fail
         let result2 = init(config, OutputFormat::Human, false);
-        assert!(matches!(result2, Err(CliError::IdentityExists)));
+        assert!(matches!(result2, Err(CliError::IdentityExists(_))));
+    }
+
+    /// Regression test for Issue #17: error message should contain the actual path.
+    #[test]
+    fn test_init_identity_exists_shows_actual_path() {
+        std::env::set_var("NODALYNC_PASSWORD", "test_password");
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = test_config(&temp_dir);
+
+        // First init succeeds
+        init(config.clone(), OutputFormat::Human, false).unwrap();
+
+        // Second init should fail with the actual identity directory path
+        let result = init(config, OutputFormat::Human, false);
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        let err_msg = err.to_string();
+
+        // Error message should contain the actual temp dir path, not ~/.nodalync
+        assert!(
+            err_msg.contains(temp_dir.path().to_str().unwrap()),
+            "Error should contain actual path, got: {}",
+            err_msg
+        );
+        assert!(
+            !err_msg.contains("~/.nodalync"),
+            "Error should not contain hardcoded ~/.nodalync path, got: {}",
+            err_msg
+        );
     }
 
     // Note: Testing wizard auto-reinit requires interactive mode,

@@ -12,6 +12,21 @@ pub struct ChannelConfig {
     pub min_deposit: Amount,
     /// Default deposit when auto-opening a channel.
     pub default_deposit: Amount,
+    /// Maximum deposit to accept/match when a peer opens a channel.
+    /// Caps how much we'll commit when accepting a channel request.
+    pub max_accept_deposit: Amount,
+    /// Whether to auto-deposit when handling channel open requests.
+    /// When true, the handler will deposit to the contract if balance is low.
+    /// Default: false (opt-in for security).
+    pub auto_deposit_on_channel_open: bool,
+    /// Fixed amount to deposit when auto-deposit triggers (in tinybars).
+    /// This is never derived from the peer's request.
+    pub auto_deposit_amount: Amount,
+    /// Balance threshold that triggers auto-deposit (in tinybars).
+    pub auto_deposit_min_balance: Amount,
+    /// Cooldown between auto-deposits in seconds.
+    /// Prevents rapid deposits from malicious channel open spam.
+    pub auto_deposit_cooldown_secs: u64,
 }
 
 impl Default for ChannelConfig {
@@ -21,17 +36,58 @@ impl Default for ChannelConfig {
             min_deposit: 100_0000_0000,
             // 1000 HBAR in tinybars
             default_deposit: 1000_0000_0000,
+            // 500 HBAR max accept deposit
+            max_accept_deposit: 500_0000_0000,
+            // Disabled by default for security
+            auto_deposit_on_channel_open: false,
+            // 200 HBAR auto-deposit amount
+            auto_deposit_amount: 200_0000_0000,
+            // 100 HBAR minimum balance threshold
+            auto_deposit_min_balance: 100_0000_0000,
+            // 5 minute cooldown
+            auto_deposit_cooldown_secs: 300,
         }
     }
 }
 
 impl ChannelConfig {
-    /// Create a new channel configuration.
+    /// Create a new channel configuration with basic settings.
     pub fn new(min_deposit: Amount, default_deposit: Amount) -> Self {
         Self {
             min_deposit,
             default_deposit,
+            ..Default::default()
         }
+    }
+
+    /// Set the maximum deposit to accept when a peer opens a channel.
+    pub fn with_max_accept_deposit(mut self, amount: Amount) -> Self {
+        self.max_accept_deposit = amount;
+        self
+    }
+
+    /// Enable or disable auto-deposit on channel open.
+    pub fn with_auto_deposit(mut self, enabled: bool) -> Self {
+        self.auto_deposit_on_channel_open = enabled;
+        self
+    }
+
+    /// Set the fixed auto-deposit amount.
+    pub fn with_auto_deposit_amount(mut self, amount: Amount) -> Self {
+        self.auto_deposit_amount = amount;
+        self
+    }
+
+    /// Set the minimum balance threshold for auto-deposit.
+    pub fn with_auto_deposit_min_balance(mut self, amount: Amount) -> Self {
+        self.auto_deposit_min_balance = amount;
+        self
+    }
+
+    /// Set the cooldown between auto-deposits in seconds.
+    pub fn with_auto_deposit_cooldown(mut self, secs: u64) -> Self {
+        self.auto_deposit_cooldown_secs = secs;
+        self
     }
 }
 
@@ -98,6 +154,39 @@ mod tests {
         let config = ChannelConfig::default();
         assert!(config.min_deposit > 0);
         assert!(config.default_deposit >= config.min_deposit);
+        // New security defaults
+        assert_eq!(config.max_accept_deposit, 500_0000_0000);
+        assert!(!config.auto_deposit_on_channel_open);
+        assert_eq!(config.auto_deposit_amount, 200_0000_0000);
+        assert_eq!(config.auto_deposit_min_balance, 100_0000_0000);
+        assert_eq!(config.auto_deposit_cooldown_secs, 300);
+    }
+
+    #[test]
+    fn test_channel_config_builder() {
+        let config = ChannelConfig::default()
+            .with_max_accept_deposit(1000_0000_0000)
+            .with_auto_deposit(true)
+            .with_auto_deposit_amount(500_0000_0000)
+            .with_auto_deposit_min_balance(200_0000_0000)
+            .with_auto_deposit_cooldown(600);
+
+        assert_eq!(config.max_accept_deposit, 1000_0000_0000);
+        assert!(config.auto_deposit_on_channel_open);
+        assert_eq!(config.auto_deposit_amount, 500_0000_0000);
+        assert_eq!(config.auto_deposit_min_balance, 200_0000_0000);
+        assert_eq!(config.auto_deposit_cooldown_secs, 600);
+    }
+
+    #[test]
+    fn test_channel_config_new_preserves_defaults() {
+        // Verify that ChannelConfig::new() preserves the new security defaults
+        let config = ChannelConfig::new(50, 500);
+        assert_eq!(config.min_deposit, 50);
+        assert_eq!(config.default_deposit, 500);
+        // Security fields should have default values
+        assert_eq!(config.max_accept_deposit, 500_0000_0000);
+        assert!(!config.auto_deposit_on_channel_open);
     }
 
     #[test]

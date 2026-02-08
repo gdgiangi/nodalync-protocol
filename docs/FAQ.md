@@ -443,12 +443,11 @@ From the whitepaper (Section 10.5):
 - `nodalync init` — setup
 - `nodalync publish` — publish content
 - `nodalync query` — query content
-- `nodalync mcp-server` — for Claude Desktop integration
-
-**Planned CLI polish:**
-- `nodalync search <query>`
-- `nodalync wallet`
-- `nodalync earnings`
+- `nodalync search <query>` — search local and network content
+- `nodalync earnings` — view earnings breakdown
+- `nodalync balance` — check protocol balance
+- `nodalync mcp-server` — for Claude Desktop / AI agent integration
+- 30+ commands total (run `nodalync --help` for the full list)
 
 **GUI/Web:** Not in the current roadmap. Focus is proving economics work first. A web interface would be an application built on top of the protocol.
 
@@ -524,5 +523,5 @@ The protocol is infrastructure—like IPFS doesn't have takedowns, but Pinata (a
 
 *Document Version: 2.0*
 *Last Updated: January 2026*
-*References: Nodalync Whitepaper, Protocol Specification v0.7.0*
+*References: Nodalync Whitepaper, Protocol Specification v0.7.1*
 *Contract: 0.0.7729011 (Hedera Testnet)*

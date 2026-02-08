@@ -59,7 +59,7 @@ know, not just what they continuously produce.
 
 ## Current Status
 
-**Protocol v0.5.0** · **CLI v0.9.0**
+**Protocol v0.7.1** · **CLI v0.10.1**
 
 | Layer | Crate | Description |
 |-------|-------|-------------|

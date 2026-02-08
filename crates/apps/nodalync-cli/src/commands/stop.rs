@@ -123,4 +123,24 @@ mod tests {
         let result = wait_for_exit(999999999, Duration::from_millis(100)).await;
         assert!(result);
     }
+
+    /// Regression test for Issue #47: `stop` when no node is running should
+    /// return NodeNotRunning error, not "Node stopped."
+    #[tokio::test]
+    async fn test_stop_no_node_running() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let mut config = CliConfig::default();
+        config.storage.content_dir = temp_dir.path().join("content");
+        config.storage.cache_dir = temp_dir.path().join("cache");
+        config.storage.database = temp_dir.path().join("nodalync.db");
+        config.identity.keyfile = temp_dir.path().join("identity").join("keypair.key");
+
+        let result = stop(config, OutputFormat::Human).await;
+        assert!(result.is_err());
+        assert!(
+            matches!(result.as_ref().unwrap_err(), CliError::NodeNotRunning),
+            "Should get NodeNotRunning, got: {:?}",
+            result.unwrap_err()
+        );
+    }
 }

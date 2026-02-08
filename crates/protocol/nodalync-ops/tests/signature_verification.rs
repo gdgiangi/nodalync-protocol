@@ -101,8 +101,8 @@ fn create_signed_payment(
 /// this indirectly: register peer A's key, then try to use peer A's PeerId
 /// as a channel close requester but with a signature from key B.
 /// The handler should reject the forged signature.
-#[test]
-fn test_message_with_forged_sender_rejected() {
+#[tokio::test]
+async fn test_message_with_forged_sender_rejected() {
     // Create ops with known identity
     let (mut ops, node_private_key, _node_pubkey, _node_peer_id, _temp) = create_test_ops();
 
@@ -118,25 +118,27 @@ fn test_message_with_forged_sender_rejected() {
     let channel_id = content_hash(b"forged-test-channel");
     let open_request = ChannelOpenPayload {
         channel_id,
-        initial_balance: 1000,
+        initial_balance: 200_0000_0000, // 200 HBAR (above 100 HBAR minimum)
         funding_tx: None,
         hedera_account: None,
     };
-    ops.handle_channel_open(&peer_a, &open_request).unwrap();
+    ops.handle_channel_open(&peer_a, &open_request)
+        .await
+        .unwrap();
 
     // Attacker (B) signs a channel close pretending to be peer A
     let forged_signature = nodalync_valid::sign_channel_close(
         &private_key_b, // Wrong key!
         &channel_id,
         0,
-        1000,
-        1000,
+        200_0000_0000,
+        200_0000_0000,
     );
 
     let close_request = ChannelClosePayload {
         channel_id,
         nonce: 0,
-        final_balances: ChannelBalances::new(1000, 1000),
+        final_balances: ChannelBalances::new(200_0000_0000, 200_0000_0000),
         initiator_signature: forged_signature,
     };
 
@@ -151,8 +153,8 @@ fn test_message_with_forged_sender_rejected() {
 
 /// Test that a valid message (signed with correct key) from a registered peer
 /// is accepted.
-#[test]
-fn test_message_with_valid_signature_accepted() {
+#[tokio::test]
+async fn test_message_with_valid_signature_accepted() {
     let (mut ops, node_private_key, _node_pubkey, _node_peer_id, _temp) = create_test_ops();
 
     // Create peer identity
@@ -166,20 +168,27 @@ fn test_message_with_valid_signature_accepted() {
     let channel_id = content_hash(b"valid-sig-channel");
     let open_request = ChannelOpenPayload {
         channel_id,
-        initial_balance: 1000,
+        initial_balance: 200_0000_0000, // 200 HBAR (above 100 HBAR minimum)
         funding_tx: None,
         hedera_account: None,
     };
-    ops.handle_channel_open(&peer_id, &open_request).unwrap();
+    ops.handle_channel_open(&peer_id, &open_request)
+        .await
+        .unwrap();
 
     // Sign close with correct key
-    let valid_signature =
-        nodalync_valid::sign_channel_close(&private_key, &channel_id, 0, 1000, 1000);
+    let valid_signature = nodalync_valid::sign_channel_close(
+        &private_key,
+        &channel_id,
+        0,
+        200_0000_0000,
+        200_0000_0000,
+    );
 
     let close_request = ChannelClosePayload {
         channel_id,
         nonce: 0,
-        final_balances: ChannelBalances::new(1000, 1000),
+        final_balances: ChannelBalances::new(200_0000_0000, 200_0000_0000),
         initiator_signature: valid_signature,
     };
 
@@ -193,8 +202,8 @@ fn test_message_with_valid_signature_accepted() {
 
 /// Test that messages from unknown peers (no registered key) still proceed
 /// under the soft-fail policy.
-#[test]
-fn test_message_from_unknown_peer_still_processed() {
+#[tokio::test]
+async fn test_message_from_unknown_peer_still_processed() {
     let (mut ops, node_private_key, _node_pubkey, _node_peer_id, _temp) = create_test_ops();
 
     // Create peer but do NOT register their key
@@ -205,18 +214,19 @@ fn test_message_from_unknown_peer_still_processed() {
     let channel_id = content_hash(b"unknown-peer-channel");
     let open_request = ChannelOpenPayload {
         channel_id,
-        initial_balance: 1000,
+        initial_balance: 200_0000_0000, // 200 HBAR (above 100 HBAR minimum)
         funding_tx: None,
         hedera_account: None,
     };
     ops.handle_channel_open(&unknown_peer, &open_request)
+        .await
         .unwrap();
 
     // Close with a stub signature — should succeed because peer is unknown (soft-fail)
     let close_request = ChannelClosePayload {
         channel_id,
         nonce: 0,
-        final_balances: ChannelBalances::new(1000, 1000),
+        final_balances: ChannelBalances::new(200_0000_0000, 200_0000_0000),
         initiator_signature: Signature::from_bytes([0u8; 64]),
     };
 
@@ -348,8 +358,8 @@ async fn test_valid_signed_payment_accepted() {
 
 /// Test that a channel close request with a forged signature is rejected
 /// when the peer's public key is registered.
-#[test]
-fn test_channel_close_forged_signature_rejected() {
+#[tokio::test]
+async fn test_channel_close_forged_signature_rejected() {
     let (mut ops, node_private_key, _node_pubkey, _node_peer_id, _temp) = create_test_ops();
 
     // Create two identities
@@ -364,19 +374,27 @@ fn test_channel_close_forged_signature_rejected() {
     let channel_id = content_hash(b"close-forge-channel");
     let open_request = ChannelOpenPayload {
         channel_id,
-        initial_balance: 1000,
+        initial_balance: 200_0000_0000, // 200 HBAR (above 100 HBAR minimum)
         funding_tx: None,
         hedera_account: None,
     };
-    ops.handle_channel_open(&real_peer, &open_request).unwrap();
+    ops.handle_channel_open(&real_peer, &open_request)
+        .await
+        .unwrap();
 
     // Sign close with forger's key
-    let forged_sig = nodalync_valid::sign_channel_close(&forger_pk, &channel_id, 0, 500, 500);
+    let forged_sig = nodalync_valid::sign_channel_close(
+        &forger_pk,
+        &channel_id,
+        0,
+        200_0000_0000,
+        200_0000_0000,
+    );
 
     let close_request = ChannelClosePayload {
         channel_id,
         nonce: 0,
-        final_balances: ChannelBalances::new(500, 500),
+        final_balances: ChannelBalances::new(200_0000_0000, 200_0000_0000),
         initiator_signature: forged_sig,
     };
 
@@ -395,8 +413,8 @@ fn test_channel_close_forged_signature_rejected() {
 
 /// Test that channel close from an unknown peer (no registered key) succeeds
 /// under the soft-fail policy.
-#[test]
-fn test_channel_close_unknown_peer_soft_fails() {
+#[tokio::test]
+async fn test_channel_close_unknown_peer_soft_fails() {
     let (mut ops, node_private_key, _node_pubkey, _node_peer_id, _temp) = create_test_ops();
 
     // Create peer but do NOT register their key
@@ -407,18 +425,19 @@ fn test_channel_close_unknown_peer_soft_fails() {
     let channel_id = content_hash(b"close-softfail-channel");
     let open_request = ChannelOpenPayload {
         channel_id,
-        initial_balance: 1000,
+        initial_balance: 200_0000_0000, // 200 HBAR (above 100 HBAR minimum)
         funding_tx: None,
         hedera_account: None,
     };
     ops.handle_channel_open(&unknown_peer, &open_request)
+        .await
         .unwrap();
 
     // Close with a stub signature — should succeed because peer is unknown
     let close_request = ChannelClosePayload {
         channel_id,
         nonce: 0,
-        final_balances: ChannelBalances::new(1000, 1000),
+        final_balances: ChannelBalances::new(200_0000_0000, 200_0000_0000),
         initiator_signature: Signature::from_bytes([0u8; 64]),
     };
 

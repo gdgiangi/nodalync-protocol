@@ -16,7 +16,7 @@ use nodalync_wire::{
     SearchResponsePayload, SearchResult as WireSearchResult, VersionInfo, VersionRequestPayload,
     VersionResponsePayload,
 };
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::error::{OpsError, OpsResult};
 use crate::extraction::L1Extractor;
@@ -526,11 +526,21 @@ where
 
     /// Handle an incoming channel open request.
     ///
+    /// SECURITY: This handler implements several security measures to prevent abuse:
+    /// 1. Caps accepted deposits to `max_accept_deposit` from config
+    /// 2. Rejects deposits below minimum with `ChannelDepositTooLow` error
+    /// 3. Auto-deposit is gated by `auto_deposit_on_channel_open` config flag
+    /// 4. Rate limits auto-deposits with a global cooldown
+    /// 5. Uses fixed deposit amount from config (never derived from peer request)
+    ///
+    /// Steps:
     /// 1. Validate no existing channel
-    /// 2. Register peer's Hedera account if provided
-    /// 3. Create channel state
-    /// 4. Return ChannelAcceptPayload with our Hedera account
-    pub fn handle_channel_open(
+    /// 2. Cap and validate deposit amount
+    /// 3. Register peer's Hedera account if provided
+    /// 4. Auto-deposit to settlement contract if enabled and needed
+    /// 5. Create channel state with capped deposit
+    /// 6. Return ChannelAcceptPayload with our Hedera account
+    pub async fn handle_channel_open(
         &mut self,
         requester: &PeerId,
         request: &ChannelOpenPayload,
@@ -542,7 +552,28 @@ where
             return Err(OpsError::ChannelAlreadyExists);
         }
 
-        // 2. Register peer's Hedera account if provided (enables on-chain channels)
+        // 2. Cap the deposit to max_accept_deposit (SECURITY: prevents unbounded commitment)
+        let capped_deposit = request
+            .initial_balance
+            .min(self.config.channel.max_accept_deposit);
+
+        // Reject if capped deposit is below minimum (SECURITY: prevents dust channels)
+        if capped_deposit < self.config.channel.min_deposit {
+            return Err(OpsError::ChannelDepositTooLow {
+                provided: capped_deposit,
+                minimum: self.config.channel.min_deposit,
+            });
+        }
+
+        debug!(
+            peer = %requester,
+            requested = request.initial_balance,
+            capped = capped_deposit,
+            max_accept = self.config.channel.max_accept_deposit,
+            "Channel open request - deposit capped"
+        );
+
+        // 3. Register peer's Hedera account if provided (enables on-chain channels)
         if let Some(peer_hedera) = &request.hedera_account {
             if let Some(settlement) = self.settlement() {
                 if let Ok(account_id) = nodalync_settle::AccountId::from_string(peer_hedera) {
@@ -556,27 +587,71 @@ where
             }
         }
 
-        // 3. Create channel state
-        // For MVP, we auto-accept with a matching deposit
-        let my_deposit = request.initial_balance; // Match their deposit
+        // 4. Auto-deposit if enabled and needed (SECURITY: gated by config flag)
+        // Only triggers if:
+        // - auto_deposit_on_channel_open is true
+        // - Settlement is configured
+        // - Cooldown has elapsed
+        // - Balance is below threshold
+        if self.config.channel.auto_deposit_on_channel_open {
+            if let Some(settlement) = self.settlement().cloned() {
+                // Check cooldown (SECURITY: prevents rapid deposit spam)
+                if self.can_auto_deposit() {
+                    // Check current contract balance
+                    if let Ok(balance) = settlement.get_balance().await {
+                        if balance < self.config.channel.auto_deposit_min_balance {
+                            // Use fixed deposit amount from config (SECURITY: never derived from peer request)
+                            let deposit_amount = self.config.channel.auto_deposit_amount;
+                            info!(
+                                current_balance = balance,
+                                min_balance = self.config.channel.auto_deposit_min_balance,
+                                deposit_amount = deposit_amount,
+                                "Auto-depositing to settlement contract for channel acceptance"
+                            );
+
+                            match settlement.deposit(deposit_amount).await {
+                                Ok(tx_id) => {
+                                    info!(tx_id = %tx_id, "Auto-deposit successful for channel acceptance");
+                                    // Record the deposit time (SECURITY: sets cooldown)
+                                    self.mark_auto_deposit();
+                                }
+                                Err(e) => {
+                                    warn!(error = %e, "Auto-deposit failed, channel acceptance may fail");
+                                    // Continue anyway - maybe balance is enough for this channel
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    debug!(
+                        cooldown_secs = self.config.channel.auto_deposit_cooldown_secs,
+                        "Auto-deposit skipped due to cooldown"
+                    );
+                }
+            }
+        }
+
+        // 5. Create channel state with CAPPED deposit
+        // We match the capped deposit, not the original request
+        let my_deposit = capped_deposit;
 
         let channel = Channel::accepted(
             request.channel_id,
             *requester,
-            request.initial_balance,
-            my_deposit,
+            capped_deposit, // Their deposit (capped)
+            my_deposit,     // Our deposit (matches capped amount)
             timestamp,
         );
 
         self.state.channels.create(requester, channel)?;
 
-        // 4. Return accept payload with our Hedera account
+        // 6. Return accept payload with our Hedera account
         let hedera_account = self.settlement().map(|s| s.get_own_account_string());
 
         Ok(ChannelAcceptPayload {
             channel_id: request.channel_id,
-            initial_balance: my_deposit,
-            funding_tx: None, // No on-chain funding for MVP
+            initial_balance: my_deposit, // Report the capped/actual deposit
+            funding_tx: None,            // No on-chain funding for MVP
             hedera_account,
         })
     }
@@ -1018,7 +1093,7 @@ where
                                 OpsError::invalid_operation(format!("decode error: {}", e))
                             })?;
                         debug!("Received channel open request");
-                        let response = self.handle_channel_open(&nodalync_peer, &request)?;
+                        let response = self.handle_channel_open(&nodalync_peer, &request).await?;
                         let response_bytes =
                             nodalync_wire::encode_payload(&response).map_err(|e| {
                                 OpsError::invalid_operation(format!("encoding error: {}", e))
@@ -1118,6 +1193,7 @@ mod tests {
     use nodalync_store::NodeStateConfig;
     use nodalync_types::{Metadata, ProvenanceEntry};
     use nodalync_wire::ChannelBalances;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     fn create_test_ops() -> (DefaultNodeOperations, TempDir) {
@@ -1319,32 +1395,35 @@ mod tests {
         assert!(response.latest.0.iter().any(|&b| b != 0));
     }
 
-    #[test]
-    fn test_handle_channel_open() {
+    #[tokio::test]
+    async fn test_handle_channel_open() {
         let (mut ops, _temp) = create_test_ops();
 
         let requester = test_peer_id();
         let channel_id = content_hash(b"test channel");
 
+        // Use deposit above minimum (100 HBAR in tinybars)
+        let deposit = 200_0000_0000; // 200 HBAR
+
         let request = ChannelOpenPayload {
             channel_id,
-            initial_balance: 1000,
+            initial_balance: deposit,
             funding_tx: None,
             hedera_account: Some("0.0.12345".to_string()),
         };
 
-        let response = ops.handle_channel_open(&requester, &request).unwrap();
+        let response = ops.handle_channel_open(&requester, &request).await.unwrap();
 
         assert_eq!(response.channel_id, channel_id);
-        assert_eq!(response.initial_balance, 1000);
+        assert_eq!(response.initial_balance, deposit);
 
         // Verify channel was created
         let channel = ops.get_payment_channel(&requester).unwrap().unwrap();
         assert!(channel.is_open());
     }
 
-    #[test]
-    fn test_handle_channel_close() {
+    #[tokio::test]
+    async fn test_handle_channel_close() {
         let (private_key, public_key) = generate_identity();
         let peer_id = peer_id_from_public_key(&public_key);
 
@@ -1353,23 +1432,26 @@ mod tests {
         let state = nodalync_store::NodeState::open(config).unwrap();
         let mut ops = DefaultNodeOperations::with_defaults(state, peer_id);
 
-        // First open a channel
+        // First open a channel with deposit above minimum (100 HBAR)
         let requester = test_peer_id();
         let channel_id = content_hash(b"test channel");
+        let deposit = 200_0000_0000; // 200 HBAR in tinybars
 
         let open_request = ChannelOpenPayload {
             channel_id,
-            initial_balance: 1000,
+            initial_balance: deposit,
             funding_tx: None,
             hedera_account: None,
         };
-        ops.handle_channel_open(&requester, &open_request).unwrap();
+        ops.handle_channel_open(&requester, &open_request)
+            .await
+            .unwrap();
 
         // Close it — requester is unknown peer, so soft-fail skips sig check
         let close_request = ChannelClosePayload {
             channel_id,
             nonce: 0,
-            final_balances: ChannelBalances::new(1000, 1000),
+            final_balances: ChannelBalances::new(deposit, deposit),
             initiator_signature: Signature::from_bytes([0u8; 64]),
         };
 
@@ -1783,5 +1865,337 @@ mod tests {
 
         let result = ops.handle_network_event(event).await.unwrap();
         assert!(result.is_none(), "PeerConnected should return None");
+    }
+
+    // =========================================================================
+    // Channel Open Security Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_channel_open_caps_deposit() {
+        use crate::config::{ChannelConfig, OpsConfig};
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = NodeStateConfig::new(temp_dir.path());
+        let state = nodalync_store::NodeState::open(config).unwrap();
+
+        let (_, public_key) = generate_identity();
+        let peer_id = peer_id_from_public_key(&public_key);
+
+        // Set max_accept_deposit to 500 HBAR (50_000_000_000 tinybars)
+        let ops_config = OpsConfig::default()
+            .with_channel(ChannelConfig::default().with_max_accept_deposit(500_0000_0000));
+
+        let mut ops = DefaultNodeOperations::with_config(state, peer_id, ops_config);
+
+        let requester = test_peer_id();
+        let channel_id = content_hash(b"cap test channel");
+
+        // Request with u64::MAX deposit (malicious attempt)
+        let request = ChannelOpenPayload {
+            channel_id,
+            initial_balance: u64::MAX,
+            funding_tx: None,
+            hedera_account: None,
+        };
+
+        let response = ops.handle_channel_open(&requester, &request).await.unwrap();
+
+        // Response should have capped deposit
+        assert_eq!(
+            response.initial_balance, 500_0000_0000,
+            "Deposit should be capped to max_accept_deposit"
+        );
+
+        // Verify channel was created with capped deposit
+        let channel = ops.get_payment_channel(&requester).unwrap().unwrap();
+        assert_eq!(
+            channel.their_balance, 500_0000_0000,
+            "Channel their_balance should be capped"
+        );
+        assert_eq!(
+            channel.my_balance, 500_0000_0000,
+            "Channel my_balance should match capped deposit"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_channel_open_rejects_below_minimum() {
+        use crate::config::{ChannelConfig, OpsConfig};
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = NodeStateConfig::new(temp_dir.path());
+        let state = nodalync_store::NodeState::open(config).unwrap();
+
+        let (_, public_key) = generate_identity();
+        let peer_id = peer_id_from_public_key(&public_key);
+
+        // Set min_deposit to 100 HBAR
+        let ops_config =
+            OpsConfig::default().with_channel(ChannelConfig::new(100_0000_0000, 1000_0000_0000));
+
+        let mut ops = DefaultNodeOperations::with_config(state, peer_id, ops_config);
+
+        let requester = test_peer_id();
+        let channel_id = content_hash(b"min test channel");
+
+        // Request with deposit below minimum (1 tinybar)
+        let request = ChannelOpenPayload {
+            channel_id,
+            initial_balance: 1,
+            funding_tx: None,
+            hedera_account: None,
+        };
+
+        let result = ops.handle_channel_open(&requester, &request).await;
+        assert!(
+            matches!(
+                result,
+                Err(OpsError::ChannelDepositTooLow {
+                    provided: 1,
+                    minimum: 100_0000_0000
+                })
+            ),
+            "Should reject deposit below minimum: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_channel_open_no_auto_deposit_when_disabled() {
+        use crate::config::{ChannelConfig, OpsConfig};
+        use nodalync_test_utils::MockSettlement;
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = NodeStateConfig::new(temp_dir.path());
+        let state = nodalync_store::NodeState::open(config).unwrap();
+
+        let (_, public_key) = generate_identity();
+        let peer_id = peer_id_from_public_key(&public_key);
+
+        // Disable auto-deposit on channel open (default)
+        let ops_config =
+            OpsConfig::default().with_channel(ChannelConfig::default().with_auto_deposit(false));
+
+        // Create mock settlement with low balance to trigger deposit check
+        let mock_settle = Arc::new(MockSettlement::new().with_balance(0));
+
+        let mut ops = DefaultNodeOperations::with_config_and_settlement(
+            state,
+            peer_id,
+            ops_config,
+            mock_settle.clone(),
+        );
+
+        let requester = test_peer_id();
+        let channel_id = content_hash(b"no auto deposit channel");
+
+        let request = ChannelOpenPayload {
+            channel_id,
+            initial_balance: 200_0000_0000,
+            funding_tx: None,
+            hedera_account: None,
+        };
+
+        ops.handle_channel_open(&requester, &request).await.unwrap();
+
+        // No auto-deposit should have occurred
+        assert!(
+            mock_settle.deposits().is_empty(),
+            "No deposit should occur when auto_deposit_on_channel_open is false"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_channel_open_auto_deposit_uses_config_amount() {
+        use crate::config::{ChannelConfig, OpsConfig};
+        use nodalync_test_utils::MockSettlement;
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = NodeStateConfig::new(temp_dir.path());
+        let state = nodalync_store::NodeState::open(config).unwrap();
+
+        let (_, public_key) = generate_identity();
+        let peer_id = peer_id_from_public_key(&public_key);
+
+        // Enable auto-deposit with specific amount
+        let config_deposit_amount = 300_0000_0000; // 300 HBAR
+        let ops_config = OpsConfig::default().with_channel(
+            ChannelConfig::default()
+                .with_auto_deposit(true)
+                .with_auto_deposit_amount(config_deposit_amount)
+                .with_auto_deposit_min_balance(100_0000_0000),
+        );
+
+        // Create mock settlement with low balance to trigger auto-deposit
+        let mock_settle = Arc::new(MockSettlement::new().with_balance(0));
+
+        let mut ops = DefaultNodeOperations::with_config_and_settlement(
+            state,
+            peer_id,
+            ops_config,
+            mock_settle.clone(),
+        );
+
+        let requester = test_peer_id();
+        let channel_id = content_hash(b"auto deposit amount channel");
+
+        // Request with large deposit (should NOT affect auto-deposit amount)
+        let request = ChannelOpenPayload {
+            channel_id,
+            initial_balance: 1000_0000_0000, // 1000 HBAR request
+            funding_tx: None,
+            hedera_account: None,
+        };
+
+        ops.handle_channel_open(&requester, &request).await.unwrap();
+
+        // Auto-deposit should use config amount, NOT the request amount
+        let deposits = mock_settle.deposits();
+        assert_eq!(deposits.len(), 1, "Should have exactly one deposit");
+        assert_eq!(
+            deposits[0], config_deposit_amount,
+            "Deposit should be config amount, not derived from request"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_channel_open_skips_deposit_if_balance_sufficient() {
+        use crate::config::{ChannelConfig, OpsConfig};
+        use nodalync_test_utils::MockSettlement;
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = NodeStateConfig::new(temp_dir.path());
+        let state = nodalync_store::NodeState::open(config).unwrap();
+
+        let (_, public_key) = generate_identity();
+        let peer_id = peer_id_from_public_key(&public_key);
+
+        // Enable auto-deposit
+        let ops_config = OpsConfig::default().with_channel(
+            ChannelConfig::default()
+                .with_auto_deposit(true)
+                .with_auto_deposit_min_balance(100_0000_0000),
+        );
+
+        // Create mock settlement with HIGH balance (above threshold)
+        let mock_settle = Arc::new(MockSettlement::new().with_balance(500_0000_0000));
+
+        let mut ops = DefaultNodeOperations::with_config_and_settlement(
+            state,
+            peer_id,
+            ops_config,
+            mock_settle.clone(),
+        );
+
+        let requester = test_peer_id();
+        let channel_id = content_hash(b"sufficient balance channel");
+
+        let request = ChannelOpenPayload {
+            channel_id,
+            initial_balance: 200_0000_0000,
+            funding_tx: None,
+            hedera_account: None,
+        };
+
+        ops.handle_channel_open(&requester, &request).await.unwrap();
+
+        // No deposit should occur when balance is sufficient
+        assert!(
+            mock_settle.deposits().is_empty(),
+            "No deposit should occur when balance is above threshold"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_channel_open_cooldown_prevents_rapid_deposits() {
+        use crate::config::{ChannelConfig, OpsConfig};
+        use nodalync_test_utils::MockSettlement;
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = NodeStateConfig::new(temp_dir.path());
+        let state = nodalync_store::NodeState::open(config).unwrap();
+
+        let (_, public_key) = generate_identity();
+        let peer_id = peer_id_from_public_key(&public_key);
+
+        // Enable auto-deposit with very short cooldown for test
+        let ops_config = OpsConfig::default().with_channel(
+            ChannelConfig::default()
+                .with_auto_deposit(true)
+                .with_auto_deposit_min_balance(100_0000_0000)
+                .with_auto_deposit_cooldown(300), // 5 minutes
+        );
+
+        // Create mock settlement with low balance
+        let mock_settle = Arc::new(MockSettlement::new().with_balance(0));
+
+        let mut ops = DefaultNodeOperations::with_config_and_settlement(
+            state,
+            peer_id,
+            ops_config,
+            mock_settle.clone(),
+        );
+
+        // First channel open - should trigger deposit
+        let requester1 = test_peer_id();
+        let channel_id1 = content_hash(b"cooldown test channel 1");
+        let request1 = ChannelOpenPayload {
+            channel_id: channel_id1,
+            initial_balance: 200_0000_0000,
+            funding_tx: None,
+            hedera_account: None,
+        };
+        ops.handle_channel_open(&requester1, &request1)
+            .await
+            .unwrap();
+
+        // Second channel open immediately after - should NOT trigger deposit (cooldown)
+        let requester2 = test_peer_id();
+        let channel_id2 = content_hash(b"cooldown test channel 2");
+        let request2 = ChannelOpenPayload {
+            channel_id: channel_id2,
+            initial_balance: 200_0000_0000,
+            funding_tx: None,
+            hedera_account: None,
+        };
+        ops.handle_channel_open(&requester2, &request2)
+            .await
+            .unwrap();
+
+        // Only ONE deposit should have occurred
+        let deposits = mock_settle.deposits();
+        assert_eq!(
+            deposits.len(),
+            1,
+            "Should have only one deposit due to cooldown"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_channel_open_no_overflow_on_max_initial_balance() {
+        // This test verifies no panic or overflow when processing u64::MAX
+        let (mut ops, _temp) = create_test_ops();
+
+        let requester = test_peer_id();
+        let channel_id = content_hash(b"overflow test channel");
+
+        let request = ChannelOpenPayload {
+            channel_id,
+            initial_balance: u64::MAX, // Maximum possible value
+            funding_tx: None,
+            hedera_account: None,
+        };
+
+        // Should not panic - should cap the deposit
+        let result = ops.handle_channel_open(&requester, &request).await;
+        assert!(result.is_ok(), "Should not panic on u64::MAX: {:?}", result);
+
+        // Verify the deposit was capped (default max_accept_deposit is 500 HBAR)
+        let response = result.unwrap();
+        assert!(
+            response.initial_balance <= 500_0000_0000,
+            "Deposit should be capped"
+        );
     }
 }

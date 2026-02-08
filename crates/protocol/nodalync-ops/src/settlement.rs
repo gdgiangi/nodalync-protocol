@@ -357,7 +357,7 @@ mod tests {
         let balance_after = settlement.get_balance().await.unwrap();
         println!("Balance after deposit: {} tinybars", balance_after);
         assert!(
-            balance_after >= balance_before + 1,
+            balance_after > balance_before,
             "Balance should increase after deposit"
         );
     }

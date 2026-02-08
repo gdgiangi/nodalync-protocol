@@ -4,6 +4,9 @@
 
 set -e
 
+# Check required host dependencies
+command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required. Install with: brew install jq (macOS) or apt install jq (Linux)"; exit 1; }
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DOCKER_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG_DIR="$DOCKER_DIR/config"
@@ -116,7 +119,7 @@ CONTENT_HASH=$(echo "$PUBLISH_OUTPUT" | jq -r '.hash // .content_hash // empty')
 if [ -z "$CONTENT_HASH" ]; then
     # Try to parse human-readable output
     CONTENT_HASH=$(docker exec -e NODALYNC_PASSWORD=testpassword nodalync-node1 \
-        nodalync publish /tmp/test-content.txt --title "E2E Test Document" 2>/dev/null | grep -oP 'Hash: \K[a-f0-9]+' || echo "")
+        nodalync publish /tmp/test-content.txt --title "E2E Test Document" 2>/dev/null | grep -o 'Hash: [a-f0-9]*' | sed 's/Hash: //' || echo "")
 fi
 
 if [ -n "$CONTENT_HASH" ]; then

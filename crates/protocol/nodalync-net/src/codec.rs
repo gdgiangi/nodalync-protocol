@@ -235,7 +235,7 @@ mod tests {
         assert!(debug_str.contains("NodalyncCodec"));
 
         // Verify Default also works
-        let codec_default = NodalyncCodec::default();
+        let codec_default = NodalyncCodec;
         let debug_default = format!("{:?}", codec_default);
         assert!(debug_default.contains("NodalyncCodec"));
     }

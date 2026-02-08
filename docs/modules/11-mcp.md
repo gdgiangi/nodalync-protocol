@@ -18,7 +18,7 @@ cargo build --release -p nodalync-cli
 
 ### 3. Configure Claude Desktop
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+Add to your Claude Desktop MCP config (typically `~/.config/claude/mcp.json` on macOS/Linux):
 
 ```json
 {
@@ -54,73 +54,28 @@ nodalync mcp-server --budget 5.0 --auto-approve 0.1
 
 ## MCP Tools
 
-### `query_knowledge`
+When the MCP server is running, AI agents have access to these tools:
 
-Query knowledge from the network and pay for access.
+| Tool | Description |
+|------|-------------|
+| `query_knowledge` | Query content by hash or natural language (paid) |
+| `list_sources` | Browse available content with metadata |
+| `search_network` | Search connected peers for content (requires `--enable-network`) |
+| `preview_content` | View content metadata without paying |
+| `publish_content` | Publish new content from the agent |
+| `synthesize_content` | Create L3 synthesis from multiple sources |
+| `update_content` | Create a new version of existing content |
+| `delete_content` | Delete content and set visibility to offline |
+| `set_visibility` | Change content visibility |
+| `list_versions` | List all versions of a content item |
+| `get_earnings` | View earnings breakdown by content |
+| `status` | Node health, budget, channels, and Hedera status |
+| `deposit_hbar` | Deposit HBAR to the settlement contract |
+| `open_channel` | Open a payment channel with a peer |
+| `close_channel` | Close a payment channel |
+| `close_all_channels` | Close all open payment channels |
 
-**Input:**
-```json
-{
-  "query": "string (base58-encoded content hash)",
-  "budget_hbar": "number (optional, max to spend on this query)"
-}
-```
-
-> **Note:** Natural language queries are not yet supported. Use `list_sources` to discover available content hashes.
-
-**Output:**
-```json
-{
-  "content": "string (the knowledge content)",
-  "hash": "string (content hash)",
-  "sources": ["array of source hashes (L0 roots)"],
-  "provenance": ["array of all contributing hashes"],
-  "cost_hbar": "number (amount spent)",
-  "remaining_budget_hbar": "number (session budget remaining)"
-}
-```
-
-### `list_sources`
-
-List available knowledge sources on the network.
-
-**Input:**
-```json
-{
-  "topic": "string (optional filter)",
-  "limit": "number (optional, default 10)"
-}
-```
-
-**Output:**
-```json
-{
-  "sources": [
-    {
-      "hash": "string",
-      "title": "string",
-      "price_hbar": "number",
-      "preview": "string",
-      "topics": ["array of strings"]
-    }
-  ],
-  "total_available": "number"
-}
-```
-
-### `budget_status`
-
-Check remaining session budget.
-
-**Output:**
-```json
-{
-  "total_hbar": 1.0,
-  "spent_hbar": 0.05,
-  "remaining_hbar": 0.95,
-  "auto_approve_hbar": 0.01
-}
-```
+> **Note:** Natural language queries are not yet supported for `query_knowledge`. Use `list_sources` or `search_network` to discover content hashes first.
 
 ## MCP Resources
 

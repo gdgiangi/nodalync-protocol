@@ -58,8 +58,8 @@ pub enum CliError {
     IdentityNotInitialized,
 
     /// Identity already exists.
-    #[error("Identity already exists. Delete ~/.nodalync/identity to reinitialize.")]
-    IdentityExists,
+    #[error("Identity already exists at {0}")]
+    IdentityExists(String),
 
     /// Node not running.
     #[error("Node is not running. Start with 'nodalync start'.")]
@@ -84,6 +84,10 @@ pub enum CliError {
     /// Confirmation or input required from user.
     #[error("{0}")]
     ConfirmationRequired(String),
+
+    /// Invalid input (file, content, or argument validation error).
+    #[error("{0}")]
+    InvalidInput(String),
 }
 
 impl CliError {
@@ -103,7 +107,7 @@ impl CliError {
             // User errors: 1
             Self::User(_)
             | Self::IdentityNotInitialized
-            | Self::IdentityExists
+            | Self::IdentityExists(_)
             | Self::NodeNotRunning
             | Self::NodeAlreadyRunning
             | Self::PasswordRequired
@@ -126,6 +130,8 @@ impl CliError {
             Self::Io(_) => 9,
             // JSON/format errors: 10
             Self::Json(_) | Self::InvalidHash(_) => 10,
+            // Validation/input errors: 11
+            Self::InvalidInput(_) => 11,
         }
     }
 
@@ -143,7 +149,7 @@ impl CliError {
 
             // Identity/auth errors
             Self::IdentityNotInitialized => ErrorCode::AccessDenied,
-            Self::IdentityExists => ErrorCode::AccessDenied,
+            Self::IdentityExists(_) => ErrorCode::AccessDenied,
             Self::PasswordRequired => ErrorCode::AccessDenied,
 
             // Config/parse errors
@@ -166,6 +172,9 @@ impl CliError {
 
             // Confirmation required (missing --force, etc.)
             Self::ConfirmationRequired(_) => ErrorCode::AccessDenied,
+
+            // Input validation errors
+            Self::InvalidInput(_) => ErrorCode::InvalidManifest,
         }
     }
 
@@ -176,7 +185,7 @@ impl CliError {
             Self::Config(_) => None, // config errors include actionable details
             Self::Ops(_) | Self::Store(_) | Self::Io(_) => None, // too varied
             Self::IdentityNotInitialized => Some("Run 'nodalync init' to create your identity."),
-            Self::IdentityExists => Some("Use 'nodalync init --wizard' to reinitialize."),
+            Self::IdentityExists(_) => Some("Delete the identity directory shown above and run 'nodalync init' again, or use 'nodalync init --wizard' in an interactive terminal."),
             Self::NodeNotRunning => Some("Start the node with 'nodalync start'."),
             Self::NodeAlreadyRunning => Some("Stop the node first with 'nodalync stop'."),
             Self::NotFound(_) => Some("Use 'nodalync list' or 'nodalync search' to find content."),
@@ -195,13 +204,75 @@ impl CliError {
                 "Set NODALYNC_PASSWORD env var or run in a terminal for interactive input.",
             ),
             Self::ConfirmationRequired(_) => None, // message itself is the guidance
+            Self::InvalidInput(_) => None, // message itself is the guidance
         }
+    }
+    /// Format this error as a JSON string for machine consumers (Issue #83).
+    ///
+    /// Returns a compact JSON object with error code, message, optional hint,
+    /// and exit code so scripts and MCP integrations can reliably parse errors.
+    pub fn to_json(&self) -> String {
+        let json = serde_json::json!({
+            "error": {
+                "code": self.error_code().to_string(),
+                "message": self.to_string(),
+                "hint": self.suggestion(),
+                "exit_code": self.exit_code(),
+            }
+        });
+        serde_json::to_string(&json).unwrap_or_default()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression test for Issue #83: errors should be serializable as JSON
+    /// when --format json is used.
+    #[test]
+    fn test_error_json_format() {
+        let err = CliError::FileNotFound("/tmp/missing.txt".to_string());
+        let json_str = err.to_json();
+
+        let parsed: serde_json::Value = serde_json::from_str(&json_str)
+            .expect("Error JSON should be valid JSON");
+
+        let error_obj = parsed.get("error").expect("Should have 'error' key");
+        assert_eq!(
+            error_obj.get("code").unwrap().as_str().unwrap(),
+            "NOT_FOUND"
+        );
+        assert!(
+            error_obj.get("message").unwrap().as_str().unwrap().contains("missing.txt"),
+            "Message should contain the file path"
+        );
+        assert!(
+            error_obj.get("hint").unwrap().as_str().is_some(),
+            "FileNotFound should have a hint"
+        );
+        assert_eq!(error_obj.get("exit_code").unwrap().as_i64().unwrap(), 2);
+    }
+
+    /// Regression test for Issue #83: JSON errors with no hint should have null hint.
+    #[test]
+    fn test_error_json_format_no_hint() {
+        let err = CliError::user("Something went wrong");
+        let json_str = err.to_json();
+
+        let parsed: serde_json::Value = serde_json::from_str(&json_str)
+            .expect("Error JSON should be valid JSON");
+
+        let error_obj = parsed.get("error").expect("Should have 'error' key");
+        assert!(
+            error_obj.get("hint").unwrap().is_null(),
+            "User error should have null hint"
+        );
+        assert_eq!(
+            error_obj.get("code").unwrap().as_str().unwrap(),
+            "ACCESS_DENIED"
+        );
+    }
 
     #[test]
     fn test_suggestion_identity_not_initialized() {

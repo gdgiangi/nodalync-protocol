@@ -8,11 +8,19 @@ Choose one of three options:
 
 ### Option A: One-Line Install (Recommended)
 
+**macOS / Linux:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/gdgiangi/nodalync-protocol/main/install.sh | sh
 ```
 
-This auto-detects your platform (macOS, Linux, Windows) and installs the latest binary with full Hedera settlement support.
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/gdgiangi/nodalync-protocol/main/install.ps1 | iex
+```
+
+Or download the latest `.exe` from [Releases](https://github.com/gdgiangi/nodalync-protocol/releases) and add it to your PATH.
+
+This auto-detects your platform and installs the latest binary with full Hedera settlement support.
 
 ### Option B: Docker
 
@@ -24,7 +32,7 @@ docker build -t nodalync:latest https://github.com/gdgiangi/nodalync-protocol.gi
 docker run -it \
   -e NODALYNC_PASSWORD=your-secure-password \
   -v ~/.nodalync:/home/nodalync/.nodalync \
-  nodalync:latest init --wizard
+  nodalync:latest init
 
 # Start your node
 docker run -d --name nodalync-node \
@@ -36,7 +44,7 @@ docker run -d --name nodalync-node \
 
 ### Option C: Build from Source
 
-Requires Rust 1.85+:
+Requires Rust 1.85+ (and `protoc` for Hedera support):
 
 ```bash
 # Clone the repo
@@ -49,11 +57,11 @@ cargo build --release -p nodalync-cli
 # Or build without Hedera support (smaller binary)
 cargo build --release -p nodalync-cli --no-default-features
 
-# Install to /usr/local/bin
-sudo cp target/release/nodalync /usr/local/bin/
-
-# Or add to PATH
+# Add to PATH (no sudo needed)
 export PATH="$PWD/target/release:$PATH"
+
+# Or install system-wide
+sudo cp target/release/nodalync /usr/local/bin/
 ```
 
 Pre-built binaries also available at [Releases](https://github.com/gdgiangi/nodalync-protocol/releases).
@@ -62,22 +70,23 @@ Pre-built binaries also available at [Releases](https://github.com/gdgiangi/noda
 
 ## Step 1: Initialize Your Identity
 
-Run the interactive wizard to set up your node:
+Set a password and initialize your node identity:
 
 ```bash
-nodalync init --wizard
+export NODALYNC_PASSWORD=your-secure-password
+nodalync init
 ```
 
 This will:
 - Generate an Ed25519 keypair (your identity)
-- Configure network settings (connects to bootstrap node by default)
-- Set your default pricing
-- Choose settlement mode (testnet for free testing)
+- Create a default configuration file (connects to bootstrap nodes automatically)
+- Set up local storage (SQLite database, content directory)
 
-You'll be prompted for a password to encrypt your keypair. You can also set it via environment variable:
+> **Note:** `init` fails if an identity already exists. To reinitialize, delete your data directory first (see Troubleshooting below for paths) or use `nodalync init --wizard` in an interactive terminal to auto-reinitialize.
+
+For an interactive experience that lets you configure network settings, pricing, and settlement mode step by step, use the wizard:
 
 ```bash
-export NODALYNC_PASSWORD=your-secure-password
 nodalync init --wizard
 ```
 
@@ -144,12 +153,14 @@ nodalync list
 
 **Search the network:**
 
+Search matches content titles, descriptions, and tags (not body text):
+
 ```bash
-# Search local content
-nodalync search "climate change"
+# Search local content by title/description/tags
+nodalync search "research"
 
 # Search entire network
-nodalync search "climate change" --all
+nodalync search "research" --all
 ```
 
 **Preview content** (free, shows metadata only):
@@ -240,9 +251,9 @@ Add to your Claude Desktop config (`~/.config/claude/mcp.json` or similar):
       "args": ["mcp-server", "--budget", "1.0", "--auto-approve", "0.01", "--enable-network"],
       "env": {
         "NODALYNC_PASSWORD": "your-secure-password",
-        "HEDERA_ACCOUNT_ID": "0.0.7703962",
-        "HEDERA_CONTRACT_ID": "0.0.7729011",
-        "HEDERA_PRIVATE_KEY": "3030020100300706052b8104000a04220420..."
+        "NODALYNC_HEDERA_ACCOUNT_ID": "0.0.7703962",
+        "NODALYNC_HEDERA_CONTRACT_ID": "0.0.7729011",
+        "NODALYNC_HEDERA_KEY_PATH": "/Users/you/.nodalync/hedera.key"
       }
     }
   }
@@ -276,20 +287,95 @@ When the MCP server is running, AI agents have access to these tools:
 
 ---
 
-## Docker Compose (Multi-Node Cluster)
+## Local Multi-Node Testing
 
-For testing or running multiple nodes:
+Test the full publish-query-payment flow across three local nodes using Docker.
+
+**Prerequisites:** Docker, Docker Compose, and `jq` (for `make test`) installed.
+
+### Quick Version
 
 ```bash
-cd infra/local/
-docker compose up -d
+# 1. Build the Docker image first (from repo root — this must complete before init)
+docker compose build
+
+# 2. Initialize node identities and configs (uses the image you just built)
+cd infra/local && make init
+
+# 3. Start the 3-node cluster
+make up
+
+# 4. Run the end-to-end test (publish on node1, query from node3)
+make test
+```
+
+**Important:** Step 1 (`docker compose build`) must complete before Step 2 (`make init`),
+because `make init` runs `docker run` to generate identities using the built image.
+
+### What This Creates
+
+| Container | Role | Host Port | Internal IP |
+|-----------|------|-----------|-------------|
+| `nodalync-node1` | Bootstrap / seed node | 9001, 8081 | 172.28.0.10 |
+| `nodalync-node2` | Alice (publisher) | 9002, 8082 | 172.28.0.11 |
+| `nodalync-node3` | Bob (querier) | 9003, 8083 | 172.28.0.12 |
+
+All nodes use the password `testpassword` and form a full-mesh via libp2p.
+
+### Manual Interaction
+
+```bash
+# Run any CLI command on a specific node
+docker exec -e NODALYNC_PASSWORD=testpassword nodalync-node1 nodalync status
+docker exec -e NODALYNC_PASSWORD=testpassword nodalync-node2 nodalync list
+
+# Open a shell inside a node
+cd infra/local && make shell-node1
+
+# Publish test content on node1
+make publish-test
 
 # View logs
-docker compose logs -f
+make logs
 
-# Stop
-docker compose down
+# Stop the cluster
+make down
+
+# Full reset (remove data + reinitialize)
+make reset
 ```
+
+### Available Makefile Targets
+
+Run `cd infra/local && make help` to see all targets:
+
+| Target | Description |
+|--------|-------------|
+| `make init` | Generate node identities and configs (required first) |
+| `make up` | Start the 3-node cluster |
+| `make down` | Stop the cluster |
+| `make logs` | Follow cluster logs |
+| `make status` | Show cluster status and peer IDs |
+| `make test` | Run E2E tests (publish, propagate, query) |
+| `make clean` | Remove containers, volumes, and generated configs |
+| `make reset` | Clean + init (fresh start) |
+| `make shell-node1` | Open shell in node1 (also node2, node3) |
+| `make publish-test` | Publish test content on node1 |
+
+### Two Docker Compose Files
+
+There are two `docker-compose.yml` files in this repo, each for a different purpose:
+
+| File | Location | Used by | Service names | When to use |
+|------|----------|---------|---------------|-------------|
+| `docker-compose.yml` | Repo root | `docker compose build` | `node-bootstrap`, `node-alice`, `node-bob` | Building the image and custom setups |
+| `docker-compose.yml` | `infra/local/` | `make up/down/logs` | `node1`, `node2`, `node3` | Standard 3-node testing via Makefile |
+
+**Typical workflow:** Run `docker compose build` from the repo root to build the image, then use `cd infra/local && make init && make up` for the standard 3-node cluster. The Makefile targets use the `infra/local/docker-compose.yml` internally.
+
+The root `docker-compose.yml` is useful if you want to customize the cluster (add more nodes, change ports, or integrate with other services). It references `infra/local/` for data and configs, so you still need `make init` first.
+
+**Warning:** Do not run both compose files at the same time. They use overlapping container names and ports, so running one while the other is active will cause conflicts. Use `make down` (or `docker compose down` from the root) to stop one before starting the other.
 
 ---
 
@@ -305,15 +391,17 @@ set -a && source .env && set +a
 | Variable | Description |
 |----------|-------------|
 | `NODALYNC_PASSWORD` | Identity encryption password |
-| `NODALYNC_DATA_DIR` | Data directory (default: `~/.nodalync`) |
+| `NODALYNC_DATA_DIR` | Data directory (default: platform-specific, see note below) |
 | `RUST_LOG` | Log level (e.g., `nodalync=debug`) |
 | `HEDERA_ACCOUNT_ID` | Hedera account ID (e.g., `0.0.7703962`) |
 | `HEDERA_CONTRACT_ID` | Settlement contract ID (default: `0.0.7729011`) |
-| `HEDERA_PRIVATE_KEY` | **DER-encoded ECDSA private key** (see note below) |
+| `HEDERA_PRIVATE_KEY` | **DER-encoded ECDSA private key** as inline hex string (see note below) |
+
+**Note:** The variables above (`HEDERA_*`) are read by the CLI settlement path. The MCP server subcommand reads `NODALYNC_HEDERA_*` prefixed variants (e.g., `NODALYNC_HEDERA_ACCOUNT_ID`). See `nodalync mcp-server --help`.
 
 ### Hedera Private Key Format
 
-**IMPORTANT**: Smart contract operations require ECDSA keys with DER encoding.
+**IMPORTANT**: `HEDERA_PRIVATE_KEY` is an inline hex string (not a file path). Smart contract operations require ECDSA keys with DER encoding.
 
 | Format | Length | Example Prefix | Works? |
 |--------|--------|----------------|--------|
@@ -325,31 +413,89 @@ If you have a raw hex key, you need to DER-encode it. Check your account type at
 
 ---
 
+## Auto-Deposit (Payment Channels)
+
+When running a node that serves paid content, you need HBAR deposited to the settlement contract before you can accept payment channels from other peers.
+
+> **MIGRATION (v0.8.x)**: `auto_deposit` now defaults to `false` for security.
+> To restore previous behavior, explicitly set `auto_deposit = true` in your config.
+
+### How It Works
+
+When auto-deposit is enabled, your node will automatically:
+
+1. **On startup**: Check if the contract balance is below the minimum (default: 100 HBAR), and deposit if needed (default: 200 HBAR)
+2. **On channel acceptance**: When a peer tries to open a channel with you, auto-deposit if balance is insufficient and cooldown has elapsed
+
+### Configuration
+
+Configure auto-deposit behavior in your `config.toml` (in your data directory, see Troubleshooting section below for paths):
+
+```toml
+[settlement]
+# Enable auto-deposit (default: false — opt-in for security)
+auto_deposit = true
+
+# Minimum balance to maintain in contract (in HBAR)
+min_contract_balance_hbar = 100.0
+
+# Amount to deposit when auto-deposit triggers (in HBAR)
+auto_deposit_amount_hbar = 200.0
+
+# Maximum deposit to accept/match per channel (in HBAR)
+# Caps how much you'll commit when a peer opens a channel with you
+max_accept_deposit_hbar = 500.0
+```
+
+### Security Notes
+
+- **Deposit cap**: The `max_accept_deposit_hbar` setting limits how much you'll commit per channel, regardless of what the peer requests
+- **Cooldown**: Auto-deposits are rate-limited (5 minute cooldown by default) to prevent spam-triggered deposits
+- **Fixed amount**: Auto-deposit always uses the configured amount, never an amount derived from the peer's request
+- **Cooldown resets on restart**: The cooldown timer doesn't persist across node restarts. The startup auto-deposit check handles the post-restart case separately.
+
+### Manual Control
+
+To disable auto-deposit entirely:
+
+```toml
+[settlement]
+auto_deposit = false
+```
+
+Then manually deposit as needed:
+
+```bash
+nodalync deposit 200
+```
+
+---
+
 ## Common Commands Reference
 
 ### Identity & Node
 
 | Command | Description |
 |---------|-------------|
-| `nodalync init --wizard` | Set up identity and config |
+| `nodalync init` | Set up identity and config (add `--wizard` for interactive setup) |
 | `nodalync whoami` | Show your identity |
 | `nodalync start` | Start node (foreground) |
 | `nodalync start --daemon` | Start node (background) |
 | `nodalync status` | Show node status |
 | `nodalync stop` | Stop daemon |
-| `nodalync completions <shell>` | Generate shell completions (bash, zsh, fish, powershell) |
+| `nodalync completions <shell>` | Generate shell completions (bash, zsh, fish, power-shell) |
 
 ### Content
 
 | Command | Description |
 |---------|-------------|
-| `nodalync publish <file>` | Publish content |
+| `nodalync publish <file> [--price <hbar>] [--title "..."]` | Publish content |
 | `nodalync update <hash> <file>` | Create a new version of content |
 | `nodalync delete <hash>` | Delete local content |
 | `nodalync visibility <hash> --level <level>` | Change content visibility |
 | `nodalync versions <hash>` | Show version history |
 | `nodalync list` | List your content |
-| `nodalync search <query>` | Search content |
+| `nodalync search <query> [--all]` | Search content (matches title/description/tags) |
 | `nodalync preview <hash>` | View metadata (free) |
 | `nodalync query <hash>` | Get full content (paid) |
 
@@ -399,13 +545,23 @@ Health check: http://nodalync-bootstrap.eastus.azurecontainer.io:8080/health
 
 ## Troubleshooting
 
+**Default data directory:**
+
+The data directory varies by platform unless you set `NODALYNC_DATA_DIR`:
+- **macOS**: `~/Library/Application Support/io.nodalync.nodalync/`
+- **Linux**: `~/.local/share/nodalync/` (or `$XDG_DATA_HOME/nodalync/`)
+- **Windows**: `%APPDATA%\nodalync\nodalync\`
+
+Set `NODALYNC_DATA_DIR` to override: `export NODALYNC_DATA_DIR=~/.nodalync`
+
 **Node won't start:**
 ```bash
 # Check if already running
 nodalync status
 
-# View logs
-cat ~/.nodalync/node.stderr.log
+# View logs (path shown when starting daemon)
+cat ~/Library/Application\ Support/io.nodalync.nodalync/node.stderr.log  # macOS
+cat ~/.local/share/nodalync/node.stderr.log  # Linux
 ```
 
 **Can't connect to peers:**
@@ -418,7 +574,9 @@ curl http://nodalync-bootstrap.eastus.azurecontainer.io:8080/health
 
 **Reset everything:**
 ```bash
-rm -rf ~/.nodalync
+# Remove data directory (check your platform above, or use your NODALYNC_DATA_DIR)
+rm -rf ~/Library/Application\ Support/io.nodalync.nodalync/  # macOS
+# rm -rf ~/.local/share/nodalync/  # Linux
 nodalync init --wizard
 ```
 

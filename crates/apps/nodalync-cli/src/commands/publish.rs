@@ -6,7 +6,7 @@ use colored::Colorize;
 use nodalync_crypto::content_hash;
 use nodalync_types::{Metadata, Visibility};
 
-use crate::config::{ndl_to_units, CliConfig};
+use crate::config::{ndl_to_units, tinybars_to_hbar, CliConfig};
 use crate::context::NodeContext;
 use crate::error::{CliError, CliResult};
 use crate::output::{OutputFormat, PublishOutput, Render};
@@ -27,6 +27,13 @@ pub async fn publish(
         return Err(CliError::FileNotFound(file.display().to_string()));
     }
 
+    // Reject directories (Issue #22/#82: clear error with correct INVALID_INPUT code)
+    if file.is_dir() {
+        return Err(CliError::InvalidInput(
+            "Cannot publish a directory. Please specify a file path.".to_string(),
+        ));
+    }
+
     // Create spinner for human output
     let spinner = if format == OutputFormat::Human {
         progress::spinner("Reading file...")
@@ -37,10 +44,10 @@ pub async fn publish(
     // Read file content
     let content = std::fs::read(file)?;
 
-    // Guard: reject empty files
+    // Guard: reject empty files (Issue #49: use InvalidInput, not User/AccessDenied)
     if content.is_empty() {
-        return Err(CliError::user(
-            "Cannot publish an empty file. The file has 0 bytes of content.",
+        return Err(CliError::InvalidInput(
+            "Cannot publish an empty file. The file has 0 bytes of content.".to_string(),
         ));
     }
 
@@ -72,6 +79,24 @@ pub async fn publish(
     let price_units = price
         .map(ndl_to_units)
         .unwrap_or_else(|| config.economics.default_price_units());
+
+    // Validate price BEFORE writing any content to disk.
+    // This prevents ghost content from being stored when price validation fails.
+    if price_units > 0 {
+        nodalync_econ::validate_price(price_units).map_err(|e| {
+            // Issue #81: Show HBAR values instead of raw tinybars for user comprehension
+            match &e {
+                nodalync_econ::EconError::PriceTooHigh { price, max } => {
+                    CliError::user(format!(
+                        "Invalid price: {} HBAR exceeds maximum {} HBAR",
+                        tinybars_to_hbar(*price),
+                        tinybars_to_hbar(*max)
+                    ))
+                }
+                _ => CliError::user(format!("Invalid price: {}", e)),
+            }
+        })?;
+    }
 
     // Initialize context with network
     spinner.set_message("Connecting to network...");
@@ -117,24 +142,25 @@ pub async fn publish(
                 existing.economics.price,
             );
             eprintln!(
-                "  Use '{}' to update metadata, or '{}' to create a new version.",
-                "nodalync publish --update".bold(),
+                "  Delete it first with '{}', or create a new version with '{}'.",
+                format!("nodalync delete {}", computed_hash).bold(),
                 "nodalync update".bold(),
             );
             if crate::prompt::is_interactive() {
-                if !crate::prompt::confirm("Overwrite existing metadata?")? {
+                if !crate::prompt::confirm("Re-publish with new metadata?")? {
                     return Ok("Cancelled.".to_string());
                 }
             } else {
-                return Err(CliError::user(
-                    "Content already exists. Use --force to overwrite, or 'nodalync update' to create a new version.",
-                ));
+                return Err(CliError::user(format!(
+                    "Content already exists with hash {}. Delete it first with 'nodalync delete {}', or create a new version with 'nodalync update'.",
+                    computed_hash, computed_hash
+                )));
             }
         } else {
             // In JSON mode, always error on re-publish to avoid silent overwrites
             return Err(CliError::user(format!(
-                "Content already exists with hash {}. Use 'nodalync update' to create a new version.",
-                computed_hash
+                "Content already exists with hash {}. Delete it first with 'nodalync delete {}', or create a new version with 'nodalync update'.",
+                computed_hash, computed_hash
             )));
         }
     }
@@ -211,5 +237,216 @@ mod tests {
         .await;
 
         assert!(matches!(result, Err(CliError::FileNotFound(_))));
+    }
+
+    /// Regression test for Issue #16: ghost content on failed publish.
+    ///
+    /// Publishing with an extreme price should fail early (before writing
+    /// content to disk) and leave no content in the store.
+    #[tokio::test]
+    async fn test_publish_extreme_price_no_ghost_content() {
+        std::env::set_var("NODALYNC_PASSWORD", "test_password");
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = setup_config(&temp_dir);
+
+        // Initialize identity first
+        crate::commands::init::init(config.clone(), OutputFormat::Human, false).unwrap();
+
+        // Create a file to publish
+        let file_path = temp_dir.path().join("extreme_price.txt");
+        std::fs::write(&file_path, "Content with extreme price").unwrap();
+
+        // Publish with extreme price (well above MAX_PRICE = 10^16)
+        let result = publish(
+            config.clone(),
+            OutputFormat::Json,
+            &file_path,
+            Some(999_999_999_999_999_999.0), // Extreme price in HBAR
+            Visibility::Shared,
+            None,
+            None,
+        )
+        .await;
+
+        assert!(result.is_err(), "Publish with extreme price should fail");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("price"),
+            "Error should mention price: {}",
+            err_msg
+        );
+        // Issue #81: Error should show HBAR values, not raw tinybars
+        assert!(
+            err_msg.contains("HBAR"),
+            "Price error should show HBAR units, got: {}",
+            err_msg
+        );
+
+        // Verify no content was stored (no ghost content)
+        use nodalync_store::ManifestStore;
+        let ctx = crate::context::NodeContext::local(config).unwrap();
+        let filter = nodalync_store::ManifestFilter::new();
+        let manifests = ctx.ops.state.manifests.list(filter).unwrap();
+        assert!(
+            manifests.is_empty(),
+            "No content should exist after failed publish, found {} items",
+            manifests.len()
+        );
+    }
+
+    /// Regression test for Issue #22/#82: publishing a directory should show a clear error
+    /// with InvalidInput variant (not User/ACCESS_DENIED).
+    #[tokio::test]
+    async fn test_publish_directory_rejected() {
+        std::env::set_var("NODALYNC_PASSWORD", "test_password");
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = setup_config(&temp_dir);
+
+        // Initialize identity first
+        crate::commands::init::init(config.clone(), OutputFormat::Human, false).unwrap();
+
+        // Try to publish a directory
+        let result = publish(
+            config,
+            OutputFormat::Json,
+            temp_dir.path(),
+            None,
+            Visibility::Shared,
+            None,
+            None,
+        )
+        .await;
+
+        assert!(result.is_err(), "Publishing a directory should fail");
+        let err = result.unwrap_err();
+
+        // Issue #82: Should be InvalidInput, not User (which maps to ACCESS_DENIED)
+        assert!(
+            matches!(err, CliError::InvalidInput(_)),
+            "Directory error should be InvalidInput, got: {:?}",
+            err
+        );
+        assert_ne!(
+            err.error_code(),
+            nodalync_types::ErrorCode::AccessDenied,
+            "Directory error code should NOT be ACCESS_DENIED"
+        );
+        assert!(
+            err.to_string().contains("directory"),
+            "Error should mention 'directory', got: {}",
+            err
+        );
+    }
+
+    /// Regression test for Issue #44: duplicate-publish error should reference
+    /// valid commands (delete + update), not nonexistent flags (--force, --update).
+    #[tokio::test]
+    async fn test_duplicate_publish_error_references_valid_commands() {
+        std::env::set_var("NODALYNC_PASSWORD", "test_password");
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = setup_config(&temp_dir);
+
+        // Initialize identity first
+        crate::commands::init::init(config.clone(), OutputFormat::Human, false).unwrap();
+
+        // Create a file to publish
+        let file_path = temp_dir.path().join("duplicate.txt");
+        std::fs::write(&file_path, "Content for duplicate test").unwrap();
+
+        // First publish should succeed
+        let result = publish(
+            config.clone(),
+            OutputFormat::Json,
+            &file_path,
+            None,
+            Visibility::Shared,
+            None,
+            None,
+        )
+        .await;
+        assert!(result.is_ok(), "First publish should succeed: {:?}", result.err());
+
+        // Second publish of same file should fail with actionable error
+        let result = publish(
+            config,
+            OutputFormat::Json,
+            &file_path,
+            None,
+            Visibility::Shared,
+            None,
+            None,
+        )
+        .await;
+        assert!(result.is_err(), "Duplicate publish should fail");
+        let err_msg = result.unwrap_err().to_string();
+
+        // Should reference valid commands
+        assert!(
+            err_msg.contains("nodalync delete"),
+            "Error should suggest 'nodalync delete', got: {}",
+            err_msg
+        );
+        assert!(
+            err_msg.contains("nodalync update"),
+            "Error should suggest 'nodalync update', got: {}",
+            err_msg
+        );
+
+        // Should NOT reference nonexistent flags
+        assert!(
+            !err_msg.contains("--force"),
+            "Error should not reference nonexistent --force flag, got: {}",
+            err_msg
+        );
+        assert!(
+            !err_msg.contains("--update"),
+            "Error should not reference nonexistent --update flag, got: {}",
+            err_msg
+        );
+    }
+
+    /// Regression test for Issue #49: empty file error should use InvalidInput,
+    /// not User/ACCESS_DENIED error code.
+    #[tokio::test]
+    async fn test_empty_file_uses_correct_error_code() {
+        std::env::set_var("NODALYNC_PASSWORD", "test_password");
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = setup_config(&temp_dir);
+
+        crate::commands::init::init(config.clone(), OutputFormat::Human, false).unwrap();
+
+        // Create an empty file
+        let empty_file = temp_dir.path().join("empty.txt");
+        std::fs::write(&empty_file, b"").unwrap();
+
+        let result = publish(
+            config,
+            OutputFormat::Json,
+            &empty_file,
+            None,
+            Visibility::Shared,
+            None,
+            None,
+        )
+        .await;
+
+        assert!(result.is_err(), "Publishing empty file should fail");
+        let err = result.unwrap_err();
+
+        // Should be InvalidInput, not User (which maps to ACCESS_DENIED)
+        assert!(
+            matches!(err, CliError::InvalidInput(_)),
+            "Empty file error should be InvalidInput, got: {:?}",
+            err
+        );
+        assert_ne!(
+            err.error_code(),
+            nodalync_types::ErrorCode::AccessDenied,
+            "Empty file error code should NOT be ACCESS_DENIED"
+        );
     }
 }

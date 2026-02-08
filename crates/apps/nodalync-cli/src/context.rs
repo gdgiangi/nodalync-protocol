@@ -4,9 +4,11 @@ use std::sync::Arc;
 
 use nodalync_crypto::{PeerId, PrivateKey, PublicKey};
 use nodalync_net::{Network, NetworkConfig, NetworkNode};
-use nodalync_ops::DefaultNodeOperations;
+use nodalync_ops::{ChannelConfig, DefaultNodeOperations, OpsConfig};
 use nodalync_settle::Settlement;
 use nodalync_store::{NodeState, NodeStateConfig};
+
+use crate::config::hbar_to_tinybars;
 
 #[cfg(feature = "hedera-sdk")]
 use nodalync_settle::{HederaConfig, HederaSettlement};
@@ -198,7 +200,16 @@ impl NodeContext {
         // Load identity for network operations (requires password)
         let (private_key, public_key) = if config.network.enabled {
             let password = get_identity_password()?;
-            state.identity.load(&password)?
+            state.identity.load(&password).map_err(|e| {
+                // Issue #46: Surface encryption errors clearly instead of letting
+                // them propagate as generic store errors that confuse users into
+                // thinking their identity doesn't exist (and re-running init).
+                if matches!(e, nodalync_store::StoreError::Encryption(_)) {
+                    CliError::User(e.to_string())
+                } else {
+                    CliError::from(e)
+                }
+            })?
         } else {
             // For local-only, we don't need the private key
             (
@@ -260,27 +271,43 @@ impl NodeContext {
             }
         };
 
-        // Create operations with network and/or settlement
+        // Build OpsConfig from CLI settlement values
+        let ops_config = OpsConfig::default().with_channel(
+            ChannelConfig::default()
+                .with_max_accept_deposit(hbar_to_tinybars(
+                    config.settlement.max_accept_deposit_hbar,
+                ))
+                .with_auto_deposit(config.settlement.auto_deposit)
+                .with_auto_deposit_amount(hbar_to_tinybars(
+                    config.settlement.auto_deposit_amount_hbar,
+                ))
+                .with_auto_deposit_min_balance(hbar_to_tinybars(
+                    config.settlement.min_contract_balance_hbar,
+                )),
+        );
+
+        // Create operations with network and/or settlement using config variants
         let mut ops = match (&network, &settlement) {
-            (Some(net), Some(settle)) => {
-                DefaultNodeOperations::with_defaults_network_and_settlement(
-                    state,
-                    peer_id,
-                    Arc::clone(net) as Arc<dyn Network>,
-                    Arc::clone(settle),
-                )
-            }
-            (Some(net), None) => DefaultNodeOperations::with_defaults_and_network(
+            (Some(net), Some(settle)) => DefaultNodeOperations::with_config_network_and_settlement(
                 state,
                 peer_id,
+                ops_config,
                 Arc::clone(net) as Arc<dyn Network>,
-            ),
-            (None, Some(settle)) => DefaultNodeOperations::with_defaults_and_settlement(
-                state,
-                peer_id,
                 Arc::clone(settle),
             ),
-            (None, None) => DefaultNodeOperations::with_defaults(state, peer_id),
+            (Some(net), None) => DefaultNodeOperations::with_config_and_network(
+                state,
+                peer_id,
+                ops_config,
+                Arc::clone(net) as Arc<dyn Network>,
+            ),
+            (None, Some(settle)) => DefaultNodeOperations::with_config_and_settlement(
+                state,
+                peer_id,
+                ops_config,
+                Arc::clone(settle),
+            ),
+            (None, None) => DefaultNodeOperations::with_config(state, peer_id, ops_config),
         };
 
         // Set the private key for signing payments

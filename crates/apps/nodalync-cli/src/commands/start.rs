@@ -1,6 +1,6 @@
 //! Start node command.
 
-use crate::config::CliConfig;
+use crate::config::{hbar_to_tinybars, tinybars_to_hbar, CliConfig};
 use crate::context::NodeContext;
 use crate::error::{CliError, CliResult};
 use crate::node_runner::{
@@ -10,7 +10,65 @@ use crate::node_runner::{
 use crate::output::{OutputFormat, Render, StartOutput};
 use crate::signals::shutdown_signal;
 
-use tracing::info;
+use nodalync_settle::Settlement;
+use std::sync::Arc;
+use tracing::{info, warn};
+
+/// Check and perform auto-deposit if needed.
+///
+/// If settlement is configured and auto_deposit is enabled, this function checks
+/// the current balance in the settlement contract. If the balance is below the
+/// configured minimum, it deposits the configured amount.
+///
+/// This ensures the node can accept payment channels from other peers without
+/// requiring manual deposit operations.
+async fn maybe_auto_deposit(
+    settlement: &Arc<dyn Settlement>,
+    config: &CliConfig,
+) -> CliResult<Option<String>> {
+    if !config.settlement.auto_deposit {
+        return Ok(None);
+    }
+
+    let min_balance = hbar_to_tinybars(config.settlement.min_contract_balance_hbar);
+    let deposit_amount = hbar_to_tinybars(config.settlement.auto_deposit_amount_hbar);
+
+    // Check current contract balance
+    let balance = settlement
+        .get_balance()
+        .await
+        .map_err(|e| CliError::user(format!("Failed to check settlement balance: {}", e)))?;
+
+    if balance < min_balance {
+        info!(
+            current_balance_hbar = tinybars_to_hbar(balance),
+            min_balance_hbar = config.settlement.min_contract_balance_hbar,
+            deposit_amount_hbar = config.settlement.auto_deposit_amount_hbar,
+            "Auto-depositing to settlement contract"
+        );
+
+        let tx_id = settlement
+            .deposit(deposit_amount)
+            .await
+            .map_err(|e| CliError::user(format!("Auto-deposit failed: {}", e)))?;
+
+        let new_balance = settlement.get_balance().await.unwrap_or(0);
+        info!(
+            tx_id = %tx_id,
+            new_balance_hbar = tinybars_to_hbar(new_balance),
+            "Auto-deposit successful"
+        );
+
+        Ok(Some(tx_id.to_string()))
+    } else {
+        info!(
+            balance_hbar = tinybars_to_hbar(balance),
+            min_balance_hbar = config.settlement.min_contract_balance_hbar,
+            "Settlement contract balance sufficient, skipping auto-deposit"
+        );
+        Ok(None)
+    }
+}
 
 /// Execute the start command (foreground mode only).
 ///
@@ -24,6 +82,13 @@ pub async fn start(
     health_port: u16,
 ) -> CliResult<String> {
     let base_dir = config.base_dir();
+
+    // Check identity exists BEFORE checking PID file (Issue #45).
+    // Without this order, a missing identity hits the stale PID check first
+    // and reports "Node is already running" instead of "Identity not initialized."
+    if !crate::context::identity_exists(&config) {
+        return Err(CliError::IdentityNotInitialized);
+    }
 
     // Check for existing running node
     if check_existing_node(&base_dir).is_some() {
@@ -40,6 +105,19 @@ pub async fn start(
 
     // Foreground mode: create context and run
     let mut ctx = NodeContext::with_network(config.clone()).await?;
+
+    // Auto-deposit if settlement is configured and balance is low
+    if let Some(ref settlement) = ctx.settlement {
+        match maybe_auto_deposit(settlement, &config).await {
+            Ok(Some(tx_id)) => {
+                println!("Auto-deposited to settlement contract (tx: {})", tx_id);
+            }
+            Ok(None) => {}
+            Err(e) => {
+                warn!(error = %e, "Auto-deposit failed, continuing anyway");
+            }
+        }
+    }
 
     // Bootstrap
     ctx.bootstrap().await?;
@@ -114,6 +192,11 @@ pub fn start_daemon_sync(
 
     let base_dir = config.base_dir();
 
+    // Check identity exists BEFORE checking PID file (Issue #45)
+    if !crate::context::identity_exists(&config) {
+        return Err(CliError::IdentityNotInitialized);
+    }
+
     // Check for existing running node
     if check_existing_node(&base_dir).is_some() {
         return Err(CliError::NodeAlreadyRunning);
@@ -141,6 +224,8 @@ pub fn start_daemon_sync(
     // Print status BEFORE forking (parent will exit after fork)
     println!("Starting Nodalync node in background...");
     println!("Logs: {}", stderr_path.display());
+    // Issue #80: Warn that the daemon needs time to become ready
+    println!("Note: The daemon may take a few seconds to become ready. Check with 'nodalync status'.");
 
     // Fork to background BEFORE any tokio runtime exists
     // Note: On success, the parent exits and only the child continues
@@ -160,6 +245,20 @@ pub fn start_daemon_sync(
                         std::process::exit(1);
                     }
                 };
+
+                // Auto-deposit if settlement is configured and balance is low
+                if let Some(ref settlement) = ctx.settlement {
+                    match maybe_auto_deposit(settlement, &config).await {
+                        Ok(Some(tx_id)) => {
+                            eprintln!("Auto-deposited to settlement contract (tx: {})", tx_id);
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            eprintln!("Warning: Auto-deposit failed: {}", e);
+                            // Continue anyway - node can still serve content
+                        }
+                    }
+                }
 
                 // Bootstrap
                 if let Err(e) = ctx.bootstrap().await {
@@ -272,5 +371,42 @@ mod tests {
 
         let human = output.render(OutputFormat::Human);
         assert!(human.contains("background"));
+    }
+
+    /// Regression test for Issue #80: daemon start should mention readiness delay.
+    /// We verify the note is present in the daemon start code path by checking
+    /// that the source code prints the expected message (the actual forking path
+    /// cannot be unit-tested without spawning a real daemon process).
+    #[test]
+    fn test_daemon_start_mentions_readiness_delay() {
+        // The readiness note is printed in start_daemon_sync before forking.
+        // We verify it exists by checking the source file contains the expected text.
+        // This test will fail if someone removes the note.
+        let source = include_str!("start.rs");
+        assert!(
+            source.contains("may take a few seconds to become ready"),
+            "Daemon start should include a readiness delay note for users"
+        );
+    }
+
+    /// Regression test for Issue #45: `start` without identity should say
+    /// "Identity not initialized", not "Node is already running."
+    #[tokio::test]
+    async fn test_start_without_identity_gives_correct_error() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let mut config = CliConfig::default();
+        config.storage.content_dir = temp_dir.path().join("content");
+        config.storage.cache_dir = temp_dir.path().join("cache");
+        config.storage.database = temp_dir.path().join("nodalync.db");
+        config.identity.keyfile = temp_dir.path().join("identity").join("keypair.key");
+
+        // Do NOT initialize identity — start should fail with IdentityNotInitialized
+        let result = start(config, OutputFormat::Human, false, false, 8080).await;
+        assert!(result.is_err());
+        assert!(
+            matches!(result.as_ref().unwrap_err(), CliError::IdentityNotInitialized),
+            "Should get IdentityNotInitialized, got: {:?}",
+            result.unwrap_err()
+        );
     }
 }

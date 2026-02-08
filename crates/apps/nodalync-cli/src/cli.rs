@@ -83,7 +83,7 @@ pub enum Commands {
         file: PathBuf,
 
         /// Price per query in HBAR (default from config).
-        #[arg(short, long)]
+        #[arg(short, long, allow_hyphen_values = true, value_parser = parse_non_negative_price)]
         price: Option<f64>,
 
         /// Visibility level.
@@ -135,7 +135,7 @@ pub enum Commands {
         title: Option<String>,
 
         /// Price per query in HBAR (defaults to previous version's price).
-        #[arg(short, long)]
+        #[arg(short, long, allow_hyphen_values = true, value_parser = parse_non_negative_price)]
         price: Option<f64>,
     },
 
@@ -214,7 +214,7 @@ pub enum Commands {
         title: Option<String>,
 
         /// Price if publishing (optional).
-        #[arg(short, long)]
+        #[arg(short, long, allow_hyphen_values = true, value_parser = parse_non_negative_price)]
         price: Option<f64>,
 
         /// Publish immediately after creation.
@@ -522,6 +522,25 @@ impl From<ContentTypeArg> for nodalync_types::ContentType {
     }
 }
 
+/// Minimum non-zero price in HBAR (1 tinybar = 0.00000001 HBAR).
+const MIN_NONZERO_PRICE_HBAR: f64 = 0.00000001;
+
+/// Parse a price value, rejecting negative numbers and sub-tinybar amounts.
+fn parse_non_negative_price(s: &str) -> Result<f64, String> {
+    let value: f64 = s.parse().map_err(|_| format!("'{}' is not a valid price", s))?;
+    if value < 0.0 {
+        return Err("Price cannot be negative".to_string());
+    }
+    // Issue #48: reject positive prices that round to 0 tinybars
+    if value > 0.0 && value < MIN_NONZERO_PRICE_HBAR {
+        return Err(format!(
+            "Price {} HBAR is too small — minimum non-zero price is {} HBAR (1 tinybar)",
+            value, MIN_NONZERO_PRICE_HBAR
+        ));
+    }
+    Ok(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -543,5 +562,76 @@ mod tests {
     fn test_content_type_conversion() {
         let ct: nodalync_types::ContentType = ContentTypeArg::L3.into();
         assert_eq!(ct, nodalync_types::ContentType::L3);
+    }
+
+    /// Regression test for Issue #21: negative price should show clear error.
+    #[test]
+    fn test_negative_price_rejected() {
+        let result = parse_non_negative_price("-100");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Price cannot be negative");
+    }
+
+    #[test]
+    fn test_valid_price_accepted() {
+        assert_eq!(parse_non_negative_price("0").unwrap(), 0.0);
+        assert_eq!(parse_non_negative_price("0.10").unwrap(), 0.10);
+        assert_eq!(parse_non_negative_price("100").unwrap(), 100.0);
+    }
+
+    #[test]
+    fn test_invalid_price_format() {
+        let result = parse_non_negative_price("abc");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not a valid price"));
+    }
+
+    /// Regression test for Issue #21: verify clap passes negative price to
+    /// value_parser instead of interpreting it as a flag.
+    #[test]
+    fn test_clap_negative_price_error_message() {
+        let result = Cli::try_parse_from([
+            "nodalync",
+            "publish",
+            "file.txt",
+            "--price",
+            "-100",
+        ]);
+        assert!(result.is_err());
+        let err_str = result.unwrap_err().to_string();
+        assert!(
+            err_str.contains("Price cannot be negative"),
+            "Clap should report 'Price cannot be negative', got: {}",
+            err_str
+        );
+    }
+
+    /// Regression test for Issue #48: price that rounds to 0 tinybars should be rejected.
+    #[test]
+    fn test_sub_tinybar_price_rejected() {
+        let result = parse_non_negative_price("0.000000001");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err();
+        assert!(
+            err_msg.contains("too small"),
+            "Error should say price is too small, got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_minimum_valid_nonzero_price() {
+        // 0.00000001 HBAR = 1 tinybar, should be accepted
+        let result = parse_non_negative_price("0.00000001");
+        assert!(result.is_ok(), "1 tinybar price should be accepted");
+        assert_eq!(result.unwrap(), 0.00000001);
+    }
+
+    #[test]
+    fn test_zero_price_still_allowed() {
+        // Price of exactly 0 is free content and should be allowed
+        let result = parse_non_negative_price("0");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 0.0);
     }
 }

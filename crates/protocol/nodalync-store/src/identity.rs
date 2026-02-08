@@ -202,7 +202,10 @@ impl IdentityStore {
             .map_err(|e| StoreError::encryption(format!("Cipher init failed: {}", e)))?;
         let plaintext = cipher
             .decrypt(nonce, ciphertext.as_ref())
-            .map_err(|_| StoreError::encryption("Decryption failed - wrong password?"))?;
+            .map_err(|_| StoreError::encryption(
+                "Decryption failed — the password does not match the identity created during 'nodalync init'. \
+                 Set NODALYNC_PASSWORD to the password you used when initializing."
+            ))?;
 
         // Reconstruct private key
         if plaintext.len() != 32 {
@@ -383,6 +386,29 @@ mod tests {
         // Try loading with wrong password
         let result = store.load("wrong_password");
         assert!(result.is_err());
+    }
+
+    /// Regression test for Issue #43: wrong-password error should be actionable.
+    #[test]
+    fn test_wrong_password_error_message_is_actionable() {
+        let temp_dir = TempDir::new().unwrap();
+        let store = IdentityStore::new(temp_dir.path()).unwrap();
+
+        store.generate("correct_password").unwrap();
+
+        let result = store.load("wrong_password");
+        let err_msg = result.unwrap_err().to_string();
+
+        assert!(
+            err_msg.contains("nodalync init"),
+            "Error should reference 'nodalync init', got: {}",
+            err_msg
+        );
+        assert!(
+            err_msg.contains("NODALYNC_PASSWORD"),
+            "Error should mention NODALYNC_PASSWORD env var, got: {}",
+            err_msg
+        );
     }
 
     #[test]

@@ -125,6 +125,7 @@ publish-test:
 
 # Check connected peers
 peers:
+	@command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required. Install with: brew install jq (macOS) or apt install jq (Linux)"; exit 1; }
 	@for node in node1 node2 node3; do \
 		echo "$$node peers:"; \
 		docker exec -e NODALYNC_PASSWORD=testpassword nodalync-$$node nodalync status --format json 2>/dev/null | jq -r '.connected_peers // "unknown"'; \

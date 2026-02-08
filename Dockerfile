@@ -83,5 +83,8 @@ ENV RUST_LOG=nodalync=info
 
 WORKDIR /home/nodalync
 
+# Expose libp2p network port and HTTP health endpoint
+EXPOSE 9000 8080
+
 ENTRYPOINT ["nodalync"]
 CMD ["--help"]

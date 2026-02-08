@@ -24,8 +24,9 @@ fn main() {
     } = &cli.command
     {
         // Handle daemon mode synchronously before any async runtime exists
+        let format: OutputFormat = cli.format.into();
         if let Err(e) = handle_daemon_start(&cli, *health, *health_port) {
-            print_error(&e);
+            print_error(&e, format);
             std::process::exit(e.exit_code());
         }
         return;
@@ -51,28 +52,37 @@ async fn async_main(cli: Cli) {
             .init();
     }
 
+    // Extract format before run() consumes cli
+    let format: OutputFormat = cli.format.into();
+
     // Run the command
     if let Err(e) = run(cli).await {
-        print_error(&e);
+        print_error(&e, format);
         std::process::exit(e.exit_code());
     }
 }
 
 /// Print a user-friendly error message with error code and recovery hint.
-fn print_error(e: &CliError) {
-    let code = e.error_code();
-
-    // Error line with code
-    eprintln!(
-        "{} [{}]: {}",
-        "Error".red().bold(),
-        code.to_string().yellow(),
-        e
-    );
-
-    // Suggestion if available (prefer CLI-specific hints over protocol-level ones)
-    if let Some(suggestion) = e.suggestion() {
-        eprintln!("{}: {}", "Hint".cyan(), suggestion);
+///
+/// When format is JSON, emits a structured JSON error object so machine
+/// consumers can reliably parse error responses (Issue #83).
+fn print_error(e: &CliError, format: OutputFormat) {
+    match format {
+        OutputFormat::Json => {
+            eprintln!("{}", e.to_json());
+        }
+        OutputFormat::Human => {
+            let code = e.error_code();
+            eprintln!(
+                "{} [{}]: {}",
+                "Error".red().bold(),
+                code.to_string().yellow(),
+                e
+            );
+            if let Some(suggestion) = e.suggestion() {
+                eprintln!("{}: {}", "Hint".cyan(), suggestion);
+            }
+        }
     }
 }
 

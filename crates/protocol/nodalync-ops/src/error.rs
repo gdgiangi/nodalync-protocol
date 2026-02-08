@@ -136,6 +136,15 @@ pub enum OpsError {
     #[error("channel not open")]
     ChannelNotOpen,
 
+    /// Channel deposit is below the minimum required.
+    #[error("channel deposit {provided} tinybars below minimum {minimum} tinybars")]
+    ChannelDepositTooLow {
+        /// The deposit amount provided.
+        provided: u64,
+        /// The minimum required deposit.
+        minimum: u64,
+    },
+
     // =========================================================================
     // Settlement Errors
     // =========================================================================
@@ -223,6 +232,7 @@ impl OpsError {
             Self::ChannelNotFound => ErrorCode::ChannelNotFound,
             Self::ChannelAlreadyExists => ErrorCode::ChannelNotFound, // Closest match
             Self::ChannelNotOpen => ErrorCode::ChannelClosed,
+            Self::ChannelDepositTooLow { .. } => ErrorCode::PaymentInvalid,
 
             // Settlement errors
             Self::SettlementFailed(_) => ErrorCode::InternalError,

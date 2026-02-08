@@ -23,7 +23,7 @@ Command-line interface for interacting with a Nodalync node. User-facing binary.
 # Initialize new identity
 nodalync init
 > Identity created: ndl1abc123...
-> Configuration saved to ~/.nodalync/config.toml
+> Configuration saved to <data_dir>/config.toml
 
 # Show identity
 nodalync whoami
@@ -66,7 +66,7 @@ nodalync versions <hash>
 > v2: QmAbc... (2025-01-20) - shared [latest]
 
 # Change visibility
-nodalync visibility <hash> <private|unlisted|shared>
+nodalync visibility <hash> --level <private|unlisted|shared>
 > Visibility updated: QmXyz... → shared
 
 # Delete (local only)
@@ -164,12 +164,12 @@ nodalync settle
 
 ```bash
 # Open payment channel with peer
-nodalync open-channel <peer-id> --deposit 1.0
+nodalync open-channel <peer-id> --deposit 100
 > Channel opened: QmChan...
 > Peer: ndl1abc123...
 > State: Open
-> My Balance: 1.00 HBAR
-> Their Balance: 1.00 HBAR
+> My Balance: 100.00 HBAR
+> Their Balance: 100.00 HBAR
 
 # List all payment channels
 nodalync list-channels
@@ -257,9 +257,9 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
     
-    /// Path to config file
-    #[arg(short, long, default_value = "~/.nodalync/config.toml")]
-    pub config: PathBuf,
+    /// Path to config file (default: <data_dir>/config.toml)
+    #[arg(short, long)]
+    pub config: Option<PathBuf>,
     
     /// Output format
     #[arg(short, long, default_value = "human")]
@@ -418,30 +418,35 @@ fn main() {
 
 ## Configuration
 
-```toml
-# ~/.nodalync/config.toml
+Configuration is stored in a platform-specific data directory (set `NODALYNC_DATA_DIR` to override):
 
+- **macOS**: `~/Library/Application Support/io.nodalync.nodalync/config.toml`
+- **Linux**: `~/.local/share/nodalync/config.toml`
+- **Windows**: `%APPDATA%\nodalync\nodalync\config.toml`
+
+```toml
 [identity]
-keyfile = "~/.nodalync/identity/keypair.key"
+keyfile = "<data_dir>/identity/keypair.key"
 
 [storage]
-content_dir = "~/.nodalync/content"
-database = "~/.nodalync/nodalync.db"
-cache_dir = "~/.nodalync/cache"
+content_dir = "<data_dir>/content"
+database = "<data_dir>/nodalync.db"
+cache_dir = "<data_dir>/cache"
 cache_max_size_mb = 1000
 
 [network]
+enabled = true
 listen_addresses = ["/ip4/0.0.0.0/tcp/9000"]
 bootstrap_nodes = [
-    "/dns4/bootstrap1.nodalync.io/tcp/9000/p2p/...",
+    "/dns4/nodalync-bootstrap.eastus.azurecontainer.io/tcp/9000/p2p/12D3KooWMqrUmZm4e1BJTRMWqKHCe1TSX9Vu83uJLEyCGr2dUjYm",
 ]
 
 [settlement]
 network = "hedera-testnet"
-account_id = "0.0.12345"
+auto_deposit = false
 
 [economics]
-default_price = 0.10  # In HBAR
+default_price = 0.1  # In HBAR
 auto_settle_threshold = 100.0  # In HBAR
 
 [display]

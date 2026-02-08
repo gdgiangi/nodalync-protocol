@@ -10,7 +10,7 @@ CONFIG_DIR="$DOCKER_DIR/config"
 DATA_DIR="$DOCKER_DIR/data"
 
 # Default settings
-IMAGE="${NODALYNC_IMAGE:-gabrielgiangi/nodalync:latest}"
+IMAGE="${NODALYNC_IMAGE:-nodalync:latest}"
 PASSWORD="${NODALYNC_PASSWORD:-testpassword}"
 SETTLEMENT_NETWORK="${SETTLEMENT_NETWORK:-mock}"
 CONTRACT_ID="${HEDERA_CONTRACT_ID:-0.0.7729011}"

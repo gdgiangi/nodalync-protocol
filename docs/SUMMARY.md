@@ -5,6 +5,7 @@
 # Getting Started
 
 - [Quick Start](./quickstart.md)
+- [Troubleshooting](./TROUBLESHOOTING.md)
 - [FAQ](./FAQ.md)
 
 # Protocol

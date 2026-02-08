@@ -56,6 +56,11 @@ where
     ///
     /// Required for paid queries - without this, only free content can be queried.
     private_key: Option<PrivateKey>,
+    /// Timestamp of the last auto-deposit for rate limiting.
+    ///
+    /// Used to prevent rapid deposits from malicious channel open spam.
+    /// This is a global cooldown (not per-peer) for simplicity.
+    last_auto_deposit: Option<std::time::Instant>,
 }
 
 impl<V, E> NodeOperations<V, E>
@@ -80,6 +85,7 @@ where
             network: None,
             settlement: None,
             private_key: None,
+            last_auto_deposit: None,
         }
     }
 
@@ -101,6 +107,7 @@ where
             network: Some(network),
             settlement: None,
             private_key: None,
+            last_auto_deposit: None,
         }
     }
 
@@ -122,6 +129,7 @@ where
             network: None,
             settlement: Some(settlement),
             private_key: None,
+            last_auto_deposit: None,
         }
     }
 
@@ -144,6 +152,7 @@ where
             network: Some(network),
             settlement: Some(settlement),
             private_key: None,
+            last_auto_deposit: None,
         }
     }
 
@@ -225,6 +234,32 @@ where
     /// Remove the private key.
     pub fn clear_private_key(&mut self) {
         self.private_key = None;
+    }
+
+    /// Mark that an auto-deposit was just performed.
+    ///
+    /// This sets the cooldown timestamp to prevent rapid deposits.
+    pub fn mark_auto_deposit(&mut self) {
+        self.last_auto_deposit = Some(std::time::Instant::now());
+    }
+
+    /// Get the timestamp of the last auto-deposit.
+    pub fn last_auto_deposit(&self) -> Option<std::time::Instant> {
+        self.last_auto_deposit
+    }
+
+    /// Check if an auto-deposit is allowed based on the cooldown.
+    ///
+    /// Returns true if no deposit has been made, or if the cooldown has elapsed.
+    pub fn can_auto_deposit(&self) -> bool {
+        match self.last_auto_deposit {
+            None => true,
+            Some(last) => {
+                let cooldown =
+                    std::time::Duration::from_secs(self.config.channel.auto_deposit_cooldown_secs);
+                last.elapsed() >= cooldown
+            }
+        }
     }
 }
 

@@ -15,7 +15,13 @@ pub fn whoami(config: CliConfig, format: OutputFormat) -> CliResult<String> {
 
     // Get libp2p peer ID (requires decrypting the private key)
     let password = get_identity_password()?;
-    let (private_key, _) = ctx.ops.state.identity.load(&password)?;
+    let (private_key, _) = ctx.ops.state.identity.load(&password).map_err(|e| {
+        if matches!(e, nodalync_store::StoreError::Encryption(_)) {
+            crate::error::CliError::User(e.to_string())
+        } else {
+            crate::error::CliError::from(e)
+        }
+    })?;
     let libp2p_peer_id = get_libp2p_peer_id(&private_key)?;
 
     let output = WhoamiOutput {
@@ -87,5 +93,54 @@ mod tests {
 
         let output = result.unwrap();
         assert!(output.contains("\"peer_id\""));
+    }
+
+    /// Regression test for Issue #46: wrong password should surface as a clear
+    /// decryption error, not "Identity not initialized."
+    ///
+    /// Tests the identity load path directly to avoid env var race conditions
+    /// with parallel tests.
+    #[test]
+    fn test_wrong_password_surfaces_decryption_error_not_identity_missing() {
+        let temp_dir = TempDir::new().unwrap();
+        let identity_dir = temp_dir.path().join("identity");
+        std::fs::create_dir_all(&identity_dir).unwrap();
+
+        let store = nodalync_store::IdentityStore::new(&identity_dir).unwrap();
+
+        // Generate identity with one password
+        store.generate("correct_password").unwrap();
+
+        // Try to load with wrong password
+        let result = store.load("wrong_password");
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        let err_msg = err.to_string();
+
+        // The error should surface as Encryption, not IdentityNotFound
+        assert!(
+            matches!(err, nodalync_store::StoreError::Encryption(_)),
+            "Wrong password should give Encryption error, got: {:?}",
+            err
+        );
+        assert!(
+            err_msg.contains("password"),
+            "Error should mention password, got: {}",
+            err_msg
+        );
+
+        // Verify our CLI mapping: Encryption errors become CliError::User, not
+        // CliError::IdentityNotInitialized
+        let cli_err: crate::error::CliError = if matches!(err, nodalync_store::StoreError::Encryption(_)) {
+            crate::error::CliError::User(err.to_string())
+        } else {
+            crate::error::CliError::from(err)
+        };
+        assert!(
+            !cli_err.to_string().contains("Identity not initialized"),
+            "CLI error should NOT say 'Identity not initialized', got: {}",
+            cli_err
+        );
     }
 }

@@ -383,6 +383,43 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    /// Regression test for Issue #16: ghost content on failed publish.
+    ///
+    /// When publish_content fails due to extreme price, the manifest
+    /// should remain Private and price should stay at 0.
+    #[tokio::test]
+    async fn test_publish_extreme_price_no_ghost_content() {
+        let (mut ops, _temp) = create_test_ops();
+
+        let content = b"Content that should not become ghost";
+        let meta = Metadata::new("Ghost Test", content.len() as u64);
+        let hash = ops.create_content(content, meta).unwrap();
+
+        // Verify content exists as Private with price=0 before publish
+        let manifest_before = ops.state.manifests.load(&hash).unwrap().unwrap();
+        assert_eq!(manifest_before.visibility, Visibility::Private);
+        assert_eq!(manifest_before.economics.price, 0);
+
+        // Attempt to publish with extreme price (above MAX_PRICE)
+        let extreme_price = u64::MAX;
+        let result = ops
+            .publish_content(&hash, Visibility::Shared, extreme_price)
+            .await;
+        assert!(result.is_err(), "Publish with extreme price should fail");
+
+        // Verify manifest was NOT changed to Shared (no ghost content)
+        let manifest_after = ops.state.manifests.load(&hash).unwrap().unwrap();
+        assert_eq!(
+            manifest_after.visibility,
+            Visibility::Private,
+            "Manifest should remain Private after failed publish"
+        );
+        assert_eq!(
+            manifest_after.economics.price, 0,
+            "Price should remain 0 after failed publish"
+        );
+    }
+
     #[tokio::test]
     async fn test_publish_requires_ownership() {
         let (mut ops, _temp) = create_test_ops();
