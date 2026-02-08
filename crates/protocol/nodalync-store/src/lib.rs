@@ -378,6 +378,17 @@ impl NodeState {
                 "Failed to store announcement"
             );
         }
+
+        // Enforce maximum announcement count (keep most recent)
+        const MAX_ANNOUNCEMENTS: i64 = 10_000;
+        if let Err(e) = conn.execute(
+            "DELETE FROM announcements WHERE hash NOT IN (
+                SELECT hash FROM announcements ORDER BY received_at DESC LIMIT ?1
+            )",
+            [MAX_ANNOUNCEMENTS],
+        ) {
+            tracing::warn!(error = %e, "Failed to enforce announcement cap");
+        }
     }
 
     /// Get a stored announcement by hash.
@@ -832,5 +843,50 @@ mod tests {
 
         // Fresh announcement should not be deleted
         assert!(count_after >= count_before - deleted);
+    }
+
+    #[test]
+    fn test_announcement_cap_enforced() {
+        // Regression test: store_announcement() must enforce a maximum count
+        // to prevent unbounded growth (DoS vector).
+        use nodalync_types::{ContentType, L1Summary};
+
+        let state = NodeState::open_in_memory().unwrap();
+
+        // Insert announcements directly via SQL to bypass the cap for setup,
+        // then verify the cap logic works by calling store_announcement.
+        {
+            let conn = state.conn.lock().unwrap();
+            for i in 0..10_002u32 {
+                let hash = content_hash(&i.to_be_bytes());
+                conn.execute(
+                    "INSERT OR REPLACE INTO announcements (hash, content_type, title, l1_summary, price, addresses, received_at)
+                     VALUES (?1, 0, ?2, '{}', 100, '[]', ?3)",
+                    rusqlite::params![hash.0.as_slice(), format!("Ann {}", i), i as i64],
+                ).unwrap();
+            }
+        }
+
+        assert_eq!(state.announcement_count(), 10_002);
+
+        // Now store one more via the public API, which triggers the cap
+        let hash = content_hash(b"trigger-cap");
+        let announce = AnnouncePayload {
+            hash,
+            content_type: ContentType::L0,
+            title: "Trigger Cap".to_string(),
+            l1_summary: L1Summary::empty(hash),
+            price: 100,
+            addresses: vec![],
+            publisher_peer_id: None,
+        };
+        state.store_announcement(announce);
+
+        // Should have been capped to MAX_ANNOUNCEMENTS (10,000)
+        assert!(
+            state.announcement_count() <= 10_000,
+            "Announcement count should be capped at 10,000, got {}",
+            state.announcement_count()
+        );
     }
 }
