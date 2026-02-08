@@ -40,6 +40,8 @@ impl RetryPolicy {
     }
 
     /// Calculate the delay for a given attempt (0-indexed).
+    ///
+    /// Uses exponential backoff with +-25% jitter to prevent thundering herd.
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
         if attempt == 0 {
             return Duration::ZERO;
@@ -47,10 +49,21 @@ impl RetryPolicy {
 
         // Exponential backoff: base_delay * 2^(attempt-1)
         let multiplier = 2u64.saturating_pow(attempt - 1);
-        let delay = self.base_delay.saturating_mul(multiplier as u32);
+        let base = self.base_delay.saturating_mul(multiplier as u32);
 
         // Cap at max_delay
-        std::cmp::min(delay, self.max_delay)
+        let capped = std::cmp::min(base, self.max_delay);
+
+        // Add +-25% jitter
+        let jitter_range = capped.as_millis() as u64 / 4;
+        if jitter_range == 0 {
+            return capped;
+        }
+        let jitter = rand::random::<u64>() % (jitter_range * 2);
+        let jittered_ms = (capped.as_millis() as u64)
+            .saturating_sub(jitter_range)
+            .saturating_add(jitter);
+        Duration::from_millis(jittered_ms)
     }
 
     /// Execute an async operation with retry logic.
@@ -124,20 +137,47 @@ mod tests {
         // First attempt has no delay
         assert_eq!(policy.delay_for_attempt(0), Duration::ZERO);
 
-        // Exponential backoff
-        assert_eq!(policy.delay_for_attempt(1), Duration::from_millis(100));
-        assert_eq!(policy.delay_for_attempt(2), Duration::from_millis(200));
-        assert_eq!(policy.delay_for_attempt(3), Duration::from_millis(400));
-        assert_eq!(policy.delay_for_attempt(4), Duration::from_millis(800));
+        // Exponential backoff with +-25% jitter
+        // Base: 100ms, range: [75, 125]
+        let d1 = policy.delay_for_attempt(1);
+        assert!(d1 >= Duration::from_millis(75) && d1 <= Duration::from_millis(125),
+            "Attempt 1 delay {:?} should be within +-25% of 100ms", d1);
+
+        // Base: 200ms, range: [150, 250]
+        let d2 = policy.delay_for_attempt(2);
+        assert!(d2 >= Duration::from_millis(150) && d2 <= Duration::from_millis(250),
+            "Attempt 2 delay {:?} should be within +-25% of 200ms", d2);
+
+        // Base: 400ms, range: [300, 500]
+        let d3 = policy.delay_for_attempt(3);
+        assert!(d3 >= Duration::from_millis(300) && d3 <= Duration::from_millis(500),
+            "Attempt 3 delay {:?} should be within +-25% of 400ms", d3);
     }
 
     #[test]
     fn test_delay_capped_at_max() {
         let policy = RetryPolicy::new(10, Duration::from_millis(100), Duration::from_millis(500));
 
-        // Should be capped at max_delay
-        assert_eq!(policy.delay_for_attempt(5), Duration::from_millis(500));
-        assert_eq!(policy.delay_for_attempt(10), Duration::from_millis(500));
+        // Should be capped at max_delay (with jitter: +-25% of 500 = [375, 625])
+        let d5 = policy.delay_for_attempt(5);
+        assert!(d5 >= Duration::from_millis(375) && d5 <= Duration::from_millis(625),
+            "Attempt 5 delay {:?} should be within +-25% of 500ms cap", d5);
+
+        let d10 = policy.delay_for_attempt(10);
+        assert!(d10 >= Duration::from_millis(375) && d10 <= Duration::from_millis(625),
+            "Attempt 10 delay {:?} should be within +-25% of 500ms cap", d10);
+    }
+
+    #[test]
+    fn test_jitter_varies_between_calls() {
+        // Verify that jitter actually produces different values
+        let policy = RetryPolicy::new(5, Duration::from_millis(1000), Duration::from_secs(60));
+
+        let mut delays: Vec<Duration> = (0..10).map(|_| policy.delay_for_attempt(1)).collect();
+        delays.dedup();
+        // With 1000ms base and 250ms jitter range, it's extremely unlikely
+        // all 10 values are identical
+        assert!(delays.len() > 1, "Jitter should produce varying delays");
     }
 
     #[tokio::test]
