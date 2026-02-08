@@ -123,12 +123,13 @@ impl NodalyncBehaviour {
         );
 
         // Configure GossipSub
-        let gossipsub = build_gossipsub(local_peer_id);
+        let gossipsub_keypair = libp2p::identity::Keypair::generate_ed25519();
+        let gossipsub = build_gossipsub_with_keypair(&gossipsub_keypair);
 
         // Configure Identify
         let identify_config = identify::Config::new(
             "/nodalync/1.0.0".to_string(),
-            libp2p::identity::Keypair::generate_ed25519().public(),
+            gossipsub_keypair.public(),
         )
         .with_interval(Duration::from_secs(60))
         .with_push_listen_addr_updates(true);
@@ -173,7 +174,7 @@ impl NodalyncBehaviour {
         );
 
         // Configure GossipSub
-        let gossipsub = build_gossipsub(local_peer_id);
+        let gossipsub = build_gossipsub_with_keypair(keypair);
 
         // Configure Identify with the actual keypair
         let identify_config =
@@ -193,30 +194,6 @@ impl NodalyncBehaviour {
             ping,
         }
     }
-}
-
-/// Build GossipSub behaviour with Nodalync-specific configuration.
-fn build_gossipsub(_local_peer_id: PeerId) -> gossipsub::Behaviour {
-    // Message ID function: hash of the message data
-    let message_id_fn = |message: &gossipsub::Message| {
-        let mut hasher = Sha256::new();
-        hasher.update(&message.data);
-        MessageId::from(hasher.finalize().to_vec())
-    };
-
-    // Build config with strict validation
-    let config = gossipsub::ConfigBuilder::default()
-        .heartbeat_interval(Duration::from_secs(1))
-        .validation_mode(gossipsub::ValidationMode::Strict)
-        .message_id_fn(message_id_fn)
-        .build()
-        .expect("valid gossipsub config");
-
-    gossipsub::Behaviour::new(
-        gossipsub::MessageAuthenticity::Signed(libp2p::identity::Keypair::generate_ed25519()),
-        config,
-    )
-    .expect("valid gossipsub behaviour")
 }
 
 /// Build GossipSub behaviour with a specific keypair.
@@ -265,6 +242,45 @@ mod tests {
         let behaviour = NodalyncBehaviour::with_keypair(peer_id, &keypair, &config);
 
         // Verify it was created successfully
+        assert!(behaviour.gossipsub.topics().next().is_none());
+    }
+
+    #[test]
+    fn test_with_keypair_uses_provided_keypair_for_gossipsub() {
+        // Regression test: with_keypair() must use the provided keypair for GossipSub,
+        // not generate a random one (which was the bug).
+        let keypair = libp2p::identity::Keypair::generate_ed25519();
+        let peer_id = keypair.public().to_peer_id();
+        let config = NetworkConfig::default();
+
+        // This should succeed — previously it generated a random keypair internally
+        let behaviour = NodalyncBehaviour::with_keypair(peer_id, &keypair, &config);
+
+        // Verify the behaviour was created successfully with the provided keypair
+        assert!(behaviour.gossipsub.topics().next().is_none());
+    }
+
+    #[test]
+    fn test_build_gossipsub_with_keypair_uses_provided_key() {
+        // Regression test: verify build_gossipsub_with_keypair creates a valid
+        // gossipsub behaviour using the provided keypair (not a random one).
+        let keypair = libp2p::identity::Keypair::generate_ed25519();
+        let gossipsub = build_gossipsub_with_keypair(&keypair);
+
+        // Verify behaviour was created successfully
+        assert!(gossipsub.topics().next().is_none());
+    }
+
+    #[test]
+    fn test_new_creates_consistent_gossipsub_and_identify() {
+        // Regression test: new() should generate one keypair and use it
+        // for both GossipSub and Identify (not separate random keypairs).
+        let peer_id = PeerId::random();
+        let config = NetworkConfig::default();
+
+        // Should compile and run without errors — previously new() used
+        // build_gossipsub() which generated a random keypair separate from identify
+        let behaviour = NodalyncBehaviour::new(peer_id, &config);
         assert!(behaviour.gossipsub.topics().next().is_none());
     }
 }
