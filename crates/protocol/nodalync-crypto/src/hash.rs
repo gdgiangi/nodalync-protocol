@@ -2,7 +2,7 @@
 //!
 //! Content hashes are computed using SHA-256 with domain separation:
 //! ```text
-//! ContentHash(content) = H(0x00 || len(content) as u64be || content)
+//! ContentHash(content) = H(0x01 || len(content) as u64be || content)
 //! ```
 
 use sha2::{Digest, Sha256};
@@ -10,7 +10,9 @@ use sha2::{Digest, Sha256};
 use crate::Hash;
 
 /// Domain separator for content hashing (Spec Appendix A.2)
-const DOMAIN_CONTENT: u8 = 0x00;
+/// NOTE: Changed from 0x00 to 0x01 to avoid collision with DOMAIN_KEY (0x00) in identity.rs.
+/// This is a breaking change for content hashes (acceptable on testnet).
+const DOMAIN_CONTENT: u8 = 0x01;
 
 /// Compute the content hash of the given bytes.
 ///
@@ -88,5 +90,28 @@ mod tests {
         let hash = content_hash(content);
         assert!(verify_content(content, &hash));
         assert!(!verify_content(b"tampered", &hash));
+    }
+
+    #[test]
+    fn test_domain_separator_no_collision_with_key_domain() {
+        // Regression test: DOMAIN_CONTENT (0x01) must differ from DOMAIN_KEY (0x00)
+        // so that content hashes and PeerId key hashes never collide for the same input.
+        use sha2::{Digest, Sha256};
+
+        let input = [0u8; 32]; // Same input bytes
+
+        // Content hash uses DOMAIN_CONTENT (0x01)
+        let content_h = content_hash(&input);
+
+        // Key hash uses DOMAIN_KEY (0x00) — reproduce the identity hash logic
+        let mut hasher = Sha256::new();
+        hasher.update([0x00u8]); // DOMAIN_KEY
+        hasher.update(input);
+        let key_h: [u8; 32] = hasher.finalize().into();
+
+        assert_ne!(
+            content_h.0, key_h,
+            "Content hash and key hash must differ for the same input due to different domain separators"
+        );
     }
 }
