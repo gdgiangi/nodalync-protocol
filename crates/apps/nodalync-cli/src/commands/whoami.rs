@@ -132,11 +132,12 @@ mod tests {
 
         // Verify our CLI mapping: Encryption errors become CliError::User, not
         // CliError::IdentityNotInitialized
-        let cli_err: crate::error::CliError = if matches!(err, nodalync_store::StoreError::Encryption(_)) {
-            crate::error::CliError::User(err.to_string())
-        } else {
-            crate::error::CliError::from(err)
-        };
+        let cli_err: crate::error::CliError =
+            if matches!(err, nodalync_store::StoreError::Encryption(_)) {
+                crate::error::CliError::User(err.to_string())
+            } else {
+                crate::error::CliError::from(err)
+            };
         assert!(
             !cli_err.to_string().contains("Identity not initialized"),
             "CLI error should NOT say 'Identity not initialized', got: {}",

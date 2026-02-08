@@ -235,8 +235,8 @@ mod tests {
         let err = CliError::FileNotFound("/tmp/missing.txt".to_string());
         let json_str = err.to_json();
 
-        let parsed: serde_json::Value = serde_json::from_str(&json_str)
-            .expect("Error JSON should be valid JSON");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json_str).expect("Error JSON should be valid JSON");
 
         let error_obj = parsed.get("error").expect("Should have 'error' key");
         assert_eq!(
@@ -244,7 +244,12 @@ mod tests {
             "NOT_FOUND"
         );
         assert!(
-            error_obj.get("message").unwrap().as_str().unwrap().contains("missing.txt"),
+            error_obj
+                .get("message")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .contains("missing.txt"),
             "Message should contain the file path"
         );
         assert!(
@@ -260,8 +265,8 @@ mod tests {
         let err = CliError::user("Something went wrong");
         let json_str = err.to_json();
 
-        let parsed: serde_json::Value = serde_json::from_str(&json_str)
-            .expect("Error JSON should be valid JSON");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json_str).expect("Error JSON should be valid JSON");
 
         let error_obj = parsed.get("error").expect("Should have 'error' key");
         assert!(

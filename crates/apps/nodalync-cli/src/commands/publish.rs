@@ -86,13 +86,11 @@ pub async fn publish(
         nodalync_econ::validate_price(price_units).map_err(|e| {
             // Issue #81: Show HBAR values instead of raw tinybars for user comprehension
             match &e {
-                nodalync_econ::EconError::PriceTooHigh { price, max } => {
-                    CliError::user(format!(
-                        "Invalid price: {} HBAR exceeds maximum {} HBAR",
-                        tinybars_to_hbar(*price),
-                        tinybars_to_hbar(*max)
-                    ))
-                }
+                nodalync_econ::EconError::PriceTooHigh { price, max } => CliError::user(format!(
+                    "Invalid price: {} HBAR exceeds maximum {} HBAR",
+                    tinybars_to_hbar(*price),
+                    tinybars_to_hbar(*max)
+                )),
                 _ => CliError::user(format!("Invalid price: {}", e)),
             }
         })?;
@@ -367,7 +365,11 @@ mod tests {
             None,
         )
         .await;
-        assert!(result.is_ok(), "First publish should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "First publish should succeed: {:?}",
+            result.err()
+        );
 
         // Second publish of same file should fail with actionable error
         let result = publish(

@@ -225,7 +225,9 @@ pub fn start_daemon_sync(
     println!("Starting Nodalync node in background...");
     println!("Logs: {}", stderr_path.display());
     // Issue #80: Warn that the daemon needs time to become ready
-    println!("Note: The daemon may take a few seconds to become ready. Check with 'nodalync status'.");
+    println!(
+        "Note: The daemon may take a few seconds to become ready. Check with 'nodalync status'."
+    );
 
     // Fork to background BEFORE any tokio runtime exists
     // Note: On success, the parent exits and only the child continues
@@ -404,7 +406,10 @@ mod tests {
         let result = start(config, OutputFormat::Human, false, false, 8080).await;
         assert!(result.is_err());
         assert!(
-            matches!(result.as_ref().unwrap_err(), CliError::IdentityNotInitialized),
+            matches!(
+                result.as_ref().unwrap_err(),
+                CliError::IdentityNotInitialized
+            ),
             "Should get IdentityNotInitialized, got: {:?}",
             result.unwrap_err()
         );

@@ -527,7 +527,9 @@ const MIN_NONZERO_PRICE_HBAR: f64 = 0.00000001;
 
 /// Parse a price value, rejecting negative numbers and sub-tinybar amounts.
 fn parse_non_negative_price(s: &str) -> Result<f64, String> {
-    let value: f64 = s.parse().map_err(|_| format!("'{}' is not a valid price", s))?;
+    let value: f64 = s
+        .parse()
+        .map_err(|_| format!("'{}' is not a valid price", s))?;
     if value < 0.0 {
         return Err("Price cannot be negative".to_string());
     }
@@ -590,13 +592,7 @@ mod tests {
     /// value_parser instead of interpreting it as a flag.
     #[test]
     fn test_clap_negative_price_error_message() {
-        let result = Cli::try_parse_from([
-            "nodalync",
-            "publish",
-            "file.txt",
-            "--price",
-            "-100",
-        ]);
+        let result = Cli::try_parse_from(["nodalync", "publish", "file.txt", "--price", "-100"]);
         assert!(result.is_err());
         let err_str = result.unwrap_err().to_string();
         assert!(
