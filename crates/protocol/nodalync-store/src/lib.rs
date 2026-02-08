@@ -416,8 +416,14 @@ impl NodeState {
                 let publisher_peer_id: Option<String> = row.get(5)?;
 
                 let content_type = ContentType::from_u8(content_type_u8).unwrap_or(ContentType::L0);
-                let l1_summary: L1Summary = serde_json::from_str(&l1_summary_json).unwrap_or_else(|_| L1Summary::empty(*hash));
-                let addresses: Vec<String> = serde_json::from_str(&addresses_json).unwrap_or_default();
+                let l1_summary: L1Summary = serde_json::from_str(&l1_summary_json).unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "Failed to deserialize announcement L1 summary");
+                    L1Summary::empty(*hash)
+                });
+                let addresses: Vec<String> = serde_json::from_str(&addresses_json).unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "Failed to deserialize announcement addresses");
+                    Vec::new()
+                });
 
                 Ok(AnnouncePayload {
                     hash: *hash,
@@ -468,8 +474,14 @@ impl NodeState {
 
             let content_type = ContentType::from_u8(content_type_u8).unwrap_or(ContentType::L0);
             let l1_summary: L1Summary =
-                serde_json::from_str(&l1_summary_json).unwrap_or_else(|_| L1Summary::empty(hash));
-            let addresses: Vec<String> = serde_json::from_str(&addresses_json).unwrap_or_default();
+                serde_json::from_str(&l1_summary_json).unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "Failed to deserialize announcement L1 summary");
+                    L1Summary::empty(hash)
+                });
+            let addresses: Vec<String> = serde_json::from_str(&addresses_json).unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "Failed to deserialize announcement addresses");
+                Vec::new()
+            });
 
             Ok(AnnouncePayload {
                 hash,
@@ -558,8 +570,14 @@ impl NodeState {
 
             let content_type = ContentType::from_u8(content_type_u8).unwrap_or(ContentType::L0);
             let l1_summary: L1Summary =
-                serde_json::from_str(&l1_summary_json).unwrap_or_else(|_| L1Summary::empty(hash));
-            let addresses: Vec<String> = serde_json::from_str(&addresses_json).unwrap_or_default();
+                serde_json::from_str(&l1_summary_json).unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "Failed to deserialize announcement L1 summary");
+                    L1Summary::empty(hash)
+                });
+            let addresses: Vec<String> = serde_json::from_str(&addresses_json).unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "Failed to deserialize announcement addresses");
+                Vec::new()
+            });
 
             Ok(AnnouncePayload {
                 hash,
