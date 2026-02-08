@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use crate::error::Result;
 
 /// Schema version for migration tracking.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Initialize the database schema.
 ///
@@ -77,6 +77,23 @@ fn migrate_schema(conn: &Connection, from_version: u32) -> Result<()> {
                 tracing::warn!(error = %e, "Failed to add funding_tx_id column to channels");
             }
         }
+    }
+
+    // Migration from version 3 to 4: Add UNIQUE constraint on settlement_queue(payment_id, recipient)
+    if from_version < 4 {
+        // Deduplicate existing rows before adding unique constraint
+        conn.execute(
+            "DELETE FROM settlement_queue WHERE rowid NOT IN (
+                SELECT MIN(rowid) FROM settlement_queue GROUP BY payment_id, recipient
+            )",
+            [],
+        )?;
+        // Drop old non-unique index and create unique one
+        conn.execute("DROP INDEX IF EXISTS idx_settlement_queue_payment_id", [])?;
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_settlement_queue_payment_id ON settlement_queue(payment_id, recipient)",
+            [],
+        )?;
     }
 
     Ok(())
@@ -273,7 +290,7 @@ fn create_tables(conn: &Connection) -> Result<()> {
     )?;
 
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_settlement_queue_payment_id ON settlement_queue(payment_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_settlement_queue_payment_id ON settlement_queue(payment_id, recipient)",
         [],
     )?;
 
@@ -408,6 +425,104 @@ mod tests {
     }
 
     #[test]
+    fn test_migration_v3_to_v4_dedup_settlement_queue() {
+        let conn = Connection::open_in_memory().unwrap();
+
+        // Create v3 schema manually
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO schema_version (version) VALUES (3)", [])
+            .unwrap();
+
+        // Create channels table (required by older migrations but already at v3)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS channels (
+                peer_id BLOB PRIMARY KEY,
+                channel_id BLOB NOT NULL,
+                state INTEGER NOT NULL,
+                my_balance INTEGER NOT NULL,
+                their_balance INTEGER NOT NULL,
+                nonce INTEGER NOT NULL,
+                last_update INTEGER NOT NULL,
+                pending_close TEXT,
+                pending_dispute TEXT,
+                funding_tx_id TEXT
+            )",
+            [],
+        )
+        .unwrap();
+
+        // Create settlement_queue table with non-unique index (v3 schema)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS settlement_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                payment_id BLOB NOT NULL,
+                recipient BLOB NOT NULL,
+                amount INTEGER NOT NULL,
+                source_hash BLOB NOT NULL,
+                queued_at INTEGER NOT NULL,
+                settled INTEGER NOT NULL DEFAULT 0,
+                batch_id BLOB
+            )",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_settlement_queue_payment_id ON settlement_queue(payment_id)",
+            [],
+        )
+        .unwrap();
+
+        // Insert duplicate rows
+        let payment_id = vec![1u8; 32];
+        let recipient = vec![2u8; 20];
+        conn.execute(
+            "INSERT INTO settlement_queue (payment_id, recipient, amount, source_hash, queued_at, settled)
+             VALUES (?1, ?2, 100, ?1, 1000, 0)",
+            rusqlite::params![payment_id, recipient],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO settlement_queue (payment_id, recipient, amount, source_hash, queued_at, settled)
+             VALUES (?1, ?2, 100, ?1, 1001, 0)",
+            rusqlite::params![payment_id, recipient],
+        )
+        .unwrap();
+
+        // Verify duplicates exist
+        let count: i32 = conn
+            .query_row("SELECT COUNT(*) FROM settlement_queue", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+
+        // Run migration
+        initialize_schema(&conn).unwrap();
+
+        // Verify version was bumped
+        let version: u32 = conn
+            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+
+        // Verify duplicates were removed
+        let count: i32 = conn
+            .query_row("SELECT COUNT(*) FROM settlement_queue", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1, "Migration should deduplicate settlement_queue rows");
+
+        // Verify unique index prevents new duplicates
+        let result = conn.execute(
+            "INSERT INTO settlement_queue (payment_id, recipient, amount, source_hash, queued_at, settled)
+             VALUES (?1, ?2, 100, ?1, 1002, 0)",
+            rusqlite::params![payment_id, recipient],
+        );
+        assert!(result.is_err(), "UNIQUE index should prevent duplicate payment_id+recipient");
+    }
+
+    #[test]
     fn test_migration_v2_to_v3() {
         let conn = Connection::open_in_memory().unwrap();
 
@@ -433,6 +548,27 @@ mod tests {
                 pending_close TEXT,
                 pending_dispute TEXT
             )",
+            [],
+        )
+        .unwrap();
+
+        // Create settlement_queue table (needed for v3→v4 migration)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS settlement_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                payment_id BLOB NOT NULL,
+                recipient BLOB NOT NULL,
+                amount INTEGER NOT NULL,
+                source_hash BLOB NOT NULL,
+                queued_at INTEGER NOT NULL,
+                settled INTEGER NOT NULL DEFAULT 0,
+                batch_id BLOB
+            )",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_settlement_queue_payment_id ON settlement_queue(payment_id)",
             [],
         )
         .unwrap();
