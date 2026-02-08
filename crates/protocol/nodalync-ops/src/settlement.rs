@@ -15,6 +15,10 @@ use crate::error::OpsResult;
 use crate::extraction::L1Extractor;
 use crate::node_ops::{current_timestamp, NodeOperations};
 
+/// Maximum number of distributions per settlement batch.
+/// If more are pending, they are split across multiple batches.
+const MAX_BATCH_SIZE: usize = 100;
+
 impl<V, E> NodeOperations<V, E>
 where
     V: Validator,
@@ -48,11 +52,12 @@ where
             return Ok(None);
         }
 
-        // 2. Get pending distributions from queue
-        let pending = self.state.settlement.get_pending()?;
-        if pending.is_empty() {
+        // 2. Get pending distributions from queue (limited to MAX_BATCH_SIZE)
+        let all_pending = self.state.settlement.get_pending()?;
+        if all_pending.is_empty() {
             return Ok(None);
         }
+        let pending: Vec<_> = all_pending.into_iter().take(MAX_BATCH_SIZE).collect();
 
         // Convert QueuedDistribution to Payment for batch creation
         // Note: In a full implementation, we'd have the actual Payment objects
@@ -140,11 +145,12 @@ where
     pub async fn force_settlement(&mut self) -> OpsResult<Option<Hash>> {
         let timestamp = current_timestamp();
 
-        // Get pending distributions
-        let pending = self.state.settlement.get_pending()?;
-        if pending.is_empty() {
+        // Get pending distributions (limited to MAX_BATCH_SIZE)
+        let all_pending = self.state.settlement.get_pending()?;
+        if all_pending.is_empty() {
             return Ok(None);
         }
+        let pending: Vec<_> = all_pending.into_iter().take(MAX_BATCH_SIZE).collect();
 
         // Create payments from distributions
         let payments: Vec<Payment> = pending
@@ -492,5 +498,35 @@ mod tests {
         // the network which is configured in the ops instance.
         // We can at least verify the batch was settled and no errors occurred.
         assert_eq!(mock_net.sent_message_count(), 0); // No point-to-point messages for settlement
+    }
+
+    #[tokio::test]
+    async fn test_force_settlement_respects_max_batch_size() {
+        let (mut ops, _temp) = create_test_ops();
+
+        // Enqueue more distributions than MAX_BATCH_SIZE
+        let count = MAX_BATCH_SIZE + 5;
+        for i in 0..count {
+            let dist = QueuedDistribution::new(
+                content_hash(format!("batch-limit-payment-{}", i).as_bytes()),
+                test_peer_id(),
+                10,
+                content_hash(format!("batch-limit-source-{}", i).as_bytes()),
+                current_timestamp(),
+            );
+            ops.state.settlement.enqueue(dist).unwrap();
+        }
+
+        // Force settlement - should only settle MAX_BATCH_SIZE items
+        let batch_id = ops.force_settlement().await.unwrap();
+        assert!(batch_id.is_some());
+
+        // Remaining items should still be in the queue
+        let remaining = ops.state.settlement.get_pending().unwrap();
+        assert_eq!(
+            remaining.len(),
+            5,
+            "Should have 5 remaining items after settling MAX_BATCH_SIZE"
+        );
     }
 }
