@@ -19,10 +19,12 @@ fn resolve_db_path() -> String {
     }
 
     // 2. Well-known location: repo root
+    // CARGO_MANIFEST_DIR = .../nodalync-protocol/apps/desktop
+    // .parent() → .../nodalync-protocol/apps
+    // .parent() → .../nodalync-protocol  (repo root)
     let repo_db = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent() // apps/desktop
-        .and_then(|p| p.parent()) // apps
-        .and_then(|p| p.parent()) // repo root
+        .parent() // apps/desktop → apps
+        .and_then(|p| p.parent()) // apps → repo root
         .map(|p| p.join("obsidian_l2_graph.db"));
 
     if let Some(path) = repo_db {
