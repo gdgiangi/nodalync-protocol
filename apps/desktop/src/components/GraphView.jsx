@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback } from "react";
 import * as d3 from "d3";
 
-// Entity type → color mapping (matches Tailwind entity colors)
+// Entity type → color mapping (vibrant but not garish)
 const TYPE_COLORS = {
   Person: "#e599f7",
   Organization: "#74c0fc",
@@ -13,26 +13,35 @@ const TYPE_COLORS = {
   Pattern: "#66d9e8",
   Insight: "#b197fc",
   Value: "#ffa94d",
-  Pipeline: "#20c997",
-  Conversation: "#87ceeb",
-  Research: "#dda0dd",
+  Technology: "#20c997",
+  Event: "#87ceeb",
+  Location: "#dda0dd",
   Product: "#98d8c8",
-  Win: "#fff176",
-  Bet: "#ff7043",
-  Commitment: "#ab47bc",
-  Problem: "#ef5350",
-  Self: "#ffd700",
+  Work: "#fff176",
+  Metric: "#ff7043",
+  TimePoint: "#ab47bc",
 };
 
 const DEFAULT_COLOR = "#868e96";
+const BG_COLOR = "#06060a";
+const LINK_COLOR = "rgba(255, 255, 255, 0.06)";
+const LINK_HOVER_COLOR = "rgba(255, 255, 255, 0.12)";
+const LABEL_COLOR = "rgba(255, 255, 255, 0.45)";
+const LABEL_DIM_COLOR = "rgba(255, 255, 255, 0.2)";
 
 function getColor(type) {
   return TYPE_COLORS[type] || DEFAULT_COLOR;
 }
 
 function getRadius(node) {
-  // Scale by source_count, min 4, max 20
-  return Math.max(4, Math.min(20, 4 + node.source_count * 2));
+  // Scale by source_count: min 4, max 20
+  const base = Math.max(4, Math.min(20, 4 + (node.source_count || 1) * 2));
+  return base;
+}
+
+function getOpacity(node) {
+  // Fresher (higher source_count) nodes are more opaque
+  return 0.5 + Math.min(0.5, (node.source_count || 1) * 0.05);
 }
 
 export default function GraphView({ data, onNodeClick, selectedEntity }) {
@@ -56,7 +65,45 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
     // Clear previous
     svg.selectAll("*").remove();
 
-    // Create container for zoom
+    // Background gradient (subtle radial)
+    const defs = svg.append("defs");
+
+    // Radial gradient for ambient glow in center
+    const radialGrad = defs.append("radialGradient")
+      .attr("id", "ambient-glow")
+      .attr("cx", "50%").attr("cy", "50%").attr("r", "50%");
+    radialGrad.append("stop")
+      .attr("offset", "0%")
+      .attr("stop-color", "rgba(92, 124, 250, 0.03)");
+    radialGrad.append("stop")
+      .attr("offset", "100%")
+      .attr("stop-color", "transparent");
+
+    // Background
+    svg.append("rect")
+      .attr("width", width)
+      .attr("height", height)
+      .attr("fill", BG_COLOR);
+
+    // Ambient glow
+    svg.append("rect")
+      .attr("width", width)
+      .attr("height", height)
+      .attr("fill", "url(#ambient-glow)");
+
+    // Glow filter for selected/hovered nodes
+    const glowFilter = defs.append("filter")
+      .attr("id", "node-glow")
+      .attr("x", "-50%").attr("y", "-50%")
+      .attr("width", "200%").attr("height", "200%");
+    glowFilter.append("feGaussianBlur")
+      .attr("stdDeviation", "4")
+      .attr("result", "blur");
+    const feMerge = glowFilter.append("feMerge");
+    feMerge.append("feMergeNode").attr("in", "blur");
+    feMerge.append("feMergeNode").attr("in", "SourceGraphic");
+
+    // Container for zoom
     const g = svg.append("g");
 
     // Zoom behavior
@@ -68,11 +115,9 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
       });
     svg.call(zoom);
 
-    // Build node/link index maps for D3
+    // Build node/link data
     const nodeMap = new Map(data.nodes.map((n) => [n.id, { ...n }]));
     const nodes = Array.from(nodeMap.values());
-
-    // Only include links where both endpoints exist
     const links = data.links
       .filter((l) => nodeMap.has(l.source) && nodeMap.has(l.target))
       .map((l) => ({ ...l }));
@@ -82,60 +127,100 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
       .forceSimulation(nodes)
       .force(
         "link",
-        d3
-          .forceLink(links)
+        d3.forceLink(links)
           .id((d) => d.id)
-          .distance(80)
+          .distance(100)
       )
-      .force("charge", d3.forceManyBody().strength(-120))
+      .force("charge", d3.forceManyBody().strength(-150))
       .force("center", d3.forceCenter(width / 2, height / 2))
-      .force("collision", d3.forceCollide().radius((d) => getRadius(d) + 2));
+      .force("collision", d3.forceCollide().radius((d) => getRadius(d) + 4));
 
     simulationRef.current = simulation;
 
-    // Draw links
+    // Links
     const link = g
       .append("g")
-      .attr("class", "links")
       .selectAll("line")
       .data(links)
       .join("line")
-      .attr("stroke", "#374151")
-      .attr("stroke-opacity", 0.5)
-      .attr("stroke-width", (d) => Math.max(0.5, d.confidence));
+      .attr("stroke", LINK_COLOR)
+      .attr("stroke-width", (d) => Math.max(0.5, (d.confidence || 0.5) * 1.5));
 
-    // Draw link labels (predicate) — only for small graphs
+    // Link labels — only for small graphs
     let linkLabel;
-    if (links.length < 100) {
+    if (links.length < 80) {
       linkLabel = g
         .append("g")
-        .attr("class", "link-labels")
         .selectAll("text")
         .data(links)
         .join("text")
         .attr("class", "link-label")
-        .attr("fill", "#6b7280")
+        .attr("fill", LABEL_DIM_COLOR)
         .attr("text-anchor", "middle")
-        .attr("dy", -3)
+        .attr("dy", -4)
+        .attr("font-size", "9px")
+        .attr("font-family", "'SF Mono', 'Fira Code', monospace")
         .text((d) => d.predicate);
     }
 
-    // Draw nodes
+    // Node glow (background circle for ambient effect)
+    const nodeGlow = g
+      .append("g")
+      .selectAll("circle")
+      .data(nodes)
+      .join("circle")
+      .attr("r", (d) => getRadius(d) + 8)
+      .attr("fill", (d) => {
+        const color = getColor(d.entity_type);
+        return color + "15"; // ~8% opacity hex
+      });
+
+    // Nodes
     const node = g
       .append("g")
-      .attr("class", "nodes")
       .selectAll("circle")
       .data(nodes)
       .join("circle")
       .attr("r", (d) => getRadius(d))
       .attr("fill", (d) => getColor(d.entity_type))
-      .attr("stroke", (d) =>
-        selectedEntity && selectedEntity.id === d.id ? "#fff" : "transparent"
-      )
+      .attr("fill-opacity", (d) => getOpacity(d))
+      .attr("stroke", "transparent")
       .attr("stroke-width", 2)
       .attr("cursor", "pointer")
       .on("click", handleNodeClick)
+      .on("mouseover", function (event, d) {
+        d3.select(this)
+          .attr("stroke", getColor(d.entity_type))
+          .attr("stroke-opacity", 0.5)
+          .attr("filter", "url(#node-glow)");
+        // Highlight connected links
+        link.attr("stroke", (l) =>
+          l.source.id === d.id || l.target.id === d.id
+            ? LINK_HOVER_COLOR
+            : LINK_COLOR
+        );
+      })
+      .on("mouseout", function (event, d) {
+        const isSelected = selectedEntity && selectedEntity.id === d.id;
+        d3.select(this)
+          .attr("stroke", isSelected ? "#fff" : "transparent")
+          .attr("stroke-opacity", isSelected ? 0.3 : 0)
+          .attr("filter", isSelected ? "url(#node-glow)" : null);
+        link.attr("stroke", LINK_COLOR);
+      })
       .call(drag(simulation));
+
+    // Update selected state
+    node
+      .attr("stroke", (d) =>
+        selectedEntity && selectedEntity.id === d.id ? "#fff" : "transparent"
+      )
+      .attr("stroke-opacity", (d) =>
+        selectedEntity && selectedEntity.id === d.id ? 0.3 : 0
+      )
+      .attr("filter", (d) =>
+        selectedEntity && selectedEntity.id === d.id ? "url(#node-glow)" : null
+      );
 
     // Node hover tooltip
     node.append("title").text((d) => {
@@ -145,24 +230,27 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
       return `${d.label} (${d.entity_type})${desc}`;
     });
 
-    // Draw node labels
+    // Node labels
     const label = g
       .append("g")
-      .attr("class", "node-labels")
       .selectAll("text")
       .data(nodes)
       .join("text")
       .attr("class", "node-label")
-      .attr("fill", "#d1d5db")
-      .attr("font-size", (d) => Math.max(8, Math.min(12, 8 + d.source_count)))
+      .attr("fill", LABEL_COLOR)
+      .attr("font-size", (d) =>
+        Math.max(9, Math.min(12, 9 + (d.source_count || 1) * 0.5)) + "px"
+      )
+      .attr("font-family", "'SF Pro Display', -apple-system, 'Segoe UI', sans-serif")
+      .attr("font-weight", "300")
+      .attr("letter-spacing", "0.3px")
       .attr("text-anchor", "middle")
-      .attr("dy", (d) => getRadius(d) + 12)
-      .text((d) => {
-        // Truncate long labels
-        return d.label.length > 25 ? d.label.substring(0, 22) + "…" : d.label;
-      });
+      .attr("dy", (d) => getRadius(d) + 14)
+      .text((d) =>
+        d.label.length > 25 ? d.label.substring(0, 22) + "…" : d.label
+      );
 
-    // Tick function
+    // Tick
     simulation.on("tick", () => {
       link
         .attr("x1", (d) => d.source.x)
@@ -176,12 +264,12 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
           .attr("y", (d) => (d.source.y + d.target.y) / 2);
       }
 
+      nodeGlow.attr("cx", (d) => d.x).attr("cy", (d) => d.y);
       node.attr("cx", (d) => d.x).attr("cy", (d) => d.y);
-
       label.attr("x", (d) => d.x).attr("y", (d) => d.y);
     });
 
-    // Initial zoom to fit
+    // Zoom to fit
     const initialScale = Math.min(
       1,
       Math.min(width, height) / (nodes.length * 3 + 200)
@@ -200,7 +288,11 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
   }, [data, handleNodeClick, selectedEntity]);
 
   return (
-    <svg ref={svgRef} className="w-full h-full bg-gray-950" />
+    <svg
+      ref={svgRef}
+      className="w-full h-full"
+      style={{ background: BG_COLOR }}
+    />
   );
 }
 
