@@ -194,39 +194,25 @@ export default function Sidebar({
         </div>
       )}
 
-      {/* Selected Entity Detail */}
+      {/* Selected Entity Mini Card */}
       {selectedEntity && typeof selectedEntity === "object" && (
         <div
-          className="px-3 py-3 animate-slide-up flex-shrink-0"
+          className="px-3 py-2.5 animate-slide-up flex-shrink-0"
           style={{ borderTop: '1px solid var(--border-subtle)' }}
         >
           <h3 className="label-sm mb-2">SELECTED</h3>
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex items-center gap-2">
             <span
-              className="inline-block w-2.5 h-2.5 rounded-full"
+              className="inline-block w-2 h-2 rounded-full flex-shrink-0"
               style={{ backgroundColor: getColor(selectedEntity.entity_type), opacity: 0.9 }}
             />
-            <span className="text-[13px] font-medium" style={{ color: 'var(--text-primary)' }}>
+            <span className="text-[12px] truncate" style={{ color: 'var(--text-primary)' }}>
               {selectedEntity.label}
             </span>
+            <span className="mono text-[9px] ml-auto flex-shrink-0" style={{ color: 'var(--text-ghost)' }}>
+              {selectedEntity.entity_type}
+            </span>
           </div>
-          <p className="text-[10px] ml-[18px]" style={{ color: 'var(--text-ghost)' }}>
-            {selectedEntity.entity_type}
-          </p>
-          {selectedEntity.description && (
-            <p
-              className="text-[11px] mt-1.5 ml-[18px] leading-relaxed line-clamp-3"
-              style={{ color: 'var(--text-tertiary)' }}
-            >
-              {selectedEntity.description}
-            </p>
-          )}
-          <button
-            onClick={() => onEntitySelect(selectedEntity.id)}
-            className="btn-accent btn mt-2.5 ml-[18px] text-[10px]"
-          >
-            Focus on this entity
-          </button>
         </div>
       )}
 
