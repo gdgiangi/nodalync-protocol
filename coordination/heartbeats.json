@@ -1,8 +1,9 @@
 {
   "hephaestus": {
-    "last_seen": "2026-02-12T23:38:00Z",
-    "status": "working",
-    "current_task": "heph-001",
+    "last_seen": "2026-02-12T23:45:00Z",
+    "status": "idle",
+    "current_task": null,
+    "last_completed": "heph-001",
     "branch": "hephaestus/premium-ui-polish"
   }
 }
