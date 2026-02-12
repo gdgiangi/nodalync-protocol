@@ -105,6 +105,30 @@ nodalync close-channel <peer-id>
 - `GET /health` — `{"status":"ok","connected_peers":N,"uptime_secs":M}`
 - `GET /metrics` — Prometheus metrics
 
+## Desktop App
+
+A Tauri-based desktop application provides a graphical interface for node operation and creator management:
+
+```bash
+# Navigate to desktop app
+cd apps/desktop
+
+# Install dependencies and start development
+npm install
+npm run dev
+
+# Build for production
+npm run build
+```
+
+**Key Features:**
+- **Node Management** — Start/stop node, view status, configure settings
+- **Network Visualization** — Monitor DHT participation, peer connections, network health  
+- **Creator Dashboard** — Track earnings, payment channels, content attribution
+- **Real-time Updates** — Live node status, earnings, and network metrics
+
+The desktop app integrates with the existing CLI via Tauri commands, providing a user-friendly layer over all protocol functionality. For detailed setup and development instructions, see [`apps/desktop/README.md`](apps/desktop/README.md).
+
 ## Network
 
 Three bootstrap nodes are deployed across regions:
@@ -144,6 +168,7 @@ Nodalync provides the provenance and economic layer. We are building toward a co
 | Protocol | `nodalync-settle` | 0.7.1 | Hedera settlement, smart contract integration |
 | App | `nodalync-cli` | 0.10.1 | Full CLI with daemon mode, health endpoints, alerting |
 | App | `nodalync-mcp` | 0.10.1 | MCP server for AI agent integration |
+| App | `nodalync-desktop` | 0.1.0 | Tauri-based desktop GUI for node management and creator dashboard |
 
 </details>
 

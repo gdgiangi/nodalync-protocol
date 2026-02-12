@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* D3 graph styling */
+.graph-container {
+  width: 100%;
+  height: 100%;
+}
+
+.graph-container svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* Node labels */
+.node-label {
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Link labels */
+.link-label {
+  pointer-events: none;
+  user-select: none;
+  font-size: 9px;
+}
