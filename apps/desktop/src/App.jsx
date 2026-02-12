@@ -4,11 +4,13 @@ import GraphView from "./components/GraphView";
 import Sidebar from "./components/Sidebar";
 import StatsBar from "./components/StatsBar";
 import SearchBar from "./components/SearchBar";
+import EntityDetailPanel from "./components/EntityDetailPanel";
 
 function App() {
   const [graphData, setGraphData] = useState({ nodes: [], links: [] });
   const [stats, setStats] = useState(null);
   const [selectedEntity, setSelectedEntity] = useState(null);
+  const [detailEntity, setDetailEntity] = useState(null);
   const [searchResults, setSearchResults] = useState([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState("full"); // 'full' or 'subgraph'
@@ -75,7 +77,51 @@ function App() {
 
   function handleNodeClick(node) {
     setSelectedEntity(node);
+    // Open the detail panel
+    setDetailEntity(node);
   }
+
+  function handleDetailClose() {
+    setDetailEntity(null);
+  }
+
+  function handleDetailEntitySelect(entityId) {
+    // Navigate to a different entity from within the detail panel
+    // First find it in the current graph data
+    const node = graphData.nodes.find((n) => n.id === entityId);
+    if (node) {
+      setSelectedEntity(node);
+      setDetailEntity(node);
+    } else {
+      // Entity not in current view — load its subgraph
+      handleEntitySelect(entityId);
+    }
+  }
+
+  function handleFocusEntity(entityId) {
+    handleEntitySelect(entityId);
+  }
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    function handleKeyDown(e) {
+      // Escape closes detail panel
+      if (e.key === "Escape" && detailEntity) {
+        setDetailEntity(null);
+        e.preventDefault();
+      }
+      // / focuses search
+      if (e.key === "/" && !e.ctrlKey && !e.metaKey && !detailEntity) {
+        const searchInput = document.querySelector('input[placeholder="Search entities..."]');
+        if (searchInput && document.activeElement !== searchInput) {
+          searchInput.focus();
+          e.preventDefault();
+        }
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [detailEntity]);
 
   return (
     <div className="flex h-screen w-screen" style={{ background: 'var(--bg-deep)' }}>
@@ -174,6 +220,16 @@ function App() {
         {/* Bottom stats bar */}
         <StatsBar stats={stats} graphData={graphData} viewMode={viewMode} />
       </div>
+
+      {/* Entity Detail Panel — slide-out */}
+      {detailEntity && (
+        <EntityDetailPanel
+          entity={detailEntity}
+          onClose={handleDetailClose}
+          onEntitySelect={handleDetailEntitySelect}
+          onFocusEntity={handleFocusEntity}
+        />
+      )}
     </div>
   );
 }
