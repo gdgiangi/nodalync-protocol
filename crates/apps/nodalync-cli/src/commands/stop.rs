@@ -30,19 +30,17 @@ pub async fn stop(config: CliConfig, format: OutputFormat) -> CliResult<String> 
         return Err(CliError::NodeNotRunning);
     }
 
-    info!("Sending SIGTERM to node process (PID {})", pid);
-
-    // Send SIGTERM
+    // Send termination signal
     #[cfg(unix)]
     {
+        info!("Sending SIGTERM to node process (PID {})", pid);
         send_sigterm(pid)?;
     }
 
     #[cfg(not(unix))]
     {
-        return Err(CliError::user(
-            "Stop command is only supported on Unix systems",
-        ));
+        info!("Terminating node process (PID {})", pid);
+        terminate_process(pid)?;
     }
 
     // Wait for graceful shutdown
@@ -75,6 +73,25 @@ fn send_sigterm(pid: u32) -> CliResult<()> {
 
     kill(Pid::from_raw(pid as i32), Signal::SIGTERM)
         .map_err(|e| CliError::user(format!("Failed to send SIGTERM: {}", e)))?;
+
+    Ok(())
+}
+
+/// Terminate a process on Windows.
+#[cfg(not(unix))]
+fn terminate_process(pid: u32) -> CliResult<()> {
+    use std::process::Command;
+
+    // Use taskkill to terminate the process
+    let output = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T"]) // /T terminates child processes too
+        .output()
+        .map_err(|e| CliError::user(format!("Failed to run taskkill: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(CliError::user(format!("Failed to terminate process: {}", stderr)));
+    }
 
     Ok(())
 }
