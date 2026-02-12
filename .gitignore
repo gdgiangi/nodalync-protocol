@@ -59,3 +59,7 @@ infra/**/config.env
 infra/**/*.env
 !infra/**/*.env.example
 .env
+node_modules/
+apps/desktop/target/
+apps/desktop/dist/
+*.db

@@ -153,10 +153,22 @@ pub fn is_process_running(pid: u32) -> bool {
 }
 
 #[cfg(not(unix))]
-pub fn is_process_running(_pid: u32) -> bool {
-    // On non-Unix platforms, we can't easily check
-    // Assume the process is running if we have a PID file
-    true
+pub fn is_process_running(pid: u32) -> bool {
+    use std::process::Command;
+    
+    // On Windows, use tasklist to check if process exists
+    if let Ok(output) = Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV"])
+        .output()
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // tasklist returns the header line even if no processes match
+        // If PID exists, we'll see more than just the header
+        stdout.lines().count() > 1
+    } else {
+        // If tasklist fails, fall back to assuming false (process likely dead)
+        false
+    }
 }
 
 /// Check if a node is already running by examining the PID file.

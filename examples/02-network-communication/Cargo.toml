@@ -1,0 +1,33 @@
+[package]
+name = "network-communication"
+version = "0.1.0"
+edition = "2021"
+description = "Multi-node network communication using Nodalync protocol"
+
+[dependencies]
+# Core Nodalync protocol crates
+nodalync-types = { path = "../../crates/protocol/nodalync-types" }
+nodalync-crypto = { path = "../../crates/protocol/nodalync-crypto" }
+nodalync-net = { path = "../../crates/protocol/nodalync-net" }
+nodalync-wire = { path = "../../crates/protocol/nodalync-wire" }
+nodalync-valid = { path = "../../crates/protocol/nodalync-valid" }
+
+# Async runtime and networking
+tokio = { version = "1.0", features = ["full"] }
+libp2p = { version = "0.53", features = ["gossipsub", "kad", "noise", "tcp", "identify"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Serialization and utilities
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.0", features = ["v4"] }
+futures = "0.3"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+[[bin]]
+name = "network-communication"
+path = "src/main.rs"
