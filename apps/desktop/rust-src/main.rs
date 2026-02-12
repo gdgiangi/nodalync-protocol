@@ -9,11 +9,13 @@ use tracing::info;
 
 mod discovery_commands;
 mod graph_commands;
+mod network_commands;
 mod protocol;
 mod publish_commands;
 
 use discovery_commands::*;
 use graph_commands::*;
+use network_commands::*;
 use publish_commands::*;
 
 /// Resolve the graph database path.
@@ -89,6 +91,10 @@ fn main() {
             query_content,
             unpublish_content,
             get_content_versions,
+            // Network commands (Phase 2 — peering)
+            get_network_info,
+            start_network_configured,
+            dial_peer,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
