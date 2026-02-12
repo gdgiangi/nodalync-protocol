@@ -1,10 +1,9 @@
 {
   "hephaestus": {
-    "last_seen": "2026-02-12T23:52:00Z",
+    "last_seen": "2026-02-12T23:45:00Z",
     "status": "idle",
     "current_task": null,
-    "last_completed": "heph-002",
-    "branch": "hephaestus/entity-detail-panel",
-    "notes": "Entity detail panel complete (PR #5). Next candidates: content creation UI (needs publish-flow merge), onboarding wizard, or graph interaction polish."
+    "last_completed": "heph-001",
+    "branch": "hephaestus/premium-ui-polish"
   }
 }

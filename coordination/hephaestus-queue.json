@@ -1,0 +1,16 @@
+{
+  "tasks": [
+    {
+      "id": "heph-001",
+      "title": "Premium UI polish — dark glassmorphism theme",
+      "type": "sprint_priority",
+      "status": "complete",
+      "sprint": 1,
+      "description": "Brought avatar dashboard aesthetic to Nodalync Studio. Glassmorphism, premium typography, custom scrollbars, loading skeletons, subtle animations.",
+      "started_at": "2026-02-12T23:38:00Z",
+      "completed_at": "2026-02-12T23:45:00Z",
+      "pr": "https://github.com/gdgiangi/nodalync-protocol/pull/4",
+      "branch": "hephaestus/premium-ui-polish"
+    }
+  ]
+}
