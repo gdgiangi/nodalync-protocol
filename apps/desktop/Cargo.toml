@@ -32,6 +32,18 @@ regex = "1.0"
 # L2 Graph DB — the Phase 1 foundation
 nodalync-graph = { path = "../../crates/nodalync-graph" }
 
+# Protocol crates — powers publish, peer, content discovery
+nodalync-crypto = { path = "../../crates/protocol/nodalync-crypto" }
+nodalync-types = { path = "../../crates/protocol/nodalync-types" }
+nodalync-store = { path = "../../crates/protocol/nodalync-store" }
+nodalync-ops = { path = "../../crates/protocol/nodalync-ops" }
+nodalync-net = { path = "../../crates/protocol/nodalync-net" }
+nodalync-wire = { path = "../../crates/protocol/nodalync-wire" }
+nodalync-econ = { path = "../../crates/protocol/nodalync-econ" }
+
+# Platform utilities
+directories = "5.0"
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
