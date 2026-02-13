@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from "react";
+import { useRef, useEffect, useCallback, useImperativeHandle, forwardRef } from "react";
 import * as d3 from "d3";
 import { getEntityColor, getEdgeColor, getEdgeHighlightColor, GRAPH_CONFIG } from "../lib/constants";
 
@@ -18,20 +18,80 @@ function getOpacity(node) {
 }
 
 function getLinkWidth(link) {
-  // Scale by confidence: min 1px, max 3px
   const conf = link.confidence || 0.5;
   return Math.max(MIN_LINK_WIDTH, Math.min(MAX_LINK_WIDTH, conf * 3));
 }
 
-export default function GraphView({ data, onNodeClick, selectedEntity }) {
+const GraphView = forwardRef(function GraphView({ data, onNodeClick, onBackgroundClick, selectedEntity }, ref) {
   const svgRef = useRef(null);
   const simulationRef = useRef(null);
+  const zoomRef = useRef(null);
+  const nodesRef = useRef([]);
+
+  // Expose zoomToEntity to parent
+  useImperativeHandle(ref, () => ({
+    zoomToEntity(entityId) {
+      const node = nodesRef.current.find((n) => n.id === entityId);
+      if (!node || !svgRef.current || !zoomRef.current) return;
+
+      const svg = d3.select(svgRef.current);
+      const width = svgRef.current.clientWidth;
+      const height = svgRef.current.clientHeight;
+
+      // Smooth animated zoom to center the entity
+      const scale = 1.8;
+      const transform = d3.zoomIdentity
+        .translate(width / 2, height / 2)
+        .scale(scale)
+        .translate(-node.x, -node.y);
+
+      svg.transition()
+        .duration(750)
+        .ease(d3.easeCubicInOut)
+        .call(zoomRef.current.transform, transform);
+    },
+    resetZoom() {
+      if (!svgRef.current || !zoomRef.current) return;
+
+      const svg = d3.select(svgRef.current);
+      const width = svgRef.current.clientWidth;
+      const height = svgRef.current.clientHeight;
+      const nodeCount = nodesRef.current.length;
+
+      const initialScale = Math.min(
+        1,
+        Math.min(width, height) / (nodeCount * 3 + 200)
+      );
+
+      svg.transition()
+        .duration(750)
+        .ease(d3.easeCubicInOut)
+        .call(
+          zoomRef.current.transform,
+          d3.zoomIdentity
+            .translate(width / 2, height / 2)
+            .scale(Math.max(0.3, initialScale))
+            .translate(-width / 2, -height / 2)
+        );
+    },
+  }));
 
   const handleNodeClick = useCallback(
     (event, d) => {
+      event.stopPropagation();
       if (onNodeClick) onNodeClick(d);
     },
     [onNodeClick]
+  );
+
+  const handleBackgroundClick = useCallback(
+    (event) => {
+      // Only fire if the click target is the SVG background rect
+      if (event.target.tagName === "rect" && onBackgroundClick) {
+        onBackgroundClick();
+      }
+    },
+    [onBackgroundClick]
   );
 
   useEffect(() => {
@@ -62,13 +122,15 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
     svg.append("rect")
       .attr("width", width)
       .attr("height", height)
-      .attr("fill", BG_COLOR);
+      .attr("fill", BG_COLOR)
+      .on("click", handleBackgroundClick);
 
     // Ambient glow
     svg.append("rect")
       .attr("width", width)
       .attr("height", height)
-      .attr("fill", "url(#ambient-glow)");
+      .attr("fill", "url(#ambient-glow)")
+      .style("pointer-events", "none");
 
     // Glow filter for selected/hovered nodes
     const glowFilter = defs.append("filter")
@@ -82,7 +144,7 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
     feMerge.append("feMergeNode").attr("in", "blur");
     feMerge.append("feMergeNode").attr("in", "SourceGraphic");
 
-    // Edge glow filter — subtle bloom on edges
+    // Edge glow filter
     const edgeGlow = defs.append("filter")
       .attr("id", "edge-glow")
       .attr("x", "-20%").attr("y", "-20%")
@@ -105,6 +167,7 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
         g.attr("transform", event.transform);
       });
     svg.call(zoom);
+    zoomRef.current = zoom;
 
     // Build node/link data
     const nodeMap = new Map(data.nodes.map((n) => [n.id, { ...n }]));
@@ -112,6 +175,8 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
     const links = data.links
       .filter((l) => nodeMap.has(l.source) && nodeMap.has(l.target))
       .map((l) => ({ ...l }));
+
+    nodesRef.current = nodes;
 
     // Force simulation
     const simulation = d3
@@ -129,7 +194,7 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
     simulationRef.current = simulation;
 
     // ── Edge rendering ──
-    // Glow layer (behind) — gives edges a soft bloom
+    // Glow layer (behind)
     const linkGlow = g
       .append("g")
       .attr("class", "link-glow-layer")
@@ -179,7 +244,7 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
       .attr("r", (d) => getRadius(d) + 8)
       .attr("fill", (d) => {
         const color = getEntityColor(d.entity_type);
-        return color + "15"; // ~8% opacity hex
+        return color + "15";
       });
 
     // Nodes
@@ -201,7 +266,7 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
           .attr("stroke-opacity", 0.5)
           .attr("filter", "url(#node-glow)");
 
-        // Highlight connected edges — brighten them, dim others
+        // Highlight connected edges
         const connectedNodeIds = new Set();
         connectedNodeIds.add(d.id);
 
@@ -224,7 +289,6 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
             return connected ? 1 : 0.3;
           });
 
-        // Also highlight the glow layer
         linkGlow
           .attr("stroke-opacity", (l) => {
             const connected = l.source.id === d.id || l.target.id === d.id;
@@ -246,14 +310,13 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
           .attr("stroke-opacity", isSelected ? 0.3 : 0)
           .attr("filter", isSelected ? "url(#node-glow)" : null);
 
-        // Reset all edges to default
+        // Reset all edges
         link
           .attr("stroke", (l) => getEdgeColor(l.predicate))
           .attr("stroke-width", (l) => getLinkWidth(l))
           .attr("stroke-opacity", 1);
 
-        linkGlow
-          .attr("stroke-opacity", 0.3);
+        linkGlow.attr("stroke-opacity", 0.3);
 
         // Reset node opacity
         node.attr("fill-opacity", (n) => getOpacity(n));
@@ -342,7 +405,7 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
     return () => {
       simulation.stop();
     };
-  }, [data, handleNodeClick, selectedEntity]);
+  }, [data, handleNodeClick, handleBackgroundClick, selectedEntity]);
 
   return (
     <svg
@@ -351,7 +414,9 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
       style={{ background: BG_COLOR }}
     />
   );
-}
+});
+
+export default GraphView;
 
 // D3 drag behavior
 function drag(simulation) {
