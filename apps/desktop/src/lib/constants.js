@@ -207,6 +207,8 @@ export const GRAPH_CONFIG = {
   LABEL_DIM_COLOR: "rgba(255, 255, 255, 0.2)",
   MIN_NODE_RADIUS: 4,
   MAX_NODE_RADIUS: 20,
+  MIN_LINK_WIDTH: 1,
+  MAX_LINK_WIDTH: 3,
   LINK_LABEL_THRESHOLD: 80, // hide link labels above this edge count
   MIN_LINK_WIDTH: 1,
   MAX_LINK_WIDTH: 3,

@@ -6,6 +6,23 @@ use libp2p::Multiaddr;
 use nodalync_types::constants::{MAX_RETRY_ATTEMPTS, MESSAGE_TIMEOUT_MS};
 use std::time::Duration;
 
+/// NAT traversal strategy.
+///
+/// Controls how the node handles Network Address Translation (NAT),
+/// which is critical for desktop users behind home routers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NatTraversal {
+    /// Disable all NAT traversal. Only useful for nodes with public IPs.
+    Disabled,
+    /// Enable UPnP port mapping only (simplest, works with most routers).
+    UpnpOnly,
+    /// Enable relay + DCUtR hole-punching (works even when UPnP fails).
+    RelayOnly,
+    /// Enable all strategies: UPnP, AutoNAT detection, relay, DCUtR.
+    /// This is the recommended default for desktop apps.
+    Full,
+}
+
 /// Configuration for the network layer.
 #[derive(Debug, Clone)]
 pub struct NetworkConfig {
@@ -67,8 +84,32 @@ pub struct NetworkConfig {
 
     /// Idle connection timeout.
     ///
-    /// Default: 30 seconds.
+    /// Default: 60 seconds.
     pub idle_connection_timeout: Duration,
+
+    /// Ed25519 secret key bytes (32 bytes) for stable identity.
+    ///
+    /// When provided, the network node derives its libp2p keypair from this
+    /// seed, giving a stable PeerId across restarts. When `None`, a random
+    /// keypair is generated (useful for tests).
+    pub identity_secret: Option<[u8; 32]>,
+
+    /// NAT traversal strategy.
+    ///
+    /// Default: `Full` (UPnP + AutoNAT + Relay + DCUtR).
+    pub nat_traversal: NatTraversal,
+
+    /// Known relay nodes for NAT traversal.
+    ///
+    /// These are well-known public nodes that can relay traffic
+    /// for nodes behind NATs that can't use UPnP.
+    /// Format: `(PeerId, Multiaddr)`.
+    pub relay_nodes: Vec<(libp2p::PeerId, Multiaddr)>,
+
+    /// Maximum number of relay reservations to maintain.
+    ///
+    /// Default: 3. More reservations = better reachability but more overhead.
+    pub max_relay_reservations: usize,
 }
 
 impl Default for NetworkConfig {
@@ -85,7 +126,11 @@ impl Default for NetworkConfig {
             dht_replication: nodalync_types::constants::DHT_REPLICATION,
             dht_query_timeout: Duration::from_secs(60),
             gossipsub_topic: "/nodalync/announce/1.0.0".to_string(),
-            idle_connection_timeout: Duration::from_secs(30),
+            idle_connection_timeout: Duration::from_secs(60),
+            identity_secret: None,
+            nat_traversal: NatTraversal::Full,
+            relay_nodes: Vec::new(),
+            max_relay_reservations: 3,
         }
     }
 }
@@ -131,6 +176,45 @@ impl NetworkConfig {
         self.enable_mdns = enable;
         self
     }
+
+    /// Set the Ed25519 identity secret for stable peer identity.
+    ///
+    /// When set, the node derives its libp2p keypair from this 32-byte seed,
+    /// giving a deterministic PeerId that persists across restarts.
+    pub fn with_identity_secret(mut self, secret: [u8; 32]) -> Self {
+        self.identity_secret = Some(secret);
+        self
+    }
+
+    /// Preview the libp2p PeerId that would result from the configured identity.
+    ///
+    /// Returns `None` if no identity secret is set.
+    /// Useful for displaying the stable PeerId before starting the network.
+    pub fn preview_peer_id(&self) -> Option<libp2p::PeerId> {
+        self.identity_secret.as_ref().and_then(|secret| {
+            libp2p::identity::Keypair::ed25519_from_bytes(*secret)
+                .ok()
+                .map(|kp| kp.public().to_peer_id())
+        })
+    }
+
+    /// Set NAT traversal strategy.
+    pub fn with_nat_traversal(mut self, strategy: NatTraversal) -> Self {
+        self.nat_traversal = strategy;
+        self
+    }
+
+    /// Add a relay node for NAT traversal.
+    pub fn with_relay_node(mut self, peer_id: libp2p::PeerId, addr: Multiaddr) -> Self {
+        self.relay_nodes.push((peer_id, addr));
+        self
+    }
+
+    /// Set maximum relay reservations.
+    pub fn with_max_relay_reservations(mut self, max: usize) -> Self {
+        self.max_relay_reservations = max;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -147,6 +231,10 @@ mod tests {
         assert_eq!(config.dht_bucket_size, 20);
         assert_eq!(config.dht_alpha, 3);
         assert_eq!(config.dht_replication, 20);
+        assert_eq!(config.nat_traversal, NatTraversal::Full);
+        assert!(config.relay_nodes.is_empty());
+        assert_eq!(config.max_relay_reservations, 3);
+        assert_eq!(config.idle_connection_timeout, Duration::from_secs(60));
     }
 
     #[test]
@@ -206,8 +294,13 @@ mod tests {
         // DHT query timeout
         assert_eq!(config.dht_query_timeout, Duration::from_secs(60));
 
-        // Idle connection timeout
-        assert_eq!(config.idle_connection_timeout, Duration::from_secs(30));
+        // Idle connection timeout (60s for desktop app peer stability)
+        assert_eq!(config.idle_connection_timeout, Duration::from_secs(60));
+
+        // NAT traversal defaults
+        assert_eq!(config.nat_traversal, NatTraversal::Full);
+        assert!(config.relay_nodes.is_empty());
+        assert_eq!(config.max_relay_reservations, 3);
     }
 
     #[test]
@@ -230,5 +323,70 @@ mod tests {
         // Other defaults should remain unchanged
         assert_eq!(config.request_timeout, Duration::from_millis(30_000));
         assert_eq!(config.max_retries, 3);
+    }
+
+    #[test]
+    fn test_identity_secret_default_none() {
+        let config = NetworkConfig::default();
+        assert!(config.identity_secret.is_none());
+        assert!(config.preview_peer_id().is_none());
+    }
+
+    #[test]
+    fn test_identity_secret_deterministic_peer_id() {
+        let secret = [42u8; 32];
+
+        let config1 = NetworkConfig::new().with_identity_secret(secret);
+        let config2 = NetworkConfig::new().with_identity_secret(secret);
+
+        let pid1 = config1.preview_peer_id().expect("should have PeerId");
+        let pid2 = config2.preview_peer_id().expect("should have PeerId");
+
+        // Same secret → same PeerId
+        assert_eq!(pid1, pid2);
+    }
+
+    #[test]
+    fn test_different_secrets_different_peer_ids() {
+        let secret_a = [1u8; 32];
+        let secret_b = [2u8; 32];
+
+        let pid_a = NetworkConfig::new()
+            .with_identity_secret(secret_a)
+            .preview_peer_id()
+            .unwrap();
+        let pid_b = NetworkConfig::new()
+            .with_identity_secret(secret_b)
+            .preview_peer_id()
+            .unwrap();
+
+        assert_ne!(pid_a, pid_b);
+    }
+
+    #[test]
+    fn test_nat_traversal_config() {
+        let config = NetworkConfig::new().with_nat_traversal(NatTraversal::Disabled);
+        assert_eq!(config.nat_traversal, NatTraversal::Disabled);
+
+        let config = NetworkConfig::new().with_nat_traversal(NatTraversal::UpnpOnly);
+        assert_eq!(config.nat_traversal, NatTraversal::UpnpOnly);
+
+        let config = NetworkConfig::new().with_nat_traversal(NatTraversal::RelayOnly);
+        assert_eq!(config.nat_traversal, NatTraversal::RelayOnly);
+    }
+
+    #[test]
+    fn test_relay_node_config() {
+        let peer_id = libp2p::PeerId::random();
+        let addr: Multiaddr = "/ip4/1.2.3.4/tcp/9000".parse().unwrap();
+
+        let config = NetworkConfig::new()
+            .with_relay_node(peer_id, addr.clone())
+            .with_max_relay_reservations(5);
+
+        assert_eq!(config.relay_nodes.len(), 1);
+        assert_eq!(config.relay_nodes[0].0, peer_id);
+        assert_eq!(config.relay_nodes[0].1, addr);
+        assert_eq!(config.max_relay_reservations, 5);
     }
 }
