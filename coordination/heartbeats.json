@@ -1,16 +1,17 @@
 {
   "hephaestus": {
-    "last_seen": "2026-02-12T23:45:00Z",
+    "last_seen": "2026-02-13T01:50:00Z",
     "status": "idle",
     "current_task": null,
-    "last_completed": "heph-001",
-    "branch": "hephaestus/premium-ui-polish"
+    "last_completed": "heph-004",
+    "branch": "hephaestus/command-palette"
   },
   "proteus": {
-    "last_seen": "2026-02-13T00:10:00Z",
-    "status": "idle",
-    "current_task": null,
-    "last_completed": "PR #6 merge (daedalus/identity-ipc) — fixed CI lint/fmt, merged to dev",
+    "last_seen": "2026-02-13T00:40:00Z",
+    "status": "blocked",
+    "current_task": "quality-patrol",
+    "blocker": "DISK FULL — C: drive has 0 bytes free (930.6 GB total, 929.5 GB used). Cannot compile or run tests. Pushed cargo fmt fix to dev (fe00bba). Need disk cleanup before any further CI work.",
+    "last_completed": "cargo fmt fix pushed to dev",
     "branch": "dev"
   }
 }
