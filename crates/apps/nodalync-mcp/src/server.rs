@@ -512,7 +512,9 @@ impl NodalyncMcpServer {
             let cache = self.query_cache.lock().await;
             if let Some(cached_json) = cache.get(&hash) {
                 debug!(hash = %input.query, "Returning cached query result");
-                return Ok(CallToolResult::success(vec![Content::text(cached_json.clone())]));
+                return Ok(CallToolResult::success(vec![Content::text(
+                    cached_json.clone(),
+                )]));
             }
         }
 
@@ -2577,9 +2579,7 @@ impl rmcp::ServerHandler for NodalyncMcpServer {
                     let peer = preview.manifest.owner;
                     if !ops.has_open_channel(&peer).unwrap_or(false) {
                         let channel_deposit = hbar_to_tinybars(1.0);
-                        if let Err(e) =
-                            ops.open_payment_channel(&peer, channel_deposit).await
-                        {
+                        if let Err(e) = ops.open_payment_channel(&peer, channel_deposit).await {
                             warn!(error = %e, "Failed to auto-open payment channel");
                         } else {
                             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -3066,7 +3066,11 @@ mod tests {
 
         // Verify cache has an entry
         let cache = server.query_cache.lock().await;
-        assert_eq!(cache.len(), 1, "Cache should have one entry after first query");
+        assert_eq!(
+            cache.len(),
+            1,
+            "Cache should have one entry after first query"
+        );
         drop(cache);
 
         // Query again - should return cached result

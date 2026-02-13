@@ -525,7 +525,11 @@ mod tests {
         queue.enqueue(dist.clone()).unwrap();
 
         let pending = queue.get_pending().unwrap();
-        assert_eq!(pending.len(), 1, "Duplicate payment_id+recipient should be ignored");
+        assert_eq!(
+            pending.len(),
+            1,
+            "Duplicate payment_id+recipient should be ignored"
+        );
         assert_eq!(pending[0].amount, 100);
     }
 
@@ -550,7 +554,11 @@ mod tests {
 
         // Both should be settled
         let pending = queue.get_pending().unwrap();
-        assert_eq!(pending.len(), 0, "All payments should be settled atomically");
+        assert_eq!(
+            pending.len(),
+            0,
+            "All payments should be settled atomically"
+        );
 
         let batch = queue.get_batch(&batch_id).unwrap();
         assert_eq!(batch.len(), 2, "Both payments should be in the batch");
