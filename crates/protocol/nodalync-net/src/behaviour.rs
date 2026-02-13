@@ -15,17 +15,14 @@
 use crate::codec::{NodalyncCodec, NodalyncRequest, NodalyncResponse, PROTOCOL_NAME};
 use crate::config::{NatTraversal, NetworkConfig};
 use libp2p::{
-    autonat,
-    dcutr,
+    autonat, dcutr,
     gossipsub::{self, MessageId},
     identify,
     kad::{self, store::MemoryStore, Mode},
-    mdns, ping,
-    relay,
+    mdns, ping, relay,
     request_response::{self, ProtocolSupport},
     swarm::NetworkBehaviour,
-    upnp,
-    PeerId,
+    upnp, PeerId,
 };
 use sha2::{Digest, Sha256};
 use std::time::Duration;
@@ -254,13 +251,16 @@ impl NodalyncBehaviour {
         // AutoNAT — detects whether we're behind a NAT
         let autonat = if enable_autonat {
             tracing::info!("AutoNAT enabled for NAT status detection");
-            let mut autonat_config = autonat::Config::default();
-            autonat_config.retry_interval = Duration::from_secs(30);
-            autonat_config.refresh_interval = Duration::from_secs(300);
-            autonat_config.confidence_max = 3;
-            libp2p::swarm::behaviour::toggle::Toggle::from(Some(
-                autonat::Behaviour::new(local_peer_id, autonat_config),
-            ))
+            let autonat_config = autonat::Config {
+                retry_interval: Duration::from_secs(30),
+                refresh_interval: Duration::from_secs(300),
+                confidence_max: 3,
+                ..Default::default()
+            };
+            libp2p::swarm::behaviour::toggle::Toggle::from(Some(autonat::Behaviour::new(
+                local_peer_id,
+                autonat_config,
+            )))
         } else {
             libp2p::swarm::behaviour::toggle::Toggle::from(None)
         };
