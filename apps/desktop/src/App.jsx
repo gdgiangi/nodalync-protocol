@@ -5,6 +5,7 @@ import Sidebar from "./components/Sidebar";
 import StatsBar from "./components/StatsBar";
 import SearchBar from "./components/SearchBar";
 import EntityDetailPanel from "./components/EntityDetailPanel";
+import CreateContentDialog from "./components/CreateContentDialog";
 
 function App() {
   const [graphData, setGraphData] = useState({ nodes: [], links: [] });
@@ -14,6 +15,7 @@ function App() {
   const [searchResults, setSearchResults] = useState([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState("full"); // 'full' or 'subgraph'
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
 
   // Load full graph on mount
   useEffect(() => {
@@ -102,16 +104,30 @@ function App() {
     handleEntitySelect(entityId);
   }
 
+  // Handle content creation success — refresh graph
+  function handleContentCreated(result) {
+    // Reload graph data after a short delay for processing
+    setTimeout(() => {
+      loadFullGraph();
+      loadStats();
+    }, 2000);
+  }
+
   // Keyboard shortcuts
   useEffect(() => {
     function handleKeyDown(e) {
-      // Escape closes detail panel
+      // Escape closes detail panel or create dialog
       if (e.key === "Escape" && detailEntity) {
         setDetailEntity(null);
         e.preventDefault();
       }
+      // Ctrl+N opens create dialog
+      if ((e.ctrlKey || e.metaKey) && e.key === "n" && !showCreateDialog) {
+        setShowCreateDialog(true);
+        e.preventDefault();
+      }
       // / focuses search
-      if (e.key === "/" && !e.ctrlKey && !e.metaKey && !detailEntity) {
+      if (e.key === "/" && !e.ctrlKey && !e.metaKey && !detailEntity && !showCreateDialog) {
         const searchInput = document.querySelector('input[placeholder="Search entities..."]');
         if (searchInput && document.activeElement !== searchInput) {
           searchInput.focus();
@@ -121,7 +137,7 @@ function App() {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [detailEntity]);
+  }, [detailEntity, showCreateDialog]);
 
   return (
     <div className="flex h-screen w-screen" style={{ background: 'var(--bg-deep)' }}>
@@ -155,6 +171,19 @@ function App() {
           </h1>
 
           <SearchBar onSearch={handleSearch} />
+
+          {/* Create content button */}
+          <button
+            onClick={() => setShowCreateDialog(true)}
+            className="btn btn-accent text-[10px] flex-shrink-0"
+            title="Create new content (Ctrl+N)"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+            New
+          </button>
 
           {viewMode === "subgraph" && (
             <button onClick={loadFullGraph} className="btn text-[10px] flex-shrink-0">
@@ -209,9 +238,19 @@ function App() {
                 <p className="text-[13px] mb-1" style={{ color: 'var(--text-tertiary)' }}>
                   No knowledge yet
                 </p>
-                <p className="text-[11px]" style={{ color: 'var(--text-ghost)' }}>
+                <p className="text-[11px] mb-3" style={{ color: 'var(--text-ghost)' }}>
                   Add content to start building your graph
                 </p>
+                <button
+                  onClick={() => setShowCreateDialog(true)}
+                  className="btn btn-accent text-[11px]"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                  </svg>
+                  Create your first note
+                </button>
               </div>
             </div>
           )}
@@ -230,6 +269,13 @@ function App() {
           onFocusEntity={handleFocusEntity}
         />
       )}
+
+      {/* Create Content Dialog */}
+      <CreateContentDialog
+        isOpen={showCreateDialog}
+        onClose={() => setShowCreateDialog(false)}
+        onCreated={handleContentCreated}
+      />
     </div>
   );
 }

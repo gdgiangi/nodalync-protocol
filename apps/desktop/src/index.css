@@ -342,6 +342,10 @@
   animation: scale-in var(--duration-normal) var(--ease-out);
 }
 
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 /* ═══ Staggered Entry ═══ */
 .stagger-1 { animation-delay: 0.00s; }
 .stagger-2 { animation-delay: 0.04s; }
