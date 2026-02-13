@@ -116,10 +116,69 @@ Delete content from the local node.
 - **Args:** `{ hash: string }` (64-char hex)
 - **Returns:** `void`
 
+### `update_published_content`
+Update existing published content with new data and propagate to network.
+- **Args:** `{ old_hash: string, file_path?: string, text?: string, title?: string, description?: string }`
+- Either `file_path` or `text` must be provided (new content source).
+- **Returns:**
+  ```typescript
+  {
+    old_hash: string,
+    new_hash: string,
+    title: string,
+    size: number,
+    version_number: number
+  }
+  ```
+- **Flow:** Creates a new version linked to the previous one, broadcasts `AnnounceUpdate` via GossipSub so peers update their caches, announces new hash in DHT, removes old hash from DHT.
+
 ### `unpublish_content`
 Unpublish content (sets Private, removes from DHT).
 - **Args:** `{ hash: string }` (64-char hex)
 - **Returns:** `void`
+
+---
+
+## Content Import Commands (L0 without publish)
+
+These commands import content locally as L0 without publishing to the network. Content stays Private until explicitly published. They also run L1 mention extraction and bridge results to the L2 graph.
+
+### `add_content`
+Import a file as L0 content and extract L1 mentions.
+- **Args:** `{ file_path: string, title?: string }`
+- `title` defaults to the filename if not provided.
+- **Returns:**
+  ```typescript
+  {
+    hash: string,
+    title: string,
+    size: number,
+    content_type: "L0",
+    mention_count: number,
+    entities: ImportedEntity[],
+    topics: string[],
+    summary: string
+  }
+  ```
+- **`ImportedEntity`:**
+  ```typescript
+  {
+    entity_id: string,        // Graph entity ID (e.g. "e42")
+    label: string,            // Entity label
+    entity_type: string,      // "concept"
+    existing: boolean,        // true if matched existing graph entity
+    confidence: number,       // 1.0 for existing, 0.6 for new stubs
+    source_mention?: string   // The mention text that produced this entity
+  }
+  ```
+- **Flow:** File → L0 content (Private) → L1 extraction → L2 graph bridging. New entities appear in the graph immediately. Publish later with `publish_content`.
+- **Errors:** Duplicate hash, empty file, file not found.
+
+### `add_text_content`
+Import text as L0 content and extract L1 mentions.
+- **Args:** `{ text: string, title: string }`
+- **Returns:** Same as `add_content`
+- **Flow:** Same as `add_content` but for raw text instead of a file.
 
 ---
 
@@ -453,6 +512,56 @@ Analyze why the node can't find peers. Returns issues and suggestions.
 
 ---
 
+## Connection Invite Commands
+
+Shareable invite strings for easy P2P onboarding. Users generate an invite on one node and paste it on another to connect directly.
+
+### `generate_invite`
+Generate a shareable invite string containing the node's peer ID and listen addresses.
+- **Args:** none
+- **Returns:**
+  ```typescript
+  {
+    compact: string,        // "peer_id@best_address" (easy to share)
+    full: string,           // "peer_id@addr1|addr2|..." (all addresses)
+    peer_id: string,        // The local peer ID
+    address_count: number   // Number of addresses included
+  }
+  ```
+- **`compact`** selects the best address (public IP > private IP > loopback). Use this for display/sharing.
+- **`full`** includes all listen addresses separated by `|`. More reliable for connection.
+- **Requires:** Network must be running with at least one listen address.
+
+### `accept_invite`
+Accept a peer invite string and connect immediately.
+- **Args:** `{ invite: string }`
+- Accepts both compact (`peer_id@address`) and full (`peer_id@addr1|addr2|...`) formats.
+- **Returns:** `{ success: boolean, address: string, error?: string }`
+- **Flow:** Parses invite → saves peer to known peers store → tries each address until one connects → falls back to DHT peer lookup.
+- If `success` is `false`, the peer was saved for future reconnection but immediate connection failed.
+
+---
+
+## Resource Stats Command
+
+### `get_resource_stats`
+Get a quick overview of node resource utilization.
+- **Args:** none
+- **Returns:**
+  ```typescript
+  {
+    connected_peers: number,
+    listen_addresses: number,
+    content_count: number,
+    network_active: boolean,
+    known_peers: number,
+    seed_nodes: number
+  }
+  ```
+- **Use case:** Dashboard/network view summary widget.
+
+---
+
 ## Channel Management Commands
 
 Payment channels are required for querying paid content from peers. Without a channel, paid queries fail with `ChannelRequired`.
@@ -578,3 +687,7 @@ Check if an open channel exists with a peer. Accepts both libp2p and Nodalync pe
 16. **Peer handshake:** When a peer connects, the event loop automatically exchanges PeerInfo messages (protocol version, public key, capabilities). After handshake completes, `PeerInfo.handshake_complete` becomes `true` and message signature verification is enabled for that peer. No frontend action needed — this is fully automatic.
 17. **Seed nodes:** `auto_start_network` loads seeds first (highest priority), then known peers, then mDNS. For first-run users with no known peers, seeds are the only way to discover the network. Use `get_seed_nodes` to display seed config, `add_seed_node` to let users add custom seeds.
 18. **Network diagnostics:** If `get_network_health` shows "disconnected", call `diagnose_network` for actionable suggestions. Display `issues` + `suggestions` in a troubleshooting panel.
+19. **Content import (no publish):** Use `add_content(file_path)` or `add_text_content(text, title)` to import L0 content without publishing. Content stays Private. L1 extraction runs automatically and results bridge to the L2 graph. The user can publish later with `publish_file`/`publish_text` when ready.
+20. **Content updates:** Use `update_published_content(old_hash, { file_path | text })` to create a new version. This broadcasts `AnnounceUpdate` to the network so peers update their caches, and updates the DHT.
+21. **Connection invites:** `generate_invite` creates a shareable string, `accept_invite(invite)` connects. The compact format is for easy sharing (one address); the full format includes all addresses for reliability. Accepted invites are saved to known peers for future reconnection.
+22. **Resource stats:** `get_resource_stats` gives a quick overview (peers, content, seeds) for dashboard widgets.

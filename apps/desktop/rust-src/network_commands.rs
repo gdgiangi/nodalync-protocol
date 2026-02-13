@@ -7,6 +7,7 @@
 //! Includes seed node management for first-run network discovery.
 
 use nodalync_net::{Network, NetworkConfig, NetworkNode};
+use nodalync_store::ManifestStore;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;
@@ -894,4 +895,276 @@ pub struct NetworkDiagnostics {
     pub nat_status: String,
     pub issues: Vec<String>,
     pub suggestions: Vec<String>,
+}
+
+// ─── Connection Invite Commands ──────────────────────────────────────────────
+
+/// Invite string info returned to the frontend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InviteInfo {
+    /// Compact invite string for sharing (peer_id@address)
+    pub compact: String,
+    /// Full invite with all listen addresses
+    pub full: String,
+    /// The local peer ID included in the invite
+    pub peer_id: String,
+    /// Number of addresses included
+    pub address_count: usize,
+}
+
+/// Generate a shareable invite string for P2P onboarding.
+///
+/// The invite contains the node's libp2p peer ID and listen addresses.
+/// Another user can paste this into `accept_invite` to connect directly.
+///
+/// Two formats:
+/// - **compact**: `peer_id@best_address` (one address, easy to share)
+/// - **full**: `peer_id@addr1|addr2|...` (all addresses, more reliable)
+#[tauri::command]
+pub async fn generate_invite(
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
+) -> Result<InviteInfo, String> {
+    let guard = protocol.lock().await;
+    let state = guard
+        .as_ref()
+        .ok_or("Node not initialized — unlock first")?;
+
+    let network = state
+        .network
+        .as_ref()
+        .ok_or("Network not running — start it first")?;
+
+    let peer_id = network.local_peer_id().to_string();
+    let listen_addrs: Vec<String> = network
+        .listen_addresses()
+        .iter()
+        .map(|a| a.to_string())
+        .collect();
+
+    if listen_addrs.is_empty() {
+        return Err("No listen addresses available. Network may still be starting.".to_string());
+    }
+
+    // Smart address selection: prefer non-loopback, non-link-local addresses
+    let best_addr = select_best_address(&listen_addrs);
+
+    let compact = format!("{}@{}", peer_id, best_addr);
+    let full = format!("{}@{}", peer_id, listen_addrs.join("|"));
+
+    info!("Generated invite: {} ({} addresses)", peer_id, listen_addrs.len());
+
+    Ok(InviteInfo {
+        compact,
+        full,
+        peer_id,
+        address_count: listen_addrs.len(),
+    })
+}
+
+/// Accept a peer invite and connect.
+///
+/// Parses the invite string, adds the peer to known peers, and dials
+/// them immediately. Supports both compact and full invite formats.
+///
+/// Invite format: `peer_id@address` or `peer_id@addr1|addr2|...`
+#[tauri::command]
+pub async fn accept_invite(
+    invite: String,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
+) -> Result<DialResult, String> {
+    let guard = protocol.lock().await;
+    let state = guard
+        .as_ref()
+        .ok_or("Node not initialized — unlock first")?;
+
+    let network = state
+        .network
+        .as_ref()
+        .ok_or("Network not running — start it first")?;
+
+    // Parse invite: peer_id@addr1|addr2|...
+    let invite = invite.trim();
+    let parts: Vec<&str> = invite.splitn(2, '@').collect();
+    if parts.len() != 2 {
+        return Err(
+            "Invalid invite format. Expected: peer_id@/ip4/x.x.x.x/tcp/port".to_string(),
+        );
+    }
+
+    let peer_id_str = parts[0];
+    let addr_part = parts[1];
+
+    // Validate peer ID
+    let libp2p_peer: nodalync_net::PeerId = peer_id_str
+        .parse()
+        .map_err(|e| format!("Invalid peer ID in invite: {}", e))?;
+
+    // Parse addresses (pipe-separated for full invites)
+    let addresses: Vec<String> = addr_part
+        .split('|')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if addresses.is_empty() {
+        return Err("No addresses in invite".to_string());
+    }
+
+    // Save to known peers store
+    let mut peer_store = PeerStore::load(&state.data_dir);
+    peer_store.record_peer(peer_id_str, addresses.clone(), None, true);
+    if let Err(e) = peer_store.save(&state.data_dir) {
+        warn!("Failed to save invite peer: {}", e);
+    }
+
+    // Try each address until one connects
+    let mut last_error = String::new();
+    for addr_str in &addresses {
+        match addr_str.parse::<nodalync_net::Multiaddr>() {
+            Ok(addr) => {
+                match network.dial(addr).await {
+                    Ok(()) => {
+                        info!("Invite accepted — connected to {} via {}", peer_id_str, addr_str);
+                        return Ok(DialResult {
+                            success: true,
+                            address: addr_str.clone(),
+                            error: None,
+                        });
+                    }
+                    Err(e) => {
+                        debug!("Dial failed for {}: {}", addr_str, e);
+                        last_error = e.to_string();
+                    }
+                }
+            }
+            Err(e) => {
+                debug!("Invalid address in invite '{}': {}", addr_str, e);
+                last_error = format!("Invalid address: {}", e);
+            }
+        }
+    }
+
+    // All addresses failed — try peer ID dial as fallback (if DHT knows them)
+    match network.dial_peer(libp2p_peer).await {
+        Ok(()) => {
+            info!("Invite accepted — connected to {} via DHT lookup", peer_id_str);
+            Ok(DialResult {
+                success: true,
+                address: peer_id_str.to_string(),
+                error: None,
+            })
+        }
+        Err(_) => {
+            warn!("Invite connection failed for all addresses: {}", last_error);
+            Ok(DialResult {
+                success: false,
+                address: addresses.first().cloned().unwrap_or_default(),
+                error: Some(format!(
+                    "Could not connect to peer. Tried {} addresses. Last error: {}",
+                    addresses.len(),
+                    last_error
+                )),
+            })
+        }
+    }
+}
+
+/// Select the best address from a list for sharing.
+///
+/// Prefers: public IP > private IP > loopback.
+/// Avoids link-local (169.254.x.x, fe80::).
+fn select_best_address(addresses: &[String]) -> &str {
+    // Prefer non-loopback, non-link-local
+    let mut best: Option<&str> = None;
+    let mut best_score = 0u8;
+
+    for addr in addresses {
+        let score = if addr.contains("/ip4/127.") || addr.contains("/ip6/::1") {
+            1 // Loopback — worst
+        } else if addr.contains("/ip4/169.254.") || addr.contains("/ip6/fe80") {
+            0 // Link-local — skip
+        } else if addr.contains("/ip4/10.")
+            || addr.contains("/ip4/172.")
+            || addr.contains("/ip4/192.168.")
+        {
+            2 // Private — ok for LAN
+        } else {
+            3 // Public — best
+        };
+
+        if score > best_score {
+            best_score = score;
+            best = Some(addr);
+        }
+    }
+
+    best.unwrap_or(addresses.first().map(|s| s.as_str()).unwrap_or(""))
+}
+
+// ─── Resource Stats Command ──────────────────────────────────────────────────
+
+/// Resource usage stats returned to the frontend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceStats {
+    /// Total connected peers
+    pub connected_peers: usize,
+    /// Current listen addresses
+    pub listen_addresses: usize,
+    /// Total content items stored locally
+    pub content_count: usize,
+    /// Network active
+    pub network_active: bool,
+    /// Known peers in persistent store
+    pub known_peers: usize,
+    /// Enabled seed nodes
+    pub seed_nodes: usize,
+}
+
+/// Get resource usage stats for the node.
+///
+/// Provides a quick overview of the node's resource utilization.
+/// Useful for the network view and dashboard.
+#[tauri::command]
+pub async fn get_resource_stats(
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
+) -> Result<ResourceStats, String> {
+    let guard = protocol.lock().await;
+    let state = guard
+        .as_ref()
+        .ok_or("Node not initialized — unlock first")?;
+
+    let connected_peers = state
+        .network
+        .as_ref()
+        .map(|n| n.connected_peers().len())
+        .unwrap_or(0);
+
+    let listen_addresses = state
+        .network
+        .as_ref()
+        .map(|n| n.listen_addresses().len())
+        .unwrap_or(0);
+
+    let content_count = {
+        let filter = nodalync_store::ManifestFilter::new();
+        state
+            .ops
+            .state()
+            .manifests
+            .list(filter)
+            .map(|v| v.len())
+            .unwrap_or(0)
+    };
+
+    let peer_store = PeerStore::load(&state.data_dir);
+    let seed_store = SeedStore::load(&state.data_dir);
+
+    Ok(ResourceStats {
+        connected_peers,
+        listen_addresses,
+        content_count,
+        network_active: state.network.is_some(),
+        known_peers: peer_store.peers.len(),
+        seed_nodes: seed_store.enabled_count(),
+    })
 }
