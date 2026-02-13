@@ -175,6 +175,25 @@ impl L2GraphDB {
         Ok(())
     }
 
+    /// Find entity by its ID (e.g. "e42").
+    pub fn find_entity_by_id(&self, id: &str) -> Result<Option<Entity>> {
+        let query = "
+            SELECT e.id, e.canonical_label, e.entity_type, e.description,
+                   e.confidence, e.first_seen, e.last_updated, e.source_count,
+                   e.metadata_json, GROUP_CONCAT(a.alias) as aliases
+            FROM entities e
+            LEFT JOIN entity_aliases a ON e.id = a.entity_id
+            WHERE e.id = ?1
+            GROUP BY e.id
+            LIMIT 1";
+
+        match self.conn.query_row(query, [id], Self::entity_from_row) {
+            Ok(entity) => Ok(Some(entity)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Find entity by label or alias.
     /// Prefers exact canonical_label match over alias match.
     pub fn find_entity(&self, label: &str) -> Result<Option<Entity>> {

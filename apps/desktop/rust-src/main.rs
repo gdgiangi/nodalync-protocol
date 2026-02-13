@@ -85,6 +85,10 @@ fn main() {
             get_context,
             // L1 Extraction pipeline (bridges L0 → L1 → L2)
             extract_mentions,
+            // L3 Synthesis commands
+            create_l3_summary,
+            get_l3_summaries,
+            get_entity_content_links,
             // Protocol commands (Phase 2 — publish flow)
             check_identity,
             init_node,

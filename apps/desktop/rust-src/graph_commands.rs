@@ -1,4 +1,4 @@
-//! Tauri commands for L2 Graph DB queries and L1 extraction pipeline.
+//! Tauri commands for L2 Graph DB queries, L1 extraction pipeline, and L3 synthesis.
 //! Provides the bridge between the React frontend, protocol content, and the
 //! SQLite graph database.
 
@@ -498,4 +498,291 @@ fn classify_entity_type(label: &str) -> String {
 
     // Default: concept for single/double words
     "concept".to_string()
+}
+
+// ─── L3 Synthesis Commands ───────────────────────────────────────────────────
+
+/// An L3 summary entity — a synthesis of multiple L2 entities.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct L3Summary {
+    /// Entity ID in the graph DB (e.g. "e42").
+    pub entity_id: String,
+    /// User-provided title for the synthesis.
+    pub title: String,
+    /// User-provided or auto-generated summary text.
+    pub summary_text: String,
+    /// IDs of L2 entities that were synthesized.
+    pub source_entity_ids: Vec<String>,
+    /// Labels of source entities (for display without extra lookups).
+    pub source_entity_labels: Vec<String>,
+    /// When this synthesis was created.
+    pub created_at: String,
+}
+
+/// Result of L3 creation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct L3CreateResult {
+    /// The newly created L3 entity.
+    pub summary: L3Summary,
+    /// How many "synthesizes" relationships were created (should equal source count).
+    pub relationships_created: u32,
+}
+
+/// Create an L3 synthesis entity from selected L2 entities.
+///
+/// This is the knowledge synthesis operation: select entities → create a summary
+/// that references all of them. The summary entity has type "summary" and
+/// "synthesizes" relationships pointing to each source entity.
+///
+/// Hephaestus uses this for the "Create Summary" action in the graph view.
+#[tauri::command]
+pub async fn create_l3_summary(
+    title: String,
+    summary_text: String,
+    entity_ids: Vec<String>,
+    db: State<'_, StdMutex<L2GraphDB>>,
+) -> Result<L3CreateResult, String> {
+    if entity_ids.is_empty() {
+        return Err("At least one entity must be selected for synthesis".to_string());
+    }
+    if title.trim().is_empty() {
+        return Err("Summary title cannot be empty".to_string());
+    }
+    if entity_ids.len() > 100 {
+        return Err("Cannot synthesize more than 100 entities at once".to_string());
+    }
+
+    info!(
+        "Creating L3 summary '{}' from {} entities",
+        title,
+        entity_ids.len()
+    );
+
+    let db = db.lock().map_err(|e| format!("DB lock error: {}", e))?;
+    let now = chrono::Utc::now();
+
+    // Verify all source entities exist and collect their labels
+    let mut source_labels = Vec::with_capacity(entity_ids.len());
+    for eid in &entity_ids {
+        match db
+            .find_entity_by_id(eid)
+            .map_err(|e| format!("Failed to look up entity {}: {}", eid, e))?
+        {
+            Some(entity) => source_labels.push(entity.canonical_label),
+            None => return Err(format!("Entity '{}' not found in graph", eid)),
+        }
+    }
+
+    // Create the L3 summary entity
+    let summary_id = db
+        .next_entity_id()
+        .map_err(|e| format!("Failed to get entity ID: {}", e))?;
+
+    let metadata = serde_json::json!({
+        "level": "L3",
+        "synthesis": true,
+        "source_entity_ids": entity_ids,
+        "source_count": entity_ids.len(),
+    });
+
+    let summary_entity = nodalync_graph::Entity {
+        id: summary_id.clone(),
+        canonical_label: title.clone(),
+        entity_type: "summary".to_string(),
+        description: Some(summary_text.clone()),
+        confidence: 1.0, // User-created, full confidence
+        first_seen: now,
+        last_updated: now,
+        source_count: entity_ids.len() as i32,
+        metadata_json: Some(metadata.to_string()),
+        aliases: Vec::new(),
+    };
+
+    db.upsert_entity(&summary_entity)
+        .map_err(|e| format!("Failed to create L3 entity: {}", e))?;
+
+    // Create "synthesizes" relationships from the L3 entity to each source
+    let mut rels_created = 0u32;
+    for source_id in &entity_ids {
+        let rel_id = db
+            .next_relationship_id()
+            .map_err(|e| format!("Failed to get relationship ID: {}", e))?;
+
+        let rel = nodalync_graph::Relationship {
+            id: rel_id,
+            subject_id: summary_id.clone(),
+            predicate: "synthesizes".to_string(),
+            object_type: "entity".to_string(),
+            object_value: source_id.clone(),
+            confidence: 1.0,
+            extracted_at: now,
+            metadata_json: None,
+        };
+
+        let created = db
+            .add_relationship(&rel)
+            .map_err(|e| format!("Failed to create relationship: {}", e))?;
+        if created {
+            rels_created += 1;
+        }
+    }
+
+    info!(
+        "L3 summary '{}' ({}) created with {} relationships",
+        title, summary_id, rels_created
+    );
+
+    Ok(L3CreateResult {
+        summary: L3Summary {
+            entity_id: summary_id,
+            title,
+            summary_text,
+            source_entity_ids: entity_ids,
+            source_entity_labels: source_labels,
+            created_at: now.to_rfc3339(),
+        },
+        relationships_created: rels_created,
+    })
+}
+
+/// List all L3 summaries in the graph.
+///
+/// Returns summaries sorted newest-first, with their source entity references.
+#[tauri::command]
+pub async fn get_l3_summaries(
+    limit: Option<u32>,
+    db: State<'_, StdMutex<L2GraphDB>>,
+) -> Result<Vec<L3Summary>, String> {
+    let limit = limit.unwrap_or(50).min(500);
+    info!("Listing L3 summaries (limit={})", limit);
+
+    let db = db.lock().map_err(|e| format!("DB lock error: {}", e))?;
+    let conn = db.connection();
+
+    // Find entities with metadata containing "level":"L3"
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, canonical_label, description, metadata_json, first_seen
+             FROM entities
+             WHERE entity_type = 'summary'
+               AND metadata_json LIKE '%\"level\":\"L3\"%'
+             ORDER BY first_seen DESC
+             LIMIT ?1",
+        )
+        .map_err(|e| format!("Query error: {}", e))?;
+
+    let summaries: Vec<L3Summary> = stmt
+        .query_map([limit], |row| {
+            let id: String = row.get(0)?;
+            let title: String = row.get(1)?;
+            let description: Option<String> = row.get(2)?;
+            let metadata_str: Option<String> = row.get(3)?;
+            let first_seen: i64 = row.get(4)?;
+
+            // Extract source_entity_ids from metadata
+            let (source_ids, source_labels) = if let Some(ref meta) = metadata_str {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(meta) {
+                    let ids: Vec<String> = parsed
+                        .get("source_entity_ids")
+                        .and_then(|v| serde_json::from_value(v.clone()).ok())
+                        .unwrap_or_default();
+                    (ids, Vec::new()) // Labels populated below
+                } else {
+                    (Vec::new(), Vec::new())
+                }
+            } else {
+                (Vec::new(), Vec::new())
+            };
+
+            Ok(L3Summary {
+                entity_id: id,
+                title,
+                summary_text: description.unwrap_or_default(),
+                source_entity_ids: source_ids,
+                source_entity_labels: source_labels,
+                created_at: chrono::DateTime::from_timestamp(first_seen, 0)
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_default(),
+            })
+        })
+        .map_err(|e| format!("Query error: {}", e))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    // Populate source labels for each summary
+    let mut result = Vec::with_capacity(summaries.len());
+    for mut summary in summaries {
+        let mut labels = Vec::with_capacity(summary.source_entity_ids.len());
+        for eid in &summary.source_entity_ids {
+            let label: String = conn
+                .query_row(
+                    "SELECT canonical_label FROM entities WHERE id = ?1",
+                    [eid],
+                    |row| row.get(0),
+                )
+                .unwrap_or_else(|_| format!("[deleted: {}]", eid));
+            labels.push(label);
+        }
+        summary.source_entity_labels = labels;
+        result.push(summary);
+    }
+
+    info!("Found {} L3 summaries", result.len());
+    Ok(result)
+}
+
+/// Get L0 content items linked to a specific entity.
+///
+/// This powers the "L0 focus → L1 tendrils" interaction: when a user clicks
+/// an L2 entity, show which L0 content items contributed to it.
+/// Returns content hashes, types, and the link timestamps.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityContentLink {
+    /// Content ID in the registry.
+    pub content_id: String,
+    /// Current hash of the content.
+    pub content_hash: String,
+    /// Content type (e.g. "L0").
+    pub content_type: String,
+    /// When this entity↔content link was created.
+    pub linked_at: String,
+}
+
+#[tauri::command]
+pub async fn get_entity_content_links(
+    entity_id: String,
+    db: State<'_, StdMutex<L2GraphDB>>,
+) -> Result<Vec<EntityContentLink>, String> {
+    info!("Getting content links for entity: {}", entity_id);
+    let db = db.lock().map_err(|e| format!("DB lock error: {}", e))?;
+    let conn = db.connection();
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT es.content_id, cr.current_hash, cr.content_type, es.added_at
+             FROM entity_sources es
+             JOIN content_registry cr ON es.content_id = cr.content_id
+             WHERE es.entity_id = ?1
+               AND cr.deleted_at IS NULL
+             ORDER BY es.added_at DESC",
+        )
+        .map_err(|e| format!("Query error: {}", e))?;
+
+    let links: Vec<EntityContentLink> = stmt
+        .query_map([&entity_id], |row| {
+            Ok(EntityContentLink {
+                content_id: row.get(0)?,
+                content_hash: row.get(1)?,
+                content_type: row.get(2)?,
+                linked_at: chrono::DateTime::from_timestamp(row.get::<_, i64>(3)?, 0)
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_default(),
+            })
+        })
+        .map_err(|e| format!("Query error: {}", e))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    info!("Found {} content links for entity {}", links.len(), entity_id);
+    Ok(links)
 }
