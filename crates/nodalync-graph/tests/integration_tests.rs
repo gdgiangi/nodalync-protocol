@@ -53,7 +53,12 @@ fn make_rel(db: &L2GraphDB, subject: &str, predicate: &str, object: &str) -> Str
 #[test]
 fn test_entity_upsert_and_find() {
     let db = test_db();
-    let id = make_entity(&db, "Nodalync Protocol", "Product", "A decentralized knowledge protocol");
+    let id = make_entity(
+        &db,
+        "Nodalync Protocol",
+        "Product",
+        "A decentralized knowledge protocol",
+    );
 
     let found = db.find_entity("Nodalync Protocol").unwrap();
     assert!(found.is_some());
@@ -205,7 +210,12 @@ fn test_clear_all() {
 #[test]
 fn test_search_single_word() {
     let db = test_db();
-    make_entity(&db, "Nodalync Protocol", "Product", "Knowledge economics protocol");
+    make_entity(
+        &db,
+        "Nodalync Protocol",
+        "Product",
+        "Knowledge economics protocol",
+    );
     make_entity(&db, "Unrelated Thing", "Thing", "No match here");
 
     let results = db.search_entities("nodalync", 10).unwrap();
@@ -217,8 +227,18 @@ fn test_search_single_word() {
 fn test_search_multi_word() {
     let db = test_db();
     make_entity(&db, "Nodalync Protocol", "Product", "Knowledge economics");
-    make_entity(&db, "Revenue Strategy", "Decision", "First revenue in 90 days");
-    make_entity(&db, "Nodalync Revenue Plan", "Asset", "Revenue plan for protocol");
+    make_entity(
+        &db,
+        "Revenue Strategy",
+        "Decision",
+        "First revenue in 90 days",
+    );
+    make_entity(
+        &db,
+        "Nodalync Revenue Plan",
+        "Asset",
+        "Revenue plan for protocol",
+    );
 
     let results = db.search_entities("nodalync revenue", 10).unwrap();
     // "Nodalync Revenue Plan" matches both words → should rank highest
@@ -229,7 +249,12 @@ fn test_search_multi_word() {
 #[test]
 fn test_search_by_description() {
     let db = test_db();
-    make_entity(&db, "Funding Decision", "Decision", "Bootstrap with grants before venture capital");
+    make_entity(
+        &db,
+        "Funding Decision",
+        "Decision",
+        "Bootstrap with grants before venture capital",
+    );
 
     let results = db.search_entities("bootstrap grants", 10).unwrap();
     assert_eq!(results.len(), 1);
@@ -260,7 +285,7 @@ fn test_subgraph_basic() {
     let sg = db.get_subgraph(&e1, 1, 50).unwrap();
     assert_eq!(sg.center_entity.canonical_label, "Center");
     assert_eq!(sg.connected_entities.len(), 2); // e2, e3
-    // e4 is 2 hops away, should not be included at max_hops=1
+                                                // e4 is 2 hops away, should not be included at max_hops=1
 
     let sg2 = db.get_subgraph(&e1, 2, 50).unwrap();
     assert_eq!(sg2.connected_entities.len(), 3); // e2, e3, e4
@@ -295,7 +320,7 @@ fn test_context_filters_relationships() {
 
     let ctx = db.get_context("nodalync", 10).unwrap();
     assert_eq!(ctx.relevant_entities.len(), 2); // e1, e2
-    // Should only include the e1↔e2 relationship, not e1→e3
+                                                // Should only include the e1↔e2 relationship, not e1→e3
     assert_eq!(ctx.relevant_relationships.len(), 1);
     assert_eq!(ctx.relevant_relationships[0].object_value, e2);
 }
@@ -303,15 +328,28 @@ fn test_context_filters_relationships() {
 #[test]
 fn test_context_confidence_scoring() {
     let db = test_db();
-    make_entity(&db, "Nodalync Revenue Plan", "Asset", "Revenue plan for the protocol");
+    make_entity(
+        &db,
+        "Nodalync Revenue Plan",
+        "Asset",
+        "Revenue plan for the protocol",
+    );
 
     let ctx = db.get_context("nodalync revenue", 10).unwrap();
     // Both words match → confidence should be 1.0
-    assert!(ctx.confidence_score > 0.9, "confidence was {}", ctx.confidence_score);
+    assert!(
+        ctx.confidence_score > 0.9,
+        "confidence was {}",
+        ctx.confidence_score
+    );
 
     let ctx2 = db.get_context("nodalync xyzbogus", 10).unwrap();
     // Only one of two words matches → confidence ~0.5
-    assert!(ctx2.confidence_score < 0.8, "confidence was {}", ctx2.confidence_score);
+    assert!(
+        ctx2.confidence_score < 0.8,
+        "confidence was {}",
+        ctx2.confidence_score
+    );
 }
 
 #[test]

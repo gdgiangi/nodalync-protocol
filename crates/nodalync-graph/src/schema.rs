@@ -1,5 +1,5 @@
-use rusqlite::Connection;
 use anyhow::Result;
+use rusqlite::Connection;
 
 /// Create all necessary tables for the L2 Graph layer
 /// Based on desktop-app-spec.md Section 4.2 SQLite Schema
@@ -237,7 +237,7 @@ pub fn initialize_counters(conn: &Connection) -> Result<()> {
         "INSERT OR IGNORE INTO id_counters (counter_name, next_value) VALUES ('entity', 1)",
         [],
     )?;
-    
+
     conn.execute(
         "INSERT OR IGNORE INTO id_counters (counter_name, next_value) VALUES ('relationship', 1)",
         [],
@@ -251,7 +251,7 @@ pub fn check_schema_version(conn: &Connection) -> Result<u32> {
     match conn.query_row(
         "SELECT value FROM settings WHERE key = 'schema_version'",
         [],
-        |row| row.get::<_, String>(0)
+        |row| row.get::<_, String>(0),
     ) {
         Ok(version_str) => Ok(version_str.parse().unwrap_or(0)),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(0),

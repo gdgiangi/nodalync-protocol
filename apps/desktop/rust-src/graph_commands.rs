@@ -1,11 +1,15 @@
-//! Tauri commands for L2 Graph DB queries.
-//! Provides the bridge between the React frontend and the SQLite graph database.
+//! Tauri commands for L2 Graph DB queries and L1 extraction pipeline.
+//! Provides the bridge between the React frontend, protocol content, and the
+//! SQLite graph database.
 
 use nodalync_graph::L2GraphDB;
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::sync::Mutex as StdMutex;
 use tauri::State;
+use tokio::sync::Mutex as TokioMutex;
 use tracing::info;
+
+use crate::protocol::ProtocolState;
 
 /// Graph node for D3 force simulation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,7 +68,7 @@ pub struct TypeCount {
 /// Load the full graph for D3 visualization.
 /// Returns all entities as nodes and all relationships as links.
 #[tauri::command]
-pub async fn get_graph_data(db: State<'_, Mutex<L2GraphDB>>) -> Result<GraphData, String> {
+pub async fn get_graph_data(db: State<'_, StdMutex<L2GraphDB>>) -> Result<GraphData, String> {
     info!("Loading full graph data for visualization");
     let db = db.lock().map_err(|e| format!("DB lock error: {}", e))?;
 
@@ -128,7 +132,7 @@ pub async fn get_graph_data(db: State<'_, Mutex<L2GraphDB>>) -> Result<GraphData
 /// Get subgraph around a specific entity
 #[tauri::command]
 pub async fn get_subgraph(
-    db: State<'_, Mutex<L2GraphDB>>,
+    db: State<'_, StdMutex<L2GraphDB>>,
     entity_id: String,
     max_hops: u32,
     max_results: u32,
@@ -182,7 +186,7 @@ pub async fn get_subgraph(
 /// Search entities by keyword
 #[tauri::command]
 pub async fn search_entities(
-    db: State<'_, Mutex<L2GraphDB>>,
+    db: State<'_, StdMutex<L2GraphDB>>,
     query: String,
     limit: u32,
 ) -> Result<Vec<SearchResult>, String> {
@@ -210,7 +214,7 @@ pub async fn search_entities(
 
 /// Get database statistics
 #[tauri::command]
-pub async fn get_graph_stats(db: State<'_, Mutex<L2GraphDB>>) -> Result<GraphStats, String> {
+pub async fn get_graph_stats(db: State<'_, StdMutex<L2GraphDB>>) -> Result<GraphStats, String> {
     info!("Getting graph statistics");
     let db = db.lock().map_err(|e| format!("DB lock error: {}", e))?;
 
@@ -243,7 +247,7 @@ pub async fn get_graph_stats(db: State<'_, Mutex<L2GraphDB>>) -> Result<GraphSta
 /// Get focused context for a query (for agent integration)
 #[tauri::command]
 pub async fn get_context(
-    db: State<'_, Mutex<L2GraphDB>>,
+    db: State<'_, StdMutex<L2GraphDB>>,
     query: String,
     max_entities: u32,
 ) -> Result<serde_json::Value, String> {
@@ -255,4 +259,243 @@ pub async fn get_context(
         .map_err(|e| format!("Context error: {}", e))?;
 
     serde_json::to_value(&context).map_err(|e| format!("Serialize error: {}", e))
+}
+
+// ─── L1 Extraction Pipeline ─────────────────────────────────────────────────
+
+/// Result of mention extraction — an entity matched or created in the graph.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractedEntity {
+    /// Entity ID in the L2 graph DB.
+    pub entity_id: String,
+    /// Canonical label.
+    pub label: String,
+    /// Entity type (concept, organization, person, technology, etc.).
+    pub entity_type: String,
+    /// Whether this entity already existed in the graph.
+    pub existing: bool,
+    /// Confidence score (1.0 for exact match, <1.0 for new stubs).
+    pub confidence: f64,
+    /// Source mention text that generated this entity.
+    pub source_mention: Option<String>,
+}
+
+/// Full extraction result returned to the frontend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractionResult {
+    /// Content hash that was analyzed.
+    pub content_hash: String,
+    /// Content ID registered in the graph DB.
+    pub content_id: String,
+    /// Total mentions extracted from the content.
+    pub mention_count: u32,
+    /// Entities matched or created in the L2 graph.
+    pub entities: Vec<ExtractedEntity>,
+    /// Primary topics detected.
+    pub topics: Vec<String>,
+    /// Summary text.
+    pub summary: String,
+}
+
+/// Extract L1 mentions from content and bridge them to the L2 graph.
+///
+/// This is the core pipeline that bridges L0 (raw content) → L1 (mentions) → L2 (graph):
+/// 1. Runs L1 extraction on the content (via protocol ops)
+/// 2. Matches extracted entities against existing L2 graph entities
+/// 3. Creates entity stubs for unmatched mentions (confidence < 1.0)
+/// 4. Stores entity↔content links in entity_sources
+/// 5. Returns the full extraction result
+///
+/// Hephaestus uses this to show the extraction results after content is added.
+#[tauri::command]
+pub async fn extract_mentions(
+    content_hash: String,
+    db: State<'_, StdMutex<L2GraphDB>>,
+    protocol: State<'_, TokioMutex<Option<ProtocolState>>>,
+) -> Result<ExtractionResult, String> {
+    info!("Extracting mentions for content: {}", content_hash);
+
+    // 1. Run L1 extraction via protocol ops
+    let l1_summary = {
+        let mut guard = protocol.lock().await;
+        let state = guard.as_mut().ok_or("Node not initialized — unlock first")?;
+
+        let hash = crate::publish_commands::parse_hash(&content_hash)?;
+        state.ops.extract_l1_summary(&hash)
+            .map_err(|e| format!("Extraction failed: {}", e))?
+    };
+
+    // 2. Lock graph DB and match entities
+    let db = db.lock().map_err(|e| format!("DB lock error: {}", e))?;
+
+    // Register this content in the graph DB if not already there
+    let content_id = match db.content_hash_exists(&content_hash)
+        .map_err(|e| format!("DB error: {}", e))?
+    {
+        Some(id) => id,
+        None => db.register_content(&content_hash, "L0")
+            .map_err(|e| format!("Failed to register content: {}", e))?,
+    };
+
+    // 3. Process each mention's entities
+    let mut extracted_entities: Vec<ExtractedEntity> = Vec::new();
+    let mut seen_labels: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for mention in &l1_summary.preview_mentions {
+        for entity_name in &mention.entities {
+            let normalized = entity_name.trim().to_string();
+            if normalized.is_empty() || normalized.len() < 2 {
+                continue;
+            }
+            // Deduplicate within this extraction
+            let key = normalized.to_lowercase();
+            if seen_labels.contains(&key) {
+                continue;
+            }
+            seen_labels.insert(key);
+
+            // Try to match against existing L2 graph entities
+            match db.find_entity(&normalized)
+                .map_err(|e| format!("Entity lookup error: {}", e))?
+            {
+                Some(existing_entity) => {
+                    // Match found — link to content and report
+                    db.link_entity_source(&existing_entity.id, &content_id)
+                        .map_err(|e| format!("Failed to link entity source: {}", e))?;
+                    db.increment_source_count(&existing_entity.id)
+                        .map_err(|e| format!("Failed to increment source count: {}", e))?;
+
+                    extracted_entities.push(ExtractedEntity {
+                        entity_id: existing_entity.id,
+                        label: existing_entity.canonical_label,
+                        entity_type: existing_entity.entity_type,
+                        existing: true,
+                        confidence: existing_entity.confidence,
+                        source_mention: Some(mention.content.clone()),
+                    });
+                }
+                None => {
+                    // No match — create a new entity stub
+                    let entity_id = db.next_entity_id()
+                        .map_err(|e| format!("Failed to get entity ID: {}", e))?;
+
+                    let entity_type = classify_entity_type(&normalized);
+                    let now = chrono::Utc::now();
+
+                    let new_entity = nodalync_graph::Entity {
+                        id: entity_id.clone(),
+                        canonical_label: normalized.clone(),
+                        entity_type: entity_type.clone(),
+                        description: None,
+                        confidence: 0.6, // Sub-1.0 — flagged for review
+                        first_seen: now,
+                        last_updated: now,
+                        source_count: 1,
+                        metadata_json: Some(serde_json::json!({
+                            "auto_extracted": true,
+                            "needs_review": true,
+                            "source_content": content_hash,
+                        }).to_string()),
+                        aliases: Vec::new(),
+                    };
+
+                    db.upsert_entity(&new_entity)
+                        .map_err(|e| format!("Failed to create entity: {}", e))?;
+                    db.link_entity_source(&entity_id, &content_id)
+                        .map_err(|e| format!("Failed to link entity source: {}", e))?;
+
+                    extracted_entities.push(ExtractedEntity {
+                        entity_id,
+                        label: normalized,
+                        entity_type,
+                        existing: false,
+                        confidence: 0.6,
+                        source_mention: Some(mention.content.clone()),
+                    });
+                }
+            }
+        }
+    }
+
+    // Also extract entities from topics that aren't covered by mention entities
+    for topic in &l1_summary.primary_topics {
+        let key = topic.to_lowercase();
+        if seen_labels.contains(&key) || topic.len() < 2 {
+            continue;
+        }
+        seen_labels.insert(key);
+
+        if let Some(existing) = db.find_entity(topic)
+            .map_err(|e| format!("Entity lookup error: {}", e))?
+        {
+            db.link_entity_source(&existing.id, &content_id)
+                .map_err(|e| format!("Failed to link entity source: {}", e))?;
+            db.increment_source_count(&existing.id)
+                .map_err(|e| format!("Failed to increment source count: {}", e))?;
+
+            extracted_entities.push(ExtractedEntity {
+                entity_id: existing.id,
+                label: existing.canonical_label,
+                entity_type: existing.entity_type,
+                existing: true,
+                confidence: existing.confidence,
+                source_mention: None,
+            });
+        }
+        // Don't auto-create stubs for topics — only for mention-level entities
+    }
+
+    info!(
+        "Extraction complete: {} mentions, {} entities ({} new, {} existing)",
+        l1_summary.mention_count,
+        extracted_entities.len(),
+        extracted_entities.iter().filter(|e| !e.existing).count(),
+        extracted_entities.iter().filter(|e| e.existing).count(),
+    );
+
+    Ok(ExtractionResult {
+        content_hash,
+        content_id,
+        mention_count: l1_summary.mention_count,
+        entities: extracted_entities,
+        topics: l1_summary.primary_topics,
+        summary: l1_summary.summary,
+    })
+}
+
+/// Simple heuristic to classify entity type from the label.
+///
+/// In the future this should use a proper NER model, but for MVP
+/// we use pattern matching.
+fn classify_entity_type(label: &str) -> String {
+    let lower = label.to_lowercase();
+
+    // Technology/protocol patterns
+    if lower.ends_with("protocol")
+        || lower.ends_with("network")
+        || lower.ends_with("chain")
+        || lower.ends_with("api")
+        || lower.contains("sdk")
+        || lower.contains("framework")
+    {
+        return "technology".to_string();
+    }
+
+    // Organization patterns
+    if lower.ends_with("inc")
+        || lower.ends_with("corp")
+        || lower.ends_with("foundation")
+        || lower.ends_with("labs")
+        || lower.ends_with("dao")
+    {
+        return "organization".to_string();
+    }
+
+    // Concept patterns (multi-word, lowercase tendency)
+    if label.contains(' ') && label.split_whitespace().count() >= 3 {
+        return "concept".to_string();
+    }
+
+    // Default: concept for single/double words
+    "concept".to_string()
 }
