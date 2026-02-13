@@ -129,6 +129,8 @@ export const GRAPH_CONFIG = {
   MIN_LINK_WIDTH: 1,
   MAX_LINK_WIDTH: 3,
   LINK_LABEL_THRESHOLD: 80, // hide link labels above this edge count
+  MIN_LINK_WIDTH: 1,
+  MAX_LINK_WIDTH: 3,
 };
 
 // ═══ App Version ═══
