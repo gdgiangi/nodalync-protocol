@@ -11,6 +11,7 @@ mod discovery_commands;
 mod event_loop;
 mod fee_commands;
 mod graph_commands;
+mod health_monitor;
 mod network_commands;
 mod peer_store;
 mod protocol;
@@ -67,6 +68,13 @@ fn main() {
     let event_loop_handle: TokioMutex<Option<event_loop::EventLoopHandle>> =
         TokioMutex::new(None);
 
+    // Health monitor handle — populated when the network starts
+    let health_monitor_handle: TokioMutex<Option<health_monitor::HealthMonitorHandle>> =
+        TokioMutex::new(None);
+
+    // Shared health state — read by get_network_health IPC command
+    let shared_health = health_monitor::new_shared_health();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(move |app| {
@@ -74,6 +82,8 @@ fn main() {
             app.manage(StdMutex::new(graph_db));
             app.manage(protocol_state);
             app.manage(event_loop_handle);
+            app.manage(health_monitor_handle);
+            app.manage(shared_health);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -127,6 +137,8 @@ fn main() {
             reannounce_content,
             // NAT traversal status
             get_nat_status,
+            // Health monitor
+            get_network_health,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

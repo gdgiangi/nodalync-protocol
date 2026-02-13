@@ -338,12 +338,42 @@ Get the current NAT traversal status as detected by AutoNAT.
   - `"unknown"` — AutoNAT probing in progress (normal on startup, resolves within ~30s)
 - **Use case:** Show NAT status in the network view. If `"private"`, the node can still communicate but may have slower initial connections via relay before DCUtR hole-punching upgrades them to direct.
 
+### `get_network_health`
+Get a snapshot of network health from the background health monitor.
+- **Args:** none
+- **Returns:**
+  ```typescript
+  {
+    active: boolean,
+    connected_peers: number,
+    known_peers: number,           // Peers in persistent store
+    uptime_secs: number,           // Since network start
+    reconnect_attempts: number,    // Total reconnection attempts
+    reconnect_successes: number,   // Successful reconnections
+    last_check: string | null,     // ISO-8601 timestamp of last health check
+    last_peer_save: string | null, // ISO-8601 timestamp of last peer save
+    status: "healthy" | "degraded" | "connecting" | "disconnected" | "offline",
+    message: string                // Human-readable status
+  }
+  ```
+- **`status`** meanings:
+  - `"healthy"` — 3+ peers connected, network is well-connected
+  - `"degraded"` — 1-2 peers or no listen addresses
+  - `"connecting"` — 0 peers, uptime < 60s (still bootstrapping)
+  - `"disconnected"` — 0 peers, uptime > 60s (auto-reconnect in progress)
+  - `"offline"` — network not started
+- **Poll interval:** 10-30s from frontend. This reads a pre-computed snapshot — very cheap.
+- **Background behavior:** The health monitor runs every 30s:
+  - If connected peers drop below threshold, it tries reconnecting to known peers
+  - Known peers are auto-saved to disk every 5 minutes
+  - On network stop, all connected peers are saved before shutdown
+
 ---
 
 ## Notes for Frontend
 
 1. **Startup flow:** `check_identity` → if false: show onboarding → `init_node(password, name)`; if true: show password → `unlock_node`
-2. **After unlock:** `get_identity` for profile display, then `start_network_configured` (or `start_network` for quick start)
+2. **After unlock:** `get_identity` for profile display, then `auto_start_network` (recommended — loads known peers + mDNS + spawns health monitor)
 3. **Publish flow:** `publish_file`/`publish_text` → `extract_mentions(hash)` to populate L2 graph
 4. **Query flow:** `get_fee_quote(price)` to show breakdown → `query_content(hash, amount)` — fee is auto-recorded
 5. **Fee dashboard:** `get_fee_config` for summary, `get_transaction_history` for details, `set_fee_rate` to configure
@@ -353,3 +383,4 @@ Get the current NAT traversal status as detected by AutoNAT.
 9. **Hash format:** Always 64-char lowercase hex strings
 10. **Error handling:** All commands return `Result<T, String>` — errors are human-readable strings
 11. **NAT traversal:** Enabled by default (AutoNAT + UPnP + Relay + DCUtR). Use `get_nat_status` to display connectivity status. Most desktop users are behind NAT — the protocol automatically handles relay fallback and hole-punching.
+12. **Network health:** Poll `get_network_health` every 10-30s for the network status indicator. The background health monitor (spawned by `auto_start_network`) handles auto-reconnect, peer saves, and health classification. `stop_network` automatically saves peers and shuts down the monitor.
