@@ -1,21 +1,15 @@
 import { useRef, useEffect, useCallback, useImperativeHandle, forwardRef } from "react";
 import * as d3 from "d3";
-import { getEntityColor, getEdgeColor, getEdgeHighlightColor, GRAPH_CONFIG } from "../lib/constants";
+import {
+  getEntityColor, getEdgeColor, getEdgeHighlightColor, GRAPH_CONFIG,
+  getNodeLevel, getNodeRadius, getNodeColor, getNodeOpacity, LEVEL_CONFIG,
+} from "../lib/constants";
 
 const {
   BG_COLOR, LINK_COLOR, LINK_HOVER_COLOR, LINK_DIM_COLOR,
   LABEL_COLOR, LABEL_DIM_COLOR, LINK_LABEL_THRESHOLD,
   MIN_LINK_WIDTH, MAX_LINK_WIDTH,
 } = GRAPH_CONFIG;
-
-function getRadius(node) {
-  const base = Math.max(4, Math.min(20, 4 + (node.source_count || 1) * 2));
-  return base;
-}
-
-function getOpacity(node) {
-  return 0.5 + Math.min(0.5, (node.source_count || 1) * 0.05);
-}
 
 function getLinkWidth(link) {
   const conf = link.confidence || 0.5;
@@ -189,7 +183,7 @@ const GraphView = forwardRef(function GraphView({ data, onNodeClick, onBackgroun
       )
       .force("charge", d3.forceManyBody().strength(-150))
       .force("center", d3.forceCenter(width / 2, height / 2))
-      .force("collision", d3.forceCollide().radius((d) => getRadius(d) + 4));
+      .force("collision", d3.forceCollide().radius((d) => getNodeRadius(d) + 4));
 
     simulationRef.current = simulation;
 
@@ -241,9 +235,9 @@ const GraphView = forwardRef(function GraphView({ data, onNodeClick, onBackgroun
       .selectAll("circle")
       .data(nodes)
       .join("circle")
-      .attr("r", (d) => getRadius(d) + 8)
+      .attr("r", (d) => getNodeRadius(d) + 8)
       .attr("fill", (d) => {
-        const color = getEntityColor(d.entity_type);
+        const color = getNodeColor(d);
         return color + "15";
       });
 
@@ -253,16 +247,16 @@ const GraphView = forwardRef(function GraphView({ data, onNodeClick, onBackgroun
       .selectAll("circle")
       .data(nodes)
       .join("circle")
-      .attr("r", (d) => getRadius(d))
-      .attr("fill", (d) => getEntityColor(d.entity_type))
-      .attr("fill-opacity", (d) => getOpacity(d))
+      .attr("r", (d) => getNodeRadius(d))
+      .attr("fill", (d) => getNodeColor(d))
+      .attr("fill-opacity", (d) => getNodeOpacity(d))
       .attr("stroke", "transparent")
       .attr("stroke-width", 2)
       .attr("cursor", "pointer")
       .on("click", handleNodeClick)
       .on("mouseover", function (event, d) {
         d3.select(this)
-          .attr("stroke", getEntityColor(d.entity_type))
+          .attr("stroke", getNodeColor(d))
           .attr("stroke-opacity", 0.5)
           .attr("filter", "url(#node-glow)");
 
@@ -297,7 +291,7 @@ const GraphView = forwardRef(function GraphView({ data, onNodeClick, onBackgroun
 
         // Dim unconnected nodes
         node.attr("fill-opacity", (n) =>
-          connectedNodeIds.has(n.id) ? getOpacity(n) : getOpacity(n) * 0.3
+          connectedNodeIds.has(n.id) ? getNodeOpacity(n) : getNodeOpacity(n) * 0.3
         );
         label.attr("fill-opacity", (n) =>
           connectedNodeIds.has(n.id) ? 1 : 0.2
@@ -319,7 +313,7 @@ const GraphView = forwardRef(function GraphView({ data, onNodeClick, onBackgroun
         linkGlow.attr("stroke-opacity", 0.3);
 
         // Reset node opacity
-        node.attr("fill-opacity", (n) => getOpacity(n));
+        node.attr("fill-opacity", (n) => getNodeOpacity(n));
         label.attr("fill-opacity", 1);
       })
       .call(drag(simulation));
@@ -352,14 +346,16 @@ const GraphView = forwardRef(function GraphView({ data, onNodeClick, onBackgroun
       .join("text")
       .attr("class", "node-label")
       .attr("fill", LABEL_COLOR)
-      .attr("font-size", (d) =>
-        Math.max(9, Math.min(12, 9 + (d.source_count || 1) * 0.5)) + "px"
-      )
+      .attr("font-size", (d) => {
+        const level = getNodeLevel(d);
+        const base = level === "L0" ? 7 : level === "L1" ? 8 : level === "L3" ? 11 : 9;
+        return Math.max(base, Math.min(base + 3, base + (d.source_count || 1) * 0.5)) + "px";
+      })
       .attr("font-family", "'SF Pro Display', -apple-system, 'Segoe UI', sans-serif")
       .attr("font-weight", "300")
       .attr("letter-spacing", "0.3px")
       .attr("text-anchor", "middle")
-      .attr("dy", (d) => getRadius(d) + 14)
+      .attr("dy", (d) => getNodeRadius(d) + 14)
       .text((d) =>
         d.label.length > 25 ? d.label.substring(0, 22) + "…" : d.label
       );

@@ -8,6 +8,7 @@ import EntityDetailPanel from "./components/EntityDetailPanel";
 import { useTauriEvents } from "./hooks/useTauriEvents";
 import CreateContentDialog from "./components/CreateContentDialog";
 import CommandPalette from "./components/CommandPalette";
+import GraphLegend from "./components/GraphLegend";
 
 function App() {
   const [graphData, setGraphData] = useState({ nodes: [], links: [] });
@@ -313,6 +314,9 @@ function App() {
             onBackgroundClick={handleBackgroundClick}
             selectedEntity={selectedEntity}
           />
+
+          {/* Graph legend */}
+          {graphData.nodes.length > 0 && <GraphLegend />}
 
           {/* Empty state overlay */}
           {!loading && graphData.nodes.length === 0 && (
