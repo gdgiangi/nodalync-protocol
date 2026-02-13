@@ -895,3 +895,82 @@ pub struct NetworkDiagnostics {
     pub issues: Vec<String>,
     pub suggestions: Vec<String>,
 }
+
+// ─── Resource Management Commands ────────────────────────────────────────────
+
+/// Get network resource management stats.
+///
+/// Returns connection limits, rate limiting config, and current usage.
+/// Useful for the network dashboard to show protection status.
+#[tauri::command]
+pub async fn get_resource_stats(
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
+) -> Result<ResourceStats, String> {
+    let guard = protocol.lock().await;
+    let state = guard
+        .as_ref()
+        .ok_or("Node not initialized — unlock first")?;
+
+    if let Some(network) = &state.network {
+        let config = network.resource_config();
+        Ok(ResourceStats {
+            active: true,
+            max_established_connections: config.max_established_connections,
+            max_established_per_peer: config.max_established_per_peer,
+            max_pending_incoming: config.max_pending_incoming,
+            max_pending_outgoing: config.max_pending_outgoing,
+            request_rate_limit: config.request_rate_limit,
+            request_rate_window_secs: config.request_rate_window_secs,
+            max_concurrent_inbound_requests: config.max_concurrent_inbound_requests,
+            max_message_size_bytes: config.max_message_size,
+            connected_peers: config.connected_peers,
+            connection_utilization_pct: if config.max_established_connections > 0 {
+                (config.connected_peers as f64 / config.max_established_connections as f64 * 100.0)
+                    .round() as u32
+            } else {
+                0
+            },
+        })
+    } else {
+        Ok(ResourceStats {
+            active: false,
+            max_established_connections: 0,
+            max_established_per_peer: 0,
+            max_pending_incoming: 0,
+            max_pending_outgoing: 0,
+            request_rate_limit: 0,
+            request_rate_window_secs: 0,
+            max_concurrent_inbound_requests: 0,
+            max_message_size_bytes: 0,
+            connected_peers: 0,
+            connection_utilization_pct: 0,
+        })
+    }
+}
+
+/// Resource management statistics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceStats {
+    /// Whether the network is active.
+    pub active: bool,
+    /// Max total established connections.
+    pub max_established_connections: u32,
+    /// Max connections per peer.
+    pub max_established_per_peer: u32,
+    /// Max pending incoming connections.
+    pub max_pending_incoming: u32,
+    /// Max pending outgoing connections.
+    pub max_pending_outgoing: u32,
+    /// Max inbound requests per peer per window.
+    pub request_rate_limit: u32,
+    /// Rate window in seconds.
+    pub request_rate_window_secs: u64,
+    /// Max concurrent inbound requests.
+    pub max_concurrent_inbound_requests: usize,
+    /// Max message size in bytes.
+    pub max_message_size_bytes: usize,
+    /// Current connected peer count.
+    pub connected_peers: usize,
+    /// Connection utilization percentage (0-100).
+    pub connection_utilization_pct: u32,
+}

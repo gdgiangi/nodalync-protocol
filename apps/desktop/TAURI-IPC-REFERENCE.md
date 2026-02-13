@@ -558,6 +558,36 @@ Check if an open channel exists with a peer. Accepts both libp2p and Nodalync pe
 
 ---
 
+## Resource Management Commands
+
+### `get_resource_stats`
+Get network resource management configuration and current usage.
+- **Args:** none
+- **Returns:**
+  ```typescript
+  {
+    active: boolean,                     // Whether network is running
+    max_established_connections: number,  // Total connection limit (default: 100)
+    max_established_per_peer: number,     // Per-peer connection limit (default: 2)
+    max_pending_incoming: number,         // Pending inbound connection limit (default: 64)
+    max_pending_outgoing: number,         // Pending outbound connection limit (default: 64)
+    request_rate_limit: number,           // Max inbound requests per peer per window (default: 30)
+    request_rate_window_secs: number,     // Rate window duration in seconds (default: 60)
+    max_concurrent_inbound_requests: number, // Max concurrent inbound requests (default: 128)
+    max_message_size_bytes: number,       // Max message size in bytes (default: 10MB)
+    connected_peers: number,              // Current connected peer count
+    connection_utilization_pct: number    // Connection utilization as percentage (0-100)
+  }
+  ```
+- **Use case:** Display in the network settings/dashboard to show protection status.
+  When `connection_utilization_pct` exceeds 80%, consider showing a warning.
+- **Protection features:**
+  - **Connection limits:** Prevents resource exhaustion from too many peers
+  - **Per-peer rate limiting:** Inbound requests from a single peer are capped (30/min default). Excess requests are silently dropped.
+  - **GossipSub rate limiting:** 50 messages per 10s per peer, preventing broadcast floods
+
+---
+
 ## Notes for Frontend
 
 1. **Startup flow:** `check_identity` → if false: show onboarding → `init_node(password, name)`; if true: show password → `unlock_node`
@@ -578,3 +608,4 @@ Check if an open channel exists with a peer. Accepts both libp2p and Nodalync pe
 16. **Peer handshake:** When a peer connects, the event loop automatically exchanges PeerInfo messages (protocol version, public key, capabilities). After handshake completes, `PeerInfo.handshake_complete` becomes `true` and message signature verification is enabled for that peer. No frontend action needed — this is fully automatic.
 17. **Seed nodes:** `auto_start_network` loads seeds first (highest priority), then known peers, then mDNS. For first-run users with no known peers, seeds are the only way to discover the network. Use `get_seed_nodes` to display seed config, `add_seed_node` to let users add custom seeds.
 18. **Network diagnostics:** If `get_network_health` shows "disconnected", call `diagnose_network` for actionable suggestions. Display `issues` + `suggestions` in a troubleshooting panel.
+19. **Resource protection:** The node enforces connection limits (100 total, 2 per peer) and per-peer request rate limiting (30 req/min). Use `get_resource_stats` for the network dashboard. These protect against resource exhaustion and query flooding — critical for D3 users on desktop machines.

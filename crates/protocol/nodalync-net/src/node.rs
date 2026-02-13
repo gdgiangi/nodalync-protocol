@@ -34,7 +34,33 @@ use nodalync_wire::{
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
+use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
+
+/// Resource management configuration snapshot.
+///
+/// Returned by `NetworkNode::resource_config()` for dashboard display.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceConfig {
+    /// Maximum total established connections.
+    pub max_established_connections: u32,
+    /// Maximum established connections per peer.
+    pub max_established_per_peer: u32,
+    /// Maximum pending incoming connections.
+    pub max_pending_incoming: u32,
+    /// Maximum pending outgoing connections.
+    pub max_pending_outgoing: u32,
+    /// Maximum inbound requests per peer per rate window.
+    pub request_rate_limit: u32,
+    /// Rate window duration in seconds.
+    pub request_rate_window_secs: u64,
+    /// Maximum concurrent inbound requests.
+    pub max_concurrent_inbound_requests: usize,
+    /// Maximum message size in bytes.
+    pub max_message_size: usize,
+    /// Current connected peer count.
+    pub connected_peers: usize,
+}
 
 /// Shared state passed to the swarm event loop.
 ///
@@ -46,6 +72,14 @@ struct SwarmContext {
     listen_addrs: Arc<StdRwLock<Vec<Multiaddr>>>,
     gossip_topic: String,
     nat_status: Arc<StdRwLock<NatStatus>>,
+    /// Max inbound requests per peer per window.
+    request_rate_limit: u32,
+    /// Window duration for request rate limiting.
+    request_rate_window: std::time::Duration,
+    /// Max total established connections.
+    max_established_connections: u32,
+    /// Max established connections per peer.
+    max_established_per_peer: u32,
 }
 
 /// Commands sent to the swarm task.
@@ -273,6 +307,10 @@ impl NetworkNode {
         let announce_topic = IdentTopic::new(&config.gossipsub_topic);
 
         // Spawn the swarm task
+        let request_rate_limit = config.request_rate_limit;
+        let request_rate_window = config.request_rate_window;
+        let max_established_connections = config.max_established_connections;
+        let max_established_per_peer = config.max_established_per_peer;
         let swarm_ctx = SwarmContext {
             pending_requests: pending_requests_clone,
             peer_mapper: peer_mapper_clone,
@@ -280,6 +318,10 @@ impl NetworkNode {
             listen_addrs: listen_addrs_clone,
             gossip_topic,
             nat_status: nat_status_clone,
+            request_rate_limit,
+            request_rate_window,
+            max_established_connections,
+            max_established_per_peer,
         };
         tokio::spawn(async move {
             run_swarm(swarm, command_rx, event_tx, swarm_ctx).await;
@@ -371,6 +413,10 @@ impl NetworkNode {
         let announce_topic = IdentTopic::new(&config.gossipsub_topic);
 
         // Spawn the swarm task
+        let request_rate_limit = config.request_rate_limit;
+        let request_rate_window = config.request_rate_window;
+        let max_established_connections = config.max_established_connections;
+        let max_established_per_peer = config.max_established_per_peer;
         let swarm_ctx = SwarmContext {
             pending_requests: pending_requests_clone,
             peer_mapper: peer_mapper_clone,
@@ -378,6 +424,10 @@ impl NetworkNode {
             listen_addrs: listen_addrs_clone,
             gossip_topic,
             nat_status: nat_status_clone,
+            request_rate_limit,
+            request_rate_window,
+            max_established_connections,
+            max_established_per_peer,
         };
         tokio::spawn(async move {
             run_swarm(swarm, command_rx, event_tx, swarm_ctx).await;
@@ -494,6 +544,24 @@ impl NetworkNode {
             .read()
             .map(|s| s.clone())
             .unwrap_or(NatStatus::Unknown)
+    }
+
+    /// Get the resource management configuration.
+    ///
+    /// Returns the connection limits and rate limiting config
+    /// for display in the network dashboard.
+    pub fn resource_config(&self) -> ResourceConfig {
+        ResourceConfig {
+            max_established_connections: self.config.max_established_connections,
+            max_established_per_peer: self.config.max_established_per_peer,
+            max_pending_incoming: self.config.max_pending_incoming,
+            max_pending_outgoing: self.config.max_pending_outgoing,
+            request_rate_limit: self.config.request_rate_limit,
+            request_rate_window_secs: self.config.request_rate_window.as_secs(),
+            max_concurrent_inbound_requests: self.config.max_concurrent_inbound_requests,
+            max_message_size: self.config.max_message_size,
+            connected_peers: self.connected_peers().len(),
+        }
     }
 
     /// Send a request with retry logic.
@@ -869,6 +937,16 @@ async fn run_swarm(
     // Per-peer GossipSub rate limiter: 50 messages per 10 seconds
     let mut gossip_rate_limiter = GossipRateLimiter::new(50, std::time::Duration::from_secs(10));
 
+    // Per-peer request-response rate limiter (configurable)
+    let mut request_rate_limiter = PeerRateLimiter::new(
+        ctx.request_rate_limit,
+        ctx.request_rate_window,
+    );
+
+    // Rate limiter cleanup timer (every 5 minutes, purge stale entries)
+    let mut cleanup_interval = tokio::time::interval(std::time::Duration::from_secs(300));
+    cleanup_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     loop {
         tokio::select! {
             // Process swarm events
@@ -888,6 +966,7 @@ async fn run_swarm(
                             &ctx.pending_requests,
                             &mut pending_responses,
                             &event_tx,
+                            &mut request_rate_limiter,
                         ).await;
                     }
 
@@ -929,7 +1008,30 @@ async fn run_swarm(
                         handle_upnp_event(upnp_event, &event_tx).await;
                     }
 
-                    SwarmEvent::ConnectionEstablished { peer_id, num_established, .. } => {
+                    SwarmEvent::ConnectionEstablished { peer_id, num_established, connection_id, .. } => {
+                        // Enforce per-peer connection limit
+                        if num_established.get() > ctx.max_established_per_peer as u32 {
+                            warn!(
+                                "Per-peer connection limit exceeded for {} ({} > {}), closing excess",
+                                peer_id, num_established, ctx.max_established_per_peer
+                            );
+                            let _ = swarm.close_connection(connection_id);
+                            continue;
+                        }
+
+                        // Enforce total connection limit
+                        let total_peers = ctx.connected_peers.read()
+                            .map(|p| p.len())
+                            .unwrap_or(0);
+                        if total_peers >= ctx.max_established_connections as usize {
+                            warn!(
+                                "Total connection limit reached ({} >= {}), closing new connection to {}",
+                                total_peers, ctx.max_established_connections, peer_id
+                            );
+                            let _ = swarm.close_connection(connection_id);
+                            continue;
+                        }
+
                         debug!("Connection established with {} (total: {})", peer_id, num_established);
                         // Track connected peer
                         if let Ok(mut peers) = ctx.connected_peers.write() {
@@ -963,6 +1065,14 @@ async fn run_swarm(
                             addrs.push(address.clone());
                         }
                         let _ = event_tx.send(NetworkEvent::NewListenAddr { address }).await;
+                    }
+
+                    SwarmEvent::IncomingConnectionError { error, .. } => {
+                        debug!("Incoming connection rejected: {}", error);
+                    }
+
+                    SwarmEvent::OutgoingConnectionError { error, .. } => {
+                        debug!("Outgoing connection failed: {}", error);
                     }
 
                     _ => {}
@@ -1071,6 +1181,12 @@ async fn run_swarm(
                     }
                 }
             }
+
+            // Periodic cleanup of rate limiter state
+            _ = cleanup_interval.tick() => {
+                gossip_rate_limiter.cleanup();
+                request_rate_limiter.cleanup();
+            }
         }
     }
 }
@@ -1129,6 +1245,7 @@ async fn handle_request_response_event(
         ResponseChannel<NodalyncResponse>,
     >,
     event_tx: &mpsc::Sender<NetworkEvent>,
+    request_rate_limiter: &mut PeerRateLimiter,
 ) {
     match event {
         request_response::Event::Message { peer, message } => {
@@ -1138,6 +1255,20 @@ async fn handle_request_response_event(
                     request,
                     channel,
                 } => {
+                    // Check rate limit before processing
+                    if !request_rate_limiter.check(&peer) {
+                        warn!(
+                            "Rate limiting inbound request from {} (rejected: {} total)",
+                            peer,
+                            request_rate_limiter.total_rejected()
+                        );
+                        // Drop the channel — peer gets a timeout/failure
+                        // This is intentional: we don't waste resources crafting error responses
+                        // for peers that are flooding us.
+                        drop(channel);
+                        return;
+                    }
+
                     // Store the response channel
                     pending_responses.insert(request_id, channel);
                     // Forward inbound request as event
@@ -1174,25 +1305,33 @@ async fn handle_request_response_event(
     }
 }
 
-/// Per-peer rate limiter for GossipSub messages.
-struct GossipRateLimiter {
+/// Per-peer rate limiter — generic for both GossipSub and request-response.
+///
+/// Tracks message/request counts per peer within a sliding window.
+/// When a peer exceeds the limit, further messages are rejected until
+/// the window resets.
+struct PeerRateLimiter {
     /// Map of peer -> (message count, window start)
     peers: HashMap<PeerId, (u32, std::time::Instant)>,
     /// Maximum messages per peer per window
     max_per_window: u32,
     /// Window duration
     window: std::time::Duration,
+    /// Total rejected count (for stats)
+    total_rejected: u64,
 }
 
-impl GossipRateLimiter {
+impl PeerRateLimiter {
     fn new(max_per_window: u32, window: std::time::Duration) -> Self {
         Self {
             peers: HashMap::new(),
             max_per_window,
             window,
+            total_rejected: 0,
         }
     }
 
+    /// Check if a peer is allowed to send. Returns true if allowed.
     fn check(&mut self, peer: &PeerId) -> bool {
         let now = std::time::Instant::now();
         let entry = self.peers.entry(*peer).or_insert((0, now));
@@ -1203,10 +1342,27 @@ impl GossipRateLimiter {
             entry.0 += 1;
             true
         } else {
+            self.total_rejected += 1;
             false
         }
     }
+
+    /// Get the total number of rejected messages across all peers.
+    fn total_rejected(&self) -> u64 {
+        self.total_rejected
+    }
+
+    /// Remove stale entries older than 2x the window duration.
+    fn cleanup(&mut self) {
+        let now = std::time::Instant::now();
+        let cutoff = self.window * 2;
+        self.peers
+            .retain(|_, (_, start)| now.duration_since(*start) <= cutoff);
+    }
 }
+
+// Backward-compatible alias used in tests
+type GossipRateLimiter = PeerRateLimiter;
 
 /// Handle GossipSub events.
 async fn handle_gossipsub_event(
