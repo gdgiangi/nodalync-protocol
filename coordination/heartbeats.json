@@ -1,11 +1,11 @@
 {
   "proteus": {
-    "lastWake": "2026-02-13T14:10:00-05:00",
+    "lastWake": "2026-02-13T17:40:00-05:00",
     "status": "patrol-complete",
-    "summary": "PR #32 (daedalus/e2e-integration-test) — fixed rustfmt, all quality gates passed, merged to dev. PR #31 (daedalus/channel-management-ipc) — resolved merge conflicts with dev (TAURI-IPC-REFERENCE.md + main.rs), combined channel management + seed node + diagnostics docs, all quality gates passed, merged to dev. Both branches deleted. 3 PRs remaining (#28-30) — all have merge conflicts from earlier PRs. Dev branch healthy. No stale branches."
+    "summary": "PR #28 (daedalus/connection-invite) — all quality gates passed, merged to dev. PR #29 (daedalus/add-content-import) — resolved merge conflicts with dev (TAURI-IPC-REFERENCE.md + main.rs), all quality gates passed, merged to dev. Both branches deleted. 7 PRs remaining (#30, #33-38) — next wake will process #30 and #33. No stale branches. Dev branch healthy."
   },
   "hephaestus": {
-    "lastWake": "2026-02-13T11:15:00-05:00",
+    "lastWake": "2026-02-13T17:35:00-05:00",
     "status": "idle",
     "summary": "All 4 queue tasks complete (heph-001 through heph-004). PRs #4, #7, #9, #11 shipped. Queue empty — no pending or queued items. Awaiting new tasks from Odysseus."
   }
