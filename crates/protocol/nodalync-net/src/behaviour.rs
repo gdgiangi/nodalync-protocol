@@ -221,8 +221,16 @@ impl NodalyncBehaviour {
             req_resp_config,
         );
 
-        // Configure GossipSub
-        let gossipsub = build_gossipsub_with_keypair(keypair);
+        // Configure GossipSub with optional peer scoring
+        let gossipsub = build_gossipsub(
+            keypair,
+            if config.enable_peer_scoring {
+                Some(&config.gossipsub_topic)
+            } else {
+                None
+            },
+            config.enable_peer_scoring,
+        );
 
         // Configure Identify
         let identify_config =
@@ -340,7 +348,31 @@ fn build_mdns(
 }
 
 /// Build GossipSub behaviour with a specific keypair.
+///
+/// When `announce_topic` is provided and scoring is enabled, applies
+/// peer scoring parameters tuned for the Nodalync announce channel.
 pub fn build_gossipsub_with_keypair(keypair: &libp2p::identity::Keypair) -> gossipsub::Behaviour {
+    build_gossipsub(keypair, None, false)
+}
+
+/// Build GossipSub behaviour with optional peer scoring.
+///
+/// Peer scoring evaluates peers based on:
+/// - **Time in mesh:** Rewards long-lived, stable peers.
+/// - **First message deliveries:** Rewards peers that deliver new announcements quickly.
+/// - **Mesh message deliveries:** Penalises free-riders that are in the mesh but don't relay.
+/// - **Invalid messages:** Penalises peers sending malformed/invalid data.
+/// - **IP colocation:** Penalises sybil attacks from the same IP.
+///
+/// Thresholds control how scores affect connectivity:
+/// - **gossip_threshold (-10):** Below this, peer doesn't receive gossip.
+/// - **publish_threshold (-50):** Below this, peer can't publish to us.
+/// - **graylist_threshold (-80):** Below this, peer is fully disconnected.
+pub fn build_gossipsub(
+    keypair: &libp2p::identity::Keypair,
+    announce_topic: Option<&str>,
+    enable_scoring: bool,
+) -> gossipsub::Behaviour {
     let message_id_fn = |message: &gossipsub::Message| {
         let mut hasher = Sha256::new();
         hasher.update(&message.data);
@@ -351,14 +383,124 @@ pub fn build_gossipsub_with_keypair(keypair: &libp2p::identity::Keypair) -> goss
         .heartbeat_interval(Duration::from_secs(1))
         .validation_mode(gossipsub::ValidationMode::Strict)
         .message_id_fn(message_id_fn)
+        .max_transmit_size(1024 * 1024) // 1MB max gossip message
+        .history_length(5) // Keep 5 heartbeat windows of message history
+        .history_gossip(3) // Gossip about messages from the last 3 windows
+        .mesh_n(6)         // Target 6 peers in mesh
+        .mesh_n_low(4)     // Minimum 4 peers before seeking more
+        .mesh_n_high(12)   // Maximum 12 peers before pruning
         .build()
         .expect("valid gossipsub config");
 
-    gossipsub::Behaviour::new(
+    let mut behaviour = gossipsub::Behaviour::new(
         gossipsub::MessageAuthenticity::Signed(keypair.clone()),
         config,
     )
-    .expect("valid gossipsub behaviour")
+    .expect("valid gossipsub behaviour");
+
+    // Apply peer scoring when enabled
+    if enable_scoring {
+        let (params, thresholds) = build_peer_score_params(announce_topic);
+        behaviour
+            .with_peer_score(params, thresholds)
+            .expect("valid peer score params");
+        tracing::info!("GossipSub peer scoring enabled");
+    }
+
+    behaviour
+}
+
+/// Build peer score parameters tuned for Nodalync.
+///
+/// The announce topic is the primary gossip channel. Scoring ensures:
+/// - Peers that relay announcements promptly are rewarded.
+/// - Peers that hoard messages or fail to relay are penalised.
+/// - Invalid message senders (malformed wire format) are heavily penalised.
+/// - IP-based sybil attacks are penalised above 2 peers per IP.
+fn build_peer_score_params(
+    announce_topic: Option<&str>,
+) -> (gossipsub::PeerScoreParams, gossipsub::PeerScoreThresholds) {
+    let mut params = gossipsub::PeerScoreParams::default();
+
+    // ── Application-level scoring ─────────────────────────────────────
+    // Weight for application-specific scoring (future: reputation system)
+    params.app_specific_weight = 1.0;
+
+    // ── IP colocation ─────────────────────────────────────────────────
+    // Penalise sybil attacks: more than 2 peers from the same IP
+    params.ip_colocation_factor_threshold = 2.0;
+    params.ip_colocation_factor_weight = -10.0;
+
+    // ── Behaviour penalty ─────────────────────────────────────────────
+    // Threshold before behaviour penalty kicks in (e.g., too many GRAFT attempts)
+    params.behaviour_penalty_threshold = 6.0;
+
+    // ── Score decay ───────────────────────────────────────────────────
+    // Zero out scores that decay below this threshold
+    params.decay_to_zero = 0.01;
+
+    // ── Retain scores for disconnected peers ──────────────────────────
+    params.retain_score = Duration::from_secs(3600); // 1 hour
+
+    // ── Topic-level scoring (announce topic) ──────────────────────────
+    if let Some(topic_str) = announce_topic {
+        let topic = gossipsub::IdentTopic::new(topic_str);
+        let topic_hash = topic.hash();
+
+        let mut topic_params = gossipsub::TopicScoreParams::default();
+
+        // Topic weight — moderate importance
+        topic_params.topic_weight = 1.0;
+
+        // Time-in-mesh scoring: reward stable mesh peers
+        // Caps at ~20 min of mesh participation (quantum × cap)
+        topic_params.time_in_mesh_weight = 0.5;
+        topic_params.time_in_mesh_quantum = Duration::from_secs(12);
+        // time_in_mesh_cap defaults to 3600
+
+        // First message deliveries: reward peers that deliver new messages first
+        // Decays slowly — announcements are infrequent
+        topic_params.first_message_deliveries_weight = 2.0;
+        topic_params.first_message_deliveries_decay = 0.97; // ~23s half-life at 1s heartbeat
+        // first_message_deliveries_cap defaults to a reasonable value
+
+        // Mesh message deliveries: penalise free-riders
+        // After 30 seconds in the mesh, expect at least 1 message delivery per heartbeat window
+        topic_params.mesh_message_deliveries_weight = -1.0;
+        topic_params.mesh_message_deliveries_decay = 0.97;
+        topic_params.mesh_message_deliveries_threshold = 1.0;
+        // mesh_message_deliveries_activation is how long before this kicks in
+
+        // Mesh failure penalty: penalise peers pruned while under-delivering
+        topic_params.mesh_failure_penalty_weight = -1.0;
+        topic_params.mesh_failure_penalty_decay = 0.97;
+
+        // Invalid message deliveries: harsh penalty for bad data
+        topic_params.invalid_message_deliveries_weight = -100.0;
+        topic_params.invalid_message_deliveries_decay = 0.5; // Fast decay so penalties don't last forever
+
+        params.topics.insert(topic_hash, topic_params);
+    }
+
+    // Cap total topic score contribution
+    params.topic_score_cap = 50.0;
+
+    // ── Thresholds ────────────────────────────────────────────────────
+    let thresholds = gossipsub::PeerScoreThresholds {
+        // Below this, peer doesn't receive gossip control messages
+        gossip_threshold: -10.0,
+        // Below this, peer's published messages are rejected
+        publish_threshold: -50.0,
+        // Below this, peer is disconnected entirely
+        graylist_threshold: -80.0,
+        // Minimum score to accept peer exchange (PX) data from a peer
+        accept_px_threshold: 5.0,
+        // Score above which opportunistic grafting is triggered
+        // (we graft peers with scores above this to improve mesh quality)
+        opportunistic_graft_threshold: 3.0,
+    };
+
+    (params, thresholds)
 }
 
 #[cfg(test)]
@@ -408,6 +550,53 @@ mod tests {
         let gossipsub = build_gossipsub_with_keypair(&keypair);
 
         assert!(gossipsub.topics().next().is_none());
+    }
+
+    #[test]
+    fn test_build_gossipsub_with_scoring() {
+        let keypair = libp2p::identity::Keypair::generate_ed25519();
+        let gossipsub = build_gossipsub(
+            &keypair,
+            Some("/nodalync/announce/1.0.0"),
+            true,
+        );
+        // Peer scoring is internal — just verify it doesn't panic
+        assert!(gossipsub.topics().next().is_none());
+    }
+
+    #[test]
+    fn test_build_gossipsub_without_scoring() {
+        let keypair = libp2p::identity::Keypair::generate_ed25519();
+        let gossipsub = build_gossipsub(&keypair, None, false);
+        assert!(gossipsub.topics().next().is_none());
+    }
+
+    #[test]
+    fn test_peer_score_params_with_topic() {
+        let (params, thresholds) =
+            build_peer_score_params(Some("/nodalync/announce/1.0.0"));
+
+        // Verify topic-level params were set
+        assert_eq!(params.topics.len(), 1);
+        assert!(params.topic_score_cap > 0.0);
+        assert!(params.ip_colocation_factor_weight < 0.0);
+        assert!(params.retain_score > Duration::ZERO);
+
+        // Verify thresholds are ordered correctly
+        assert!(thresholds.gossip_threshold > thresholds.publish_threshold);
+        assert!(thresholds.publish_threshold > thresholds.graylist_threshold);
+        assert!(thresholds.accept_px_threshold > 0.0);
+    }
+
+    #[test]
+    fn test_peer_score_params_without_topic() {
+        let (params, thresholds) = build_peer_score_params(None);
+
+        // No topic params when no topic provided
+        assert!(params.topics.is_empty());
+        // But IP and behaviour scoring still active
+        assert!(params.ip_colocation_factor_weight < 0.0);
+        assert!(thresholds.graylist_threshold < 0.0);
     }
 
     #[tokio::test]
