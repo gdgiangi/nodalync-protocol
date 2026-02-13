@@ -155,7 +155,7 @@ impl NetworkConfig {
     /// Useful for displaying the stable PeerId before starting the network.
     pub fn preview_peer_id(&self) -> Option<libp2p::PeerId> {
         self.identity_secret.as_ref().and_then(|secret| {
-            libp2p::identity::Keypair::ed25519_from_bytes(secret.clone())
+            libp2p::identity::Keypair::ed25519_from_bytes(*secret)
                 .ok()
                 .map(|kp| kp.public().to_peer_id())
         })

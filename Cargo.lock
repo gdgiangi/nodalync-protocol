@@ -3179,6 +3179,7 @@ name = "nodalync-net"
 version = "0.7.1"
 dependencies = [
  "async-trait",
+ "ed25519-dalek",
  "futures",
  "libp2p",
  "nodalync-crypto",

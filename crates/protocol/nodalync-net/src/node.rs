@@ -179,10 +179,13 @@ impl NetworkNode {
         // Derive identity: use provided secret for stable PeerId, or generate random
         let (private_key, public_key, keypair) = if let Some(secret) = &config.identity_secret {
             // Derive libp2p keypair from the Nodalync identity secret
-            let kp = libp2p::identity::Keypair::ed25519_from_bytes(secret.clone())
-                .map_err(|e| NetworkError::Transport(format!(
-                    "Failed to derive libp2p keypair from identity secret: {}", e
-                )))?;
+            let kp =
+                libp2p::identity::Keypair::ed25519_from_bytes(*secret).map_err(|e| {
+                    NetworkError::Transport(format!(
+                        "Failed to derive libp2p keypair from identity secret: {}",
+                        e
+                    ))
+                })?;
 
             // Also derive the Nodalync keys from the same seed
             let signing_key = ed25519_dalek::SigningKey::from_bytes(secret);
