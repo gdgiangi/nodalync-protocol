@@ -17,6 +17,7 @@ use futures::StreamExt;
 use libp2p::{
     gossipsub::IdentTopic,
     kad::{self, QueryResult, RecordKey},
+    mdns,
     request_response::{self, OutboundRequestId, ResponseChannel},
     swarm::{dial_opts::DialOpts, SwarmEvent},
     Multiaddr, PeerId, Swarm,
@@ -832,6 +833,10 @@ async fn run_swarm(
                         handle_ping_event(ping_event);
                     }
 
+                    SwarmEvent::Behaviour(NodalyncBehaviourEvent::Mdns(mdns_event)) => {
+                        handle_mdns_event(mdns_event, &mut swarm, &event_tx).await;
+                    }
+
                     SwarmEvent::ConnectionEstablished { peer_id, num_established, .. } => {
                         debug!("Connection established with {} (total: {})", peer_id, num_established);
                         // Track connected peer
@@ -1138,6 +1143,46 @@ fn handle_identify_event(
         // Add addresses to Kademlia
         for addr in info.listen_addrs {
             swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
+        }
+    }
+}
+
+/// Handle mDNS events.
+///
+/// When peers are discovered on the local network via mDNS, we:
+/// 1. Add their addresses to the Kademlia routing table for DHT queries
+/// 2. Dial them to establish a direct connection
+/// 3. Emit a PeerDiscovered event so the application layer can react
+async fn handle_mdns_event(
+    event: mdns::Event,
+    swarm: &mut Swarm<NodalyncBehaviour>,
+    event_tx: &mpsc::Sender<NetworkEvent>,
+) {
+    match event {
+        mdns::Event::Discovered(peers) => {
+            for (peer_id, addr) in peers {
+                info!("mDNS: discovered peer {} at {}", peer_id, addr);
+                // Add to Kademlia routing table
+                swarm
+                    .behaviour_mut()
+                    .kademlia
+                    .add_address(&peer_id, addr.clone());
+                // Dial the discovered peer
+                if let Err(e) = swarm.dial(addr.clone()) {
+                    debug!("mDNS: failed to dial discovered peer {}: {}", peer_id, e);
+                }
+                let _ = event_tx
+                    .send(NetworkEvent::PeerDiscovered {
+                        peer: peer_id,
+                        address: addr,
+                    })
+                    .await;
+            }
+        }
+        mdns::Event::Expired(peers) => {
+            for (peer_id, addr) in peers {
+                debug!("mDNS: peer {} at {} expired", peer_id, addr);
+            }
         }
     }
 }

@@ -69,6 +69,14 @@ pub enum NetworkEvent {
         data: Vec<u8>,
     },
 
+    /// A peer was discovered via mDNS on the local network.
+    PeerDiscovered {
+        /// The libp2p peer ID of the discovered peer.
+        peer: libp2p::PeerId,
+        /// The address where the peer was discovered.
+        address: Multiaddr,
+    },
+
     /// Request-response inbound request received.
     InboundRequest {
         /// The libp2p peer ID of the requester.
@@ -87,6 +95,7 @@ impl NetworkEvent {
             NetworkEvent::MessageReceived { peer, .. } => Some(peer),
             NetworkEvent::PeerConnected { peer } => Some(peer),
             NetworkEvent::PeerDisconnected { peer } => Some(peer),
+            NetworkEvent::PeerDiscovered { peer, .. } => Some(peer),
             NetworkEvent::InboundRequest { peer, .. } => Some(peer),
             _ => None,
         }
