@@ -1334,28 +1334,17 @@ async fn handle_relay_client_event(
                     .await;
             }
         }
-        libp2p::relay::client::Event::OutboundCircuitEstablished {
-            relay_peer_id, ..
-        } => {
-            info!(
-                "Relay: outbound circuit established via {}",
-                relay_peer_id
-            );
+        libp2p::relay::client::Event::OutboundCircuitEstablished { relay_peer_id, .. } => {
+            info!("Relay: outbound circuit established via {}", relay_peer_id);
         }
         libp2p::relay::client::Event::InboundCircuitEstablished { src_peer_id, .. } => {
-            info!(
-                "Relay: inbound circuit established from {}",
-                src_peer_id
-            );
+            info!("Relay: inbound circuit established from {}", src_peer_id);
         }
     }
 }
 
 /// Handle DCUtR events — direct connection upgrade through relay.
-async fn handle_dcutr_event(
-    event: libp2p::dcutr::Event,
-    event_tx: &mpsc::Sender<NetworkEvent>,
-) {
+async fn handle_dcutr_event(event: libp2p::dcutr::Event, event_tx: &mpsc::Sender<NetworkEvent>) {
     // dcutr::Event is a struct with { remote_peer_id, result }
     match event.result {
         Ok(_connection_id) => {
@@ -1376,17 +1365,12 @@ async fn handle_dcutr_event(
 }
 
 /// Handle UPnP events — automatic port mapping.
-async fn handle_upnp_event(
-    event: libp2p::upnp::Event,
-    event_tx: &mpsc::Sender<NetworkEvent>,
-) {
+async fn handle_upnp_event(event: libp2p::upnp::Event, event_tx: &mpsc::Sender<NetworkEvent>) {
     match event {
         libp2p::upnp::Event::NewExternalAddr(addr) => {
             info!("UPnP: mapped external address {}", addr);
             let _ = event_tx
-                .send(NetworkEvent::UpnpMapped {
-                    address: addr,
-                })
+                .send(NetworkEvent::UpnpMapped { address: addr })
                 .await;
         }
         libp2p::upnp::Event::GatewayNotFound => {

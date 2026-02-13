@@ -61,8 +61,7 @@ pub fn build_transport_with_relay(
     relay::client::Behaviour,
 ) {
     // Create the relay client transport + behaviour
-    let (relay_transport, relay_behaviour) =
-        relay::client::new(keypair.public().to_peer_id());
+    let (relay_transport, relay_behaviour) = relay::client::new(keypair.public().to_peer_id());
 
     // Create TCP transport with nodelay for low latency
     let tcp_config = tcp::Config::default().nodelay(true);
