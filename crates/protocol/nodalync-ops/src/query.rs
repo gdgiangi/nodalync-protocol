@@ -824,7 +824,7 @@ where
             }
         }
 
-        // 3. Query connected peers via SEARCH protocol
+        // 3. Query connected peers CONCURRENTLY via SEARCH protocol
         if let Some(network) = self.network().cloned() {
             let search_payload = SearchPayload {
                 query: query.to_string(),
@@ -836,57 +836,100 @@ where
                 offset: 0,
             };
 
-            // Query up to 5 connected peers
-            for peer in network.connected_peers().iter().take(5) {
-                match network.send_search(*peer, search_payload.clone()).await {
-                    Ok(response) => {
-                        tracing::info!(
-                            peer = %peer,
-                            results_count = response.results.len(),
-                            "Received search response from peer"
-                        );
-                        for result in response.results {
-                            if seen_hashes.insert(result.hash) {
-                                // Create and cache an announcement so this content can be queried later
-                                // Use the publisher_addresses from the search result for robust reconnection
-                                tracing::info!(
-                                    hash = %result.hash,
-                                    title = %result.title,
-                                    publisher_addresses_count = result.publisher_addresses.len(),
-                                    publisher_addresses = ?result.publisher_addresses,
-                                    "Creating announcement from search result"
-                                );
-                                let announcement = nodalync_wire::AnnouncePayload {
-                                    hash: result.hash,
-                                    content_type: result.content_type,
-                                    title: result.title.clone(),
-                                    l1_summary: result.l1_summary.clone(),
-                                    price: result.price,
-                                    addresses: result.publisher_addresses.clone(),
-                                    publisher_peer_id: Some(peer.to_string()),
-                                };
-                                self.state.store_announcement(announcement);
+            let peers: Vec<_> = network.connected_peers().into_iter().take(5).collect();
+            let peer_count = peers.len();
 
-                                all_results.push(NetworkSearchResult {
-                                    hash: result.hash,
-                                    title: result.title.clone(),
-                                    content_type: result.content_type,
-                                    price: result.price,
-                                    owner: result.owner,
-                                    l1_summary: result.l1_summary.clone(),
-                                    total_queries: result.total_queries,
-                                    source: SearchSource::Peer,
-                                    publisher_peer_id: Some(peer.to_string()),
-                                });
+            if peer_count > 0 {
+                tracing::info!(
+                    peer_count = peer_count,
+                    query = %query,
+                    "Querying peers concurrently"
+                );
+
+                // Launch all peer searches concurrently with a 5-second timeout
+                let peer_futures: Vec<_> = peers
+                    .into_iter()
+                    .map(|peer| {
+                        let net = network.clone();
+                        let payload = search_payload.clone();
+                        async move {
+                            let result = tokio::time::timeout(
+                                std::time::Duration::from_secs(5),
+                                net.send_search(peer, payload),
+                            )
+                            .await;
+                            (peer, result)
+                        }
+                    })
+                    .collect();
+
+                let responses = futures::future::join_all(peer_futures).await;
+
+                for (peer, result) in responses {
+                    match result {
+                        Ok(Ok(response)) => {
+                            tracing::info!(
+                                peer = %peer,
+                                results_count = response.results.len(),
+                                "Received search response from peer"
+                            );
+                            for result in response.results {
+                                if seen_hashes.insert(result.hash) {
+                                    tracing::info!(
+                                        hash = %result.hash,
+                                        title = %result.title,
+                                        publisher_addresses_count = result.publisher_addresses.len(),
+                                        publisher_addresses = ?result.publisher_addresses,
+                                        "Creating announcement from search result"
+                                    );
+                                    let announcement = nodalync_wire::AnnouncePayload {
+                                        hash: result.hash,
+                                        content_type: result.content_type,
+                                        title: result.title.clone(),
+                                        l1_summary: result.l1_summary.clone(),
+                                        price: result.price,
+                                        addresses: result.publisher_addresses.clone(),
+                                        publisher_peer_id: Some(peer.to_string()),
+                                    };
+                                    self.state.store_announcement(announcement);
+
+                                    all_results.push(NetworkSearchResult {
+                                        hash: result.hash,
+                                        title: result.title.clone(),
+                                        content_type: result.content_type,
+                                        price: result.price,
+                                        owner: result.owner,
+                                        l1_summary: result.l1_summary.clone(),
+                                        total_queries: result.total_queries,
+                                        source: SearchSource::Peer,
+                                        publisher_peer_id: Some(peer.to_string()),
+                                    });
+                                }
                             }
                         }
-                    }
-                    Err(e) => {
-                        tracing::debug!(peer = %peer, error = %e, "Peer search failed");
+                        Ok(Err(e)) => {
+                            tracing::debug!(peer = %peer, error = %e, "Peer search failed");
+                        }
+                        Err(_) => {
+                            tracing::debug!(peer = %peer, "Peer search timed out (5s)");
+                        }
                     }
                 }
             }
         }
+
+        // 4. Score and rank results by relevance
+        let query_lower = query.to_lowercase();
+        let query_terms: Vec<&str> = query_lower.split_whitespace().collect();
+
+        all_results.sort_by(|a, b| {
+            let score_a = relevance_score(a, &query_lower, &query_terms);
+            let score_b = relevance_score(b, &query_lower, &query_terms);
+            // Higher score first
+            score_b
+                .partial_cmp(&score_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // Truncate to limit
         all_results.truncate(limit as usize);
@@ -941,6 +984,71 @@ pub struct NetworkSearchResult {
 }
 
 /// Extract primary topics from mentions.
+/// Compute a relevance score for a search result against a query.
+///
+/// Scoring factors (higher = more relevant):
+/// - Exact title match: +100
+/// - Title contains full query: +50
+/// - Title contains individual terms: +10 per term
+/// - Topic overlap with query terms: +5 per matching topic
+/// - Local content bonus: +20 (user's own content ranks higher)
+/// - Query popularity: +log2(total_queries) (proven content ranks higher)
+/// - Mention density: +min(mention_count, 20) (richer content ranks higher)
+fn relevance_score(result: &NetworkSearchResult, query_lower: &str, query_terms: &[&str]) -> f64 {
+    let mut score = 0.0;
+
+    let title_lower = result.title.to_lowercase();
+
+    // Exact title match
+    if title_lower == *query_lower {
+        score += 100.0;
+    }
+    // Title contains full query
+    else if title_lower.contains(query_lower) {
+        score += 50.0;
+    }
+
+    // Title contains individual query terms
+    for term in query_terms {
+        if title_lower.contains(term) {
+            score += 10.0;
+        }
+    }
+
+    // Topic overlap: check if L1 primary topics match query terms
+    for topic in &result.l1_summary.primary_topics {
+        let topic_lower = topic.to_lowercase();
+        for term in query_terms {
+            if topic_lower.contains(term) || term.contains(topic_lower.as_str()) {
+                score += 5.0;
+            }
+        }
+    }
+
+    // Summary text overlap
+    let summary_lower = result.l1_summary.summary.to_lowercase();
+    for term in query_terms {
+        if summary_lower.contains(term) {
+            score += 3.0;
+        }
+    }
+
+    // Local content bonus — user's own content is more relevant
+    if result.source == SearchSource::Local {
+        score += 20.0;
+    }
+
+    // Query popularity bonus (logarithmic to avoid domination)
+    if result.total_queries > 0 {
+        score += (result.total_queries as f64).log2();
+    }
+
+    // Mention density bonus (capped at 20 to avoid domination)
+    score += (result.l1_summary.mention_count as f64).min(20.0);
+
+    score
+}
+
 fn extract_topics(mentions: &[nodalync_types::Mention]) -> Vec<String> {
     use std::collections::HashMap;
 
@@ -1108,5 +1216,158 @@ mod tests {
         let unknown_hash = nodalync_crypto::content_hash(b"nonexistent content");
         let manifest = ops.get_content_manifest(&unknown_hash).unwrap();
         assert!(manifest.is_none());
+    }
+
+    #[test]
+    fn test_relevance_score_exact_title_match() {
+        let hash = nodalync_crypto::content_hash(b"test");
+        let result = NetworkSearchResult {
+            hash,
+            title: "Rust Programming".to_string(),
+            content_type: ContentType::L0,
+            price: 0,
+            owner: nodalync_crypto::UNKNOWN_PEER_ID,
+            l1_summary: L1Summary::empty(hash),
+            total_queries: 0,
+            source: SearchSource::Local,
+            publisher_peer_id: None,
+        };
+
+        let query = "rust programming";
+        let terms: Vec<&str> = query.split_whitespace().collect();
+
+        let score = relevance_score(&result, query, &terms);
+        // Should get exact match bonus (100) + local bonus (20) + term matches (20)
+        assert!(
+            score >= 100.0,
+            "Exact match should score >= 100, got {}",
+            score
+        );
+    }
+
+    #[test]
+    fn test_relevance_score_partial_match_lower_than_exact() {
+        let hash = nodalync_crypto::content_hash(b"test");
+
+        let exact = NetworkSearchResult {
+            hash,
+            title: "Rust Programming".to_string(),
+            content_type: ContentType::L0,
+            price: 0,
+            owner: nodalync_crypto::UNKNOWN_PEER_ID,
+            l1_summary: L1Summary::empty(hash),
+            total_queries: 0,
+            source: SearchSource::Local,
+            publisher_peer_id: None,
+        };
+
+        let partial = NetworkSearchResult {
+            hash,
+            title: "Learning Rust for Beginners".to_string(),
+            content_type: ContentType::L0,
+            price: 0,
+            owner: nodalync_crypto::UNKNOWN_PEER_ID,
+            l1_summary: L1Summary::empty(hash),
+            total_queries: 0,
+            source: SearchSource::Peer,
+            publisher_peer_id: Some("peer1".into()),
+        };
+
+        let query = "rust programming";
+        let terms: Vec<&str> = query.split_whitespace().collect();
+
+        let exact_score = relevance_score(&exact, query, &terms);
+        let partial_score = relevance_score(&partial, query, &terms);
+
+        assert!(
+            exact_score > partial_score,
+            "Exact match ({}) should score higher than partial ({})",
+            exact_score,
+            partial_score
+        );
+    }
+
+    #[test]
+    fn test_relevance_score_local_beats_peer() {
+        let hash = nodalync_crypto::content_hash(b"test");
+
+        let local = NetworkSearchResult {
+            hash,
+            title: "My Notes".to_string(),
+            content_type: ContentType::L0,
+            price: 0,
+            owner: nodalync_crypto::UNKNOWN_PEER_ID,
+            l1_summary: L1Summary::empty(hash),
+            total_queries: 0,
+            source: SearchSource::Local,
+            publisher_peer_id: None,
+        };
+
+        let peer = NetworkSearchResult {
+            hash,
+            title: "My Notes".to_string(),
+            content_type: ContentType::L0,
+            price: 0,
+            owner: nodalync_crypto::UNKNOWN_PEER_ID,
+            l1_summary: L1Summary::empty(hash),
+            total_queries: 0,
+            source: SearchSource::Peer,
+            publisher_peer_id: Some("peer1".into()),
+        };
+
+        let query = "my notes";
+        let terms: Vec<&str> = query.split_whitespace().collect();
+
+        let local_score = relevance_score(&local, query, &terms);
+        let peer_score = relevance_score(&peer, query, &terms);
+
+        assert!(
+            local_score > peer_score,
+            "Local ({}) should beat peer ({}) with same title",
+            local_score,
+            peer_score
+        );
+    }
+
+    #[test]
+    fn test_relevance_score_popular_content_ranks_higher() {
+        let hash = nodalync_crypto::content_hash(b"test");
+
+        let popular = NetworkSearchResult {
+            hash,
+            title: "Data Science".to_string(),
+            content_type: ContentType::L0,
+            price: 0,
+            owner: nodalync_crypto::UNKNOWN_PEER_ID,
+            l1_summary: L1Summary::empty(hash),
+            total_queries: 1000,
+            source: SearchSource::Peer,
+            publisher_peer_id: Some("peer1".into()),
+        };
+
+        let unpopular = NetworkSearchResult {
+            hash,
+            title: "Data Science".to_string(),
+            content_type: ContentType::L0,
+            price: 0,
+            owner: nodalync_crypto::UNKNOWN_PEER_ID,
+            l1_summary: L1Summary::empty(hash),
+            total_queries: 0,
+            source: SearchSource::Peer,
+            publisher_peer_id: Some("peer2".into()),
+        };
+
+        let query = "data science";
+        let terms: Vec<&str> = query.split_whitespace().collect();
+
+        let popular_score = relevance_score(&popular, query, &terms);
+        let unpopular_score = relevance_score(&unpopular, query, &terms);
+
+        assert!(
+            popular_score > unpopular_score,
+            "Popular ({}) should beat unpopular ({})",
+            popular_score,
+            unpopular_score
+        );
     }
 }
