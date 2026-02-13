@@ -370,6 +370,36 @@ Get a snapshot of network health from the background health monitor.
 
 ---
 
+## Seed Node Commands
+
+### `get_seed_nodes`
+Get all configured seed nodes (builtin + user-added).
+- **Args:** none
+- **Returns:** `SeedNodeInfo[]`
+  ```typescript
+  {
+    peer_id: string,     // libp2p PeerId
+    address: string,     // Multiaddr
+    label: string | null,
+    source: "builtin" | "user" | "dns" | "peer_exchange",
+    enabled: boolean,
+    added_at: string     // ISO-8601
+  }
+  ```
+
+### `add_seed_node`
+Add a seed node for network discovery. Used on next network start.
+- **Args:** `{ peer_id: string, address: string, label?: string }`
+- **Validation:** peer_id must be valid libp2p PeerId, address must be valid Multiaddr
+- **Returns:** `SeedNodeInfo[]` (updated full list)
+
+### `remove_seed_node`
+Remove or disable a seed node. Builtin seeds are disabled, user seeds are deleted.
+- **Args:** `{ peer_id: string }`
+- **Returns:** `SeedNodeInfo[]` (updated full list)
+
+---
+
 ## Peer Persistence Commands
 
 ### `save_known_peers`
@@ -401,10 +431,32 @@ Add a peer manually to the known peers store.
 
 ---
 
+## Network Diagnostics
+
+### `diagnose_network`
+Analyze why the node can't find peers. Returns issues and suggestions.
+- **Args:** none
+- **Returns:**
+  ```typescript
+  {
+    overall_status: "healthy" | "degraded" | "disconnected",
+    network_active: boolean,
+    connected_peers: number,
+    known_peers: number,
+    seed_nodes: number,      // Enabled seed count
+    nat_status: string,
+    issues: string[],        // What's wrong
+    suggestions: string[]    // What to do
+  }
+  ```
+- **Use case:** Show in network settings when connectivity problems occur. The `suggestions` array contains actionable steps.
+
+---
+
 ## Notes for Frontend
 
 1. **Startup flow:** `check_identity` → if false: show onboarding → `init_node(password, name)`; if true: show password → `unlock_node`
-2. **After unlock:** `get_identity` for profile display, then `auto_start_network` (recommended — loads known peers + mDNS + stable identity + spawns health monitor)
+2. **After unlock:** `get_identity` for profile display, then `auto_start_network` (recommended — loads seeds + known peers + mDNS + stable identity + spawns health monitor)
 3. **Stable PeerId:** The network now derives its libp2p PeerId from the node's Nodalync identity. PeerId persists across restarts. Display it in the profile as the node's network address.
 4. **Publish flow:** `publish_file`/`publish_text` → `extract_mentions(hash)` to populate L2 graph
 5. **Query flow:** `get_fee_quote(price)` to show breakdown → `query_content(hash, amount)` — fee is auto-recorded
@@ -416,3 +468,5 @@ Add a peer manually to the known peers store.
 11. **Error handling:** All commands return `Result<T, String>` — errors are human-readable strings
 12. **NAT traversal:** Enabled by default (AutoNAT + UPnP + Relay + DCUtR). Use `get_nat_status` to display connectivity status. Most desktop users are behind NAT — the protocol automatically handles relay fallback and hole-punching.
 13. **Network health:** Poll `get_network_health` every 10-30s for the network status indicator. The background health monitor (spawned by `auto_start_network`) handles auto-reconnect, peer saves, and health classification. `stop_network` automatically saves peers and shuts down the monitor.
+14. **Seed nodes:** `auto_start_network` loads seeds first (highest priority), then known peers, then mDNS. For first-run users with no known peers, seeds are the only way to discover the network. Use `get_seed_nodes` to display seed config, `add_seed_node` to let users add custom seeds.
+15. **Network diagnostics:** If `get_network_health` shows "disconnected", call `diagnose_network` for actionable suggestions. Display `issues` + `suggestions` in a troubleshooting panel.
