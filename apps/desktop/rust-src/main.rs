@@ -7,6 +7,7 @@ use tokio::sync::Mutex as TokioMutex;
 use tauri::Manager;
 use tracing::info;
 
+mod channel_commands;
 mod discovery_commands;
 mod event_loop;
 mod fee_commands;
@@ -18,6 +19,7 @@ mod protocol;
 mod publish_commands;
 mod seed_store;
 
+use channel_commands::*;
 use discovery_commands::*;
 use fee_commands::*;
 use graph_commands::*;
@@ -146,6 +148,13 @@ fn main() {
             remove_seed_node,
             // Network diagnostics
             diagnose_network,
+            // Channel management
+            open_channel,
+            close_channel,
+            list_channels,
+            get_channel,
+            check_channel,
+            auto_open_and_query,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
