@@ -391,6 +391,78 @@ impl NodeState {
         }
     }
 
+    /// Update a cached announcement when a content update is received.
+    ///
+    /// Looks up the announcement by `version_root` (the original hash),
+    /// and replaces it with an updated entry pointing to the new version.
+    /// If no announcement for the root hash exists, the update is stored
+    /// as a new announcement.
+    pub fn update_announcement_version(&self, update: &nodalync_wire::AnnounceUpdatePayload) {
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(_) => {
+                tracing::error!("database connection lock poisoned");
+                return;
+            }
+        };
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let l1_summary_json = serde_json::to_string(&update.l1_summary).unwrap_or_default();
+
+        // First, try to get the existing announcement's addresses and publisher
+        let existing: Option<(String, Option<String>)> = conn
+            .query_row(
+                "SELECT addresses, publisher_peer_id FROM announcements WHERE hash = ?1",
+                [update.version_root.0.as_slice()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok();
+
+        let (addresses_json, publisher_peer_id) = existing.unwrap_or_else(|| {
+            ("[]".to_string(), None)
+        });
+
+        // Delete the old version's announcement
+        let _ = conn.execute(
+            "DELETE FROM announcements WHERE hash = ?1",
+            [update.version_root.0.as_slice()],
+        );
+
+        // Insert the updated announcement with the new hash
+        if let Err(e) = conn.execute(
+            "INSERT OR REPLACE INTO announcements (hash, content_type, title, l1_summary, price, addresses, received_at, publisher_peer_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                update.new_hash.0.as_slice(),
+                0u8, // Default to L0 — type doesn't change in update
+                update.title,
+                l1_summary_json,
+                update.price as i64,
+                addresses_json,
+                now,
+                publisher_peer_id,
+            ],
+        ) {
+            tracing::warn!(
+                version_root = %update.version_root,
+                new_hash = %update.new_hash,
+                error = %e,
+                "Failed to update announcement version"
+            );
+        } else {
+            tracing::info!(
+                version_root = %update.version_root,
+                new_hash = %update.new_hash,
+                version = update.version_number,
+                "Updated cached announcement to new version"
+            );
+        }
+    }
+
     /// Get a stored announcement by hash.
     ///
     /// Returns None if no announcement for this hash has been received.

@@ -27,7 +27,8 @@ use nodalync_crypto::{
 };
 use nodalync_wire::{
     create_message, decode_message, decode_payload, encode_message, encode_payload,
-    AnnouncePayload, ChannelClosePayload, ChannelOpenPayload, Message, MessageType,
+    AnnouncePayload, AnnounceUpdatePayload, ChannelClosePayload, ChannelOpenPayload, Message,
+    MessageType,
     PreviewRequestPayload, PreviewResponsePayload, QueryErrorPayload, QueryRequestPayload,
     QueryResponsePayload, SearchPayload, SearchResponsePayload, SettleConfirmPayload,
 };
@@ -751,6 +752,16 @@ impl Network for NetworkNode {
         let payload_bytes =
             encode_payload(&payload).map_err(|e| NetworkError::Encoding(e.to_string()))?;
         let message = self.create_signed_message(MessageType::Announce, payload_bytes);
+        self.broadcast(message).await
+    }
+
+    async fn broadcast_announce_update(
+        &self,
+        payload: AnnounceUpdatePayload,
+    ) -> NetworkResult<()> {
+        let payload_bytes =
+            encode_payload(&payload).map_err(|e| NetworkError::Encoding(e.to_string()))?;
+        let message = self.create_signed_message(MessageType::AnnounceUpdate, payload_bytes);
         self.broadcast(message).await
     }
 

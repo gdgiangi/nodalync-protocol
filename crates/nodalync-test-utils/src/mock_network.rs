@@ -8,7 +8,8 @@ use libp2p::Multiaddr;
 use nodalync_crypto::{Hash, PeerId as NodalyncPeerId};
 use nodalync_net::{Network, NetworkError, NetworkEvent, NetworkResult};
 use nodalync_wire::{
-    AnnouncePayload, ChannelClosePayload, ChannelOpenPayload, Message, MessageType,
+    AnnouncePayload, AnnounceUpdatePayload, ChannelClosePayload, ChannelOpenPayload, Message,
+    MessageType,
     PreviewRequestPayload, PreviewResponsePayload, QueryRequestPayload, QueryResponsePayload,
     SearchPayload, SearchResponsePayload, SettleConfirmPayload,
 };
@@ -386,6 +387,13 @@ impl Network for MockNetwork {
     }
 
     async fn broadcast_announce(&self, _payload: AnnouncePayload) -> NetworkResult<()> {
+        Ok(())
+    }
+
+    async fn broadcast_announce_update(
+        &self,
+        _payload: AnnounceUpdatePayload,
+    ) -> NetworkResult<()> {
         Ok(())
     }
 

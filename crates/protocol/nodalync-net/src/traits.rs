@@ -9,9 +9,9 @@ use async_trait::async_trait;
 use libp2p::Multiaddr;
 use nodalync_crypto::{Hash, PeerId as NodalyncPeerId};
 use nodalync_wire::{
-    AnnouncePayload, ChannelClosePayload, ChannelOpenPayload, Message, MessageType,
-    PreviewRequestPayload, PreviewResponsePayload, QueryRequestPayload, QueryResponsePayload,
-    SearchPayload, SearchResponsePayload, SettleConfirmPayload,
+    AnnouncePayload, AnnounceUpdatePayload, ChannelClosePayload, ChannelOpenPayload, Message,
+    MessageType, PreviewRequestPayload, PreviewResponsePayload, QueryRequestPayload,
+    QueryResponsePayload, SearchPayload, SearchResponsePayload, SettleConfirmPayload,
 };
 
 /// The Network trait provides the public API for P2P networking.
@@ -111,6 +111,16 @@ pub trait Network: Send + Sync {
     /// Uses GossipSub to broadcast an ANNOUNCE message to all subscribers,
     /// allowing other nodes to discover newly published content.
     async fn broadcast_announce(&self, payload: AnnouncePayload) -> NetworkResult<()>;
+
+    /// Broadcast a content update announcement.
+    ///
+    /// Uses GossipSub to broadcast an ANNOUNCE_UPDATE message when
+    /// existing content is updated to a new version. Peers that cached
+    /// the original announcement will update their cache.
+    async fn broadcast_announce_update(
+        &self,
+        payload: AnnounceUpdatePayload,
+    ) -> NetworkResult<()>;
 
     // =========================================================================
     // Peer Management

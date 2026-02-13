@@ -10,7 +10,8 @@ use nodalync_store::{ChannelStore, ContentStore, ManifestStore, PeerStore};
 use nodalync_types::{Channel, ChannelState, Payment, Visibility};
 use nodalync_valid::Validator;
 use nodalync_wire::{
-    decode_message, decode_payload, AnnouncePayload, ChannelAcceptPayload, ChannelCloseAckPayload,
+    decode_message, decode_payload, AnnouncePayload, AnnounceUpdatePayload,
+    ChannelAcceptPayload, ChannelCloseAckPayload,
     ChannelClosePayload, ChannelOpenPayload, MessageType, PaymentReceipt, PreviewRequestPayload,
     PreviewResponsePayload, QueryRequestPayload, QueryResponsePayload, SearchPayload,
     SearchResponsePayload, SearchResult as WireSearchResult, VersionInfo, VersionRequestPayload,
@@ -879,9 +880,9 @@ where
     /// Handle a broadcast announcement from GossipSub.
     ///
     /// When we receive an announcement, we:
-    /// 1. Decode the AnnouncePayload
+    /// 1. Decode the AnnouncePayload or AnnounceUpdatePayload
     /// 2. Log the announcement for debugging
-    /// 3. Store it in the announcements cache for later lookup
+    /// 3. Store/update it in the announcements cache for later lookup
     ///
     /// This allows preview/query to discover content from remote nodes.
     fn handle_broadcast_announcement(&mut self, topic: &str, data: &[u8]) -> OpsResult<()> {
@@ -892,38 +893,60 @@ where
 
         // Try to decode the wire protocol message
         match decode_message(data) {
-            Ok(message) => {
-                // Check if this is an ANNOUNCE message
-                if message.message_type != MessageType::Announce {
+            Ok(message) => match message.message_type {
+                MessageType::Announce => {
+                    // Decode the AnnouncePayload from the message payload
+                    match decode_payload::<AnnouncePayload>(&message.payload) {
+                        Ok(payload) => {
+                            info!(
+                                hash = %payload.hash,
+                                title = %payload.title,
+                                price = payload.price,
+                                addresses = ?payload.addresses,
+                                "Received content announcement"
+                            );
+
+                            // Store the announcement in our cache for later lookup
+                            self.state.store_announcement(payload);
+                            Ok(())
+                        }
+                        Err(e) => {
+                            debug!("Failed to decode announcement payload: {}", e);
+                            Ok(()) // Don't fail on decode errors
+                        }
+                    }
+                }
+                MessageType::AnnounceUpdate => {
+                    // Decode the AnnounceUpdatePayload
+                    match decode_payload::<AnnounceUpdatePayload>(&message.payload) {
+                        Ok(payload) => {
+                            info!(
+                                version_root = %payload.version_root,
+                                new_hash = %payload.new_hash,
+                                version = payload.version_number,
+                                title = %payload.title,
+                                "Received content update announcement"
+                            );
+
+                            // Update the cached announcement for the version root
+                            // Replace the old hash with the new version's hash
+                            self.state.update_announcement_version(&payload);
+                            Ok(())
+                        }
+                        Err(e) => {
+                            debug!("Failed to decode announce update payload: {}", e);
+                            Ok(())
+                        }
+                    }
+                }
+                _ => {
                     debug!(
                         "Ignoring non-announce broadcast message: {:?}",
                         message.message_type
                     );
-                    return Ok(());
+                    Ok(())
                 }
-
-                // Decode the AnnouncePayload from the message payload
-                match decode_payload::<AnnouncePayload>(&message.payload) {
-                    Ok(payload) => {
-                        info!(
-                            hash = %payload.hash,
-                            title = %payload.title,
-                            price = payload.price,
-                            addresses = ?payload.addresses,
-                            "Received content announcement"
-                        );
-
-                        // Store the announcement in our cache for later lookup
-                        // This allows preview/query to find content from remote nodes
-                        self.state.store_announcement(payload);
-                        Ok(())
-                    }
-                    Err(e) => {
-                        debug!("Failed to decode announcement payload: {}", e);
-                        Ok(()) // Don't fail on decode errors
-                    }
-                }
-            }
+            },
             Err(e) => {
                 debug!("Failed to decode broadcast message: {}", e);
                 Ok(()) // Don't fail on decode errors

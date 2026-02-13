@@ -9,7 +9,7 @@ use nodalync_net::Multiaddr;
 use nodalync_store::ManifestStore;
 use nodalync_types::{AccessControl, Amount, ContentType, Manifest, Visibility};
 use nodalync_valid::Validator;
-use nodalync_wire::AnnouncePayload;
+use nodalync_wire::{AnnouncePayload, AnnounceUpdatePayload};
 
 use crate::error::{OpsError, OpsResult};
 use crate::extraction::L1Extractor;
@@ -104,6 +104,83 @@ where
                     "GossipSub broadcast failed (content still published locally): {}",
                     e
                 );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Publish a content update to the network.
+    ///
+    /// After updating content (via `update_content`), call this to:
+    /// 1. Set visibility and price on the new version
+    /// 2. Broadcast an AnnounceUpdate so peers update their caches
+    /// 3. Announce the new version in the DHT
+    ///
+    /// `old_hash` is the previous version's hash (used as version_root).
+    /// `new_hash` is the updated content's hash.
+    pub async fn publish_content_update(
+        &mut self,
+        old_hash: &Hash,
+        new_hash: &Hash,
+    ) -> OpsResult<()> {
+        // Load the new manifest
+        let manifest = self
+            .state
+            .manifests
+            .load(new_hash)?
+            .ok_or(OpsError::ManifestNotFound(*new_hash))?;
+
+        // Verify ownership
+        if manifest.owner != self.peer_id() {
+            return Err(OpsError::AccessDenied);
+        }
+
+        // Extract L1 summary
+        let l1_summary = self.extract_l1_summary(new_hash)?;
+
+        // Version root identifies the content across versions
+        let version_root = manifest.version.root;
+
+        if let Some(network) = self.network().cloned() {
+            let publisher_peer_id = Some(network.local_peer_id().to_string());
+            let listen_addrs = network.listen_addresses();
+
+            // Create AnnounceUpdate payload
+            let update_payload = AnnounceUpdatePayload {
+                version_root,
+                new_hash: *new_hash,
+                version_number: manifest.version.number,
+                title: manifest.metadata.title.clone(),
+                l1_summary: l1_summary.clone(),
+                price: manifest.economics.price,
+            };
+
+            // Broadcast update via gossipsub
+            if let Err(e) = network.broadcast_announce_update(update_payload).await {
+                tracing::warn!(
+                    "GossipSub announce update failed (content still updated locally): {}",
+                    e
+                );
+            }
+
+            // Also do a fresh DHT announce with the new hash
+            let announce_payload = Self::create_announce_payload(
+                &manifest,
+                l1_summary,
+                listen_addrs,
+                publisher_peer_id,
+            );
+            if let Err(e) = network.dht_announce(*new_hash, announce_payload).await {
+                tracing::warn!(
+                    "DHT announce for updated content failed: {}",
+                    e
+                );
+            }
+
+            // Remove old hash from DHT
+            if let Err(e) = network.dht_remove(old_hash).await {
+                tracing::warn!("Failed to remove old version from DHT: {}", e);
             }
         }
 
