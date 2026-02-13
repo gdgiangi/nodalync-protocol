@@ -419,7 +419,7 @@ impl L2GraphDB {
                 content_id: row.get(1)?,
                 l1_mention_id: row.get(2)?,
                 added_at: DateTime::from_timestamp(row.get::<_, i64>(3)?, 0)
-                    .unwrap_or_else(|| Utc::now()),
+                    .unwrap_or_else(Utc::now),
             })
         })?;
         
@@ -445,9 +445,9 @@ impl L2GraphDB {
             description: row.get("description")?,
             confidence: row.get("confidence")?,
             first_seen: DateTime::from_timestamp(row.get::<_, i64>("first_seen")?, 0)
-                .unwrap_or_else(|| Utc::now()),
+                .unwrap_or_else(Utc::now),
             last_updated: DateTime::from_timestamp(row.get::<_, i64>("last_updated")?, 0)
-                .unwrap_or_else(|| Utc::now()),
+                .unwrap_or_else(Utc::now),
             source_count: row.get("source_count")?,
             metadata_json: row.get("metadata_json")?,
             aliases,
@@ -464,7 +464,7 @@ impl L2GraphDB {
             object_value: row.get("object_value")?,
             confidence: row.get("confidence")?,
             extracted_at: DateTime::from_timestamp(row.get::<_, i64>("extracted_at")?, 0)
-                .unwrap_or_else(|| Utc::now()),
+                .unwrap_or_else(Utc::now),
             metadata_json: row.get("metadata_json")?,
         })
     }
@@ -552,10 +552,8 @@ impl L2GraphDB {
         let type_iter = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?))
         })?;
-        for result in type_iter {
-            if let Ok((etype, count)) = result {
-                stats.insert(format!("  type:{}", etype), count);
-            }
+        for (etype, count) in type_iter.flatten() {
+            stats.insert(format!("  type:{}", etype), count);
         }
 
         Ok(stats)

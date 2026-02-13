@@ -180,7 +180,7 @@ fn scan_vault(vault_path: &Path, database_path: &Path, force: bool) -> Result<()
 
     for entry in walk_vault(vault_path) {
         let path = entry.path().to_path_buf();
-        if !path.is_file() || path.extension().map_or(true, |e| e != "md") {
+        if !path.is_file() || path.extension().is_none_or(|e| e != "md") {
             continue;
         }
 
@@ -235,7 +235,7 @@ fn scan_vault(vault_path: &Path, database_path: &Path, force: bool) -> Result<()
             let final_type = fm
                 .as_ref()
                 .and_then(|f| f.note_type.as_deref())
-                .map(|t| capitalize_type(t))
+                .map(capitalize_type)
                 .unwrap_or(entity_type.clone());
 
             // Build description from role and first paragraph
@@ -287,7 +287,7 @@ fn scan_vault(vault_path: &Path, database_path: &Path, force: bool) -> Result<()
     println!("\n🔗 Phase 3: Extracting frontmatter relationships...");
     let mut rel_count = 0u32;
 
-    for (path, _content_id) in &file_registry {
+    for path in file_registry.keys() {
         if entity_from_node_path(path, vault_path).is_none() {
             continue; // Only Nodes/ files have frontmatter entities
         }
@@ -314,7 +314,7 @@ fn scan_vault(vault_path: &Path, database_path: &Path, force: bool) -> Result<()
     println!("\n🔗 Phase 4: Extracting wiki-link relationships...");
     let mut wikilink_rel_count = 0u32;
 
-    for (path, _content_id) in &file_registry {
+    for path in file_registry.keys() {
         let content = fs::read_to_string(path).unwrap_or_default();
 
         // Determine the "source entity" for this file
@@ -521,13 +521,7 @@ fn query_subgraph(
 ) -> Result<()> {
     println!("🔍 Searching for entity: {}", entity_query);
 
-    let entity = if entity_query.starts_with('e')
-        && entity_query[1..].parse::<u32>().is_ok()
-    {
-        db.find_entity(entity_query)?
-    } else {
-        db.find_entity(entity_query)?
-    };
+    let entity = db.find_entity(entity_query)?;
 
     let center_entity = match entity {
         Some(e) => e,
