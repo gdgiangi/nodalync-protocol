@@ -17,6 +17,7 @@ mod network_commands;
 mod peer_store;
 mod protocol;
 mod publish_commands;
+mod seed_store;
 
 use channel_commands::*;
 use discovery_commands::*;
@@ -141,6 +142,12 @@ fn main() {
             get_nat_status,
             // Health monitor
             get_network_health,
+            // Seed node management
+            get_seed_nodes,
+            add_seed_node,
+            remove_seed_node,
+            // Network diagnostics
+            diagnose_network,
             // Channel management
             open_channel,
             close_channel,
