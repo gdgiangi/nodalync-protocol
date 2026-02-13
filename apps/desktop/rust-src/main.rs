@@ -76,6 +76,7 @@ fn main() {
             check_identity,
             init_node,
             unlock_node,
+            get_identity,
             publish_file,
             publish_text,
             list_content,
