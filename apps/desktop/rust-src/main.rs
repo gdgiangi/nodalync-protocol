@@ -156,6 +156,9 @@ fn main() {
             get_channel,
             check_channel,
             auto_open_and_query,
+            // Content import (L0 add without network publish)
+            add_content,
+            add_text_content,
             // Connection invites
             generate_invite,
             accept_invite,
