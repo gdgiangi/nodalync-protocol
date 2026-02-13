@@ -110,6 +110,131 @@ impl StoreError {
     pub fn lock_poisoned(msg: impl Into<String>) -> Self {
         StoreError::LockPoisoned(msg.into())
     }
+
+    /// Get the protocol error code for this error.
+    pub fn error_code(&self) -> nodalync_types::ErrorCode {
+        use nodalync_types::ErrorCode;
+        match self {
+            Self::ContentNotFound(_) => ErrorCode::NotFound,
+            Self::ManifestNotFound(_) => ErrorCode::NotFound,
+            Self::ChannelNotFound => ErrorCode::ChannelNotFound,
+            Self::PeerNotFound => ErrorCode::PeerNotFound,
+            Self::IdentityNotFound => ErrorCode::InternalError,
+            Self::HashMismatch { .. } => ErrorCode::InvalidHash,
+            Self::ProvenanceNotFound(_) => ErrorCode::InvalidProvenance,
+            Self::CacheNotFound(_) => ErrorCode::NotFound,
+            Self::InvalidData(_) => ErrorCode::InvalidManifest,
+            Self::Io(_) => ErrorCode::InternalError,
+            Self::Database(_) => ErrorCode::InternalError,
+            Self::Serialization(_) => ErrorCode::InvalidManifest,
+            Self::Encryption(_) => ErrorCode::InternalError,
+            Self::Settlement(_) => ErrorCode::InternalError,
+            Self::Schema(_) => ErrorCode::InternalError,
+            Self::Path(_) => ErrorCode::InternalError,
+            Self::LockPoisoned(_) => ErrorCode::InternalError,
+        }
+    }
+
+    /// Get a user-friendly suggestion for recovering from this error.
+    pub fn suggestion(&self) -> &'static str {
+        match self {
+            Self::ContentNotFound(_) => {
+                "Content not in local store. Use 'nodalync search' to find and query it from the network."
+            }
+            Self::ManifestNotFound(_) => {
+                "Manifest not found. The content may not have been published yet."
+            }
+            Self::ChannelNotFound => {
+                "No payment channel found. Open one with 'nodalync channel open'."
+            }
+            Self::PeerNotFound => {
+                "Peer not in local store. Connect to the network to discover peers."
+            }
+            Self::IdentityNotFound => {
+                "No identity found. Run 'nodalync init' to create one."
+            }
+            Self::HashMismatch { .. } => {
+                "Content hash doesn't match. The data may be corrupted. Re-download from the network."
+            }
+            Self::ProvenanceNotFound(_) => {
+                "Provenance chain not found. The source content may need to be queried first."
+            }
+            Self::CacheNotFound(_) => {
+                "Cache miss. The content will be fetched from the network on next query."
+            }
+            Self::Io(_) => {
+                "I/O error. Check disk space, file permissions, and that the data directory is accessible."
+            }
+            Self::Database(_) => {
+                "Database error. The database may be corrupted. Try 'nodalync repair' or restore from backup."
+            }
+            Self::Serialization(_) => {
+                "Data serialization error. The stored data may be from an incompatible version."
+            }
+            Self::Encryption(_) => {
+                "Encryption/decryption failed. Check that the correct key is being used."
+            }
+            Self::Settlement(_) => {
+                "Settlement queue error. Check Hedera configuration and network connectivity."
+            }
+            Self::Schema(_) => {
+                "Database schema error. The database may need migration. Try upgrading the CLI."
+            }
+            Self::InvalidData(_) => {
+                "Invalid data format. The data may be corrupted or from an incompatible version."
+            }
+            Self::Path(_) => {
+                "Invalid path. Check that the data directory exists and is writable."
+            }
+            Self::LockPoisoned(_) => {
+                "Internal lock error. Restart the application."
+            }
+        }
+    }
+
+    /// Returns true if this error is transient and the operation may succeed on retry.
+    pub fn is_transient(&self) -> bool {
+        matches!(
+            self,
+            Self::Io(_) | Self::Database(_) | Self::LockPoisoned(_) | Self::Settlement(_)
+        )
+    }
+
+    /// Suggested retry delay in milliseconds for transient errors.
+    ///
+    /// Returns `None` for non-transient errors.
+    pub fn retry_delay_ms(&self) -> Option<u64> {
+        match self {
+            Self::Io(_) => Some(1_000),
+            Self::Database(_) => Some(500),
+            Self::LockPoisoned(_) => Some(100),
+            Self::Settlement(_) => Some(5_000),
+            _ => None,
+        }
+    }
+
+    /// Metric labels for monitoring integration.
+    pub fn metric_labels(&self) -> (&'static str, &'static str) {
+        match self {
+            Self::ContentNotFound(_) => ("store", "content_not_found"),
+            Self::ManifestNotFound(_) => ("store", "manifest_not_found"),
+            Self::ChannelNotFound => ("store", "channel_not_found"),
+            Self::PeerNotFound => ("store", "peer_not_found"),
+            Self::IdentityNotFound => ("store", "identity_not_found"),
+            Self::HashMismatch { .. } => ("store", "hash_mismatch"),
+            Self::ProvenanceNotFound(_) => ("store", "provenance_not_found"),
+            Self::CacheNotFound(_) => ("store", "cache_not_found"),
+            Self::Io(_) => ("store", "io"),
+            Self::Database(_) => ("store", "database"),
+            Self::Serialization(_) => ("store", "serialization"),
+            Self::Encryption(_) => ("store", "encryption"),
+            Self::Settlement(_) => ("store", "settlement"),
+            Self::Schema(_) => ("store", "schema"),
+            Self::InvalidData(_) => ("store", "invalid_data"),
+            Self::Path(_) => ("store", "path"),
+            Self::LockPoisoned(_) => ("store", "lock_poisoned"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -139,6 +264,73 @@ mod tests {
         let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
         let store_err: StoreError = io_err.into();
         assert!(matches!(store_err, StoreError::Io(_)));
+    }
+
+    #[test]
+    fn test_suggestion() {
+        let hash = content_hash(b"test");
+        let err = StoreError::ContentNotFound(hash);
+        assert!(err.suggestion().contains("search"));
+
+        let err = StoreError::IdentityNotFound;
+        assert!(err.suggestion().contains("init"));
+
+        let err = StoreError::ChannelNotFound;
+        assert!(err.suggestion().contains("channel"));
+    }
+
+    #[test]
+    fn test_is_transient() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "test");
+        assert!(StoreError::Io(io_err).is_transient());
+        assert!(StoreError::Settlement("test".into()).is_transient());
+
+        let hash = content_hash(b"test");
+        assert!(!StoreError::ContentNotFound(hash).is_transient());
+        assert!(!StoreError::IdentityNotFound.is_transient());
+    }
+
+    #[test]
+    fn test_retry_delay() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "test");
+        assert_eq!(StoreError::Io(io_err).retry_delay_ms(), Some(1_000));
+        assert_eq!(
+            StoreError::Settlement("test".into()).retry_delay_ms(),
+            Some(5_000)
+        );
+
+        let hash = content_hash(b"test");
+        assert_eq!(StoreError::ContentNotFound(hash).retry_delay_ms(), None);
+    }
+
+    #[test]
+    fn test_error_code() {
+        use nodalync_types::ErrorCode;
+        let hash = content_hash(b"test");
+        assert_eq!(
+            StoreError::ContentNotFound(hash).error_code(),
+            ErrorCode::NotFound
+        );
+        assert_eq!(
+            StoreError::ChannelNotFound.error_code(),
+            ErrorCode::ChannelNotFound
+        );
+        assert_eq!(
+            StoreError::PeerNotFound.error_code(),
+            ErrorCode::PeerNotFound
+        );
+    }
+
+    #[test]
+    fn test_metric_labels() {
+        let hash = content_hash(b"test");
+        let (cat, var) = StoreError::ContentNotFound(hash).metric_labels();
+        assert_eq!(cat, "store");
+        assert_eq!(var, "content_not_found");
+
+        let (cat, var) = StoreError::ChannelNotFound.metric_labels();
+        assert_eq!(cat, "store");
+        assert_eq!(var, "channel_not_found");
     }
 
     #[test]

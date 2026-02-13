@@ -251,6 +251,150 @@ impl OpsError {
             Self::Econ(_) => ErrorCode::InternalError,
         }
     }
+
+    /// Get a user-friendly suggestion for recovering from this error.
+    pub fn suggestion(&self) -> &'static str {
+        match self {
+            // Content errors
+            Self::NotFound(_) | Self::ManifestNotFound(_) => {
+                "Content not found. Use 'nodalync search' to find content on the network."
+            }
+            Self::SourceNotQueried(_) => {
+                "Source content must be queried before creating derived content. Query the source first."
+            }
+            Self::ContentHashMismatch => {
+                "Content hash doesn't match. The data may be corrupted. Re-download from the network."
+            }
+            Self::NotAnL3 => {
+                "This operation requires L3 (synthesized) content. Use synthesize_content to create L3."
+            }
+
+            // Access errors
+            Self::AccessDenied => {
+                "Access denied. The content may be private. Contact the owner for access."
+            }
+
+            // Payment errors
+            Self::PaymentRequired(_) => {
+                "Payment required. Open a payment channel and ensure sufficient balance."
+            }
+            Self::PaymentInsufficient => {
+                "Payment amount is too low. Check the content price and try again."
+            }
+            Self::PaymentValidationFailed(_) => {
+                "Payment validation failed. Check payment signature and channel state."
+            }
+            Self::ChannelRequired | Self::ChannelRequiredWithPeerInfo { .. } => {
+                "Payment channel required. Open a channel with the content provider."
+            }
+            Self::InsufficientChannelBalance => {
+                "Insufficient channel balance. Deposit more funds or open a new channel."
+            }
+            Self::PrivateKeyRequired => {
+                "Private key needed for signing payments. Ensure identity is loaded."
+            }
+
+            // Channel errors
+            Self::ChannelNotFound => {
+                "Channel not found. Open one with 'nodalync channel open <peer>'."
+            }
+            Self::ChannelAlreadyExists => {
+                "Channel already exists with this peer. Use the existing channel."
+            }
+            Self::ChannelNotOpen => {
+                "Channel is closed. Open a new channel to continue transacting."
+            }
+            Self::ChannelDepositTooLow { .. } => {
+                "Channel deposit below minimum (100 HBAR). Increase the deposit amount."
+            }
+
+            // Settlement errors
+            Self::SettlementFailed(_) => {
+                "On-chain settlement failed. Check Hedera connectivity and account balance."
+            }
+            Self::SettlementRequired => {
+                "Settlement layer required for paid queries. Configure Hedera integration."
+            }
+
+            // Operation errors
+            Self::InvalidOperation(_) => {
+                "Invalid operation. Check the parameters and try again."
+            }
+
+            // Network errors
+            Self::Network(e) => e.suggestion(),
+            Self::PeerIdNotFound => {
+                "Peer ID mapping not found. The peer may not have completed handshake."
+            }
+
+            // Wrapped errors
+            Self::Store(e) => e.suggestion(),
+            Self::Validation(_) => {
+                "Validation failed. Check content format and provenance chain."
+            }
+            Self::Econ(_) => {
+                "Economics calculation error. Check pricing parameters."
+            }
+        }
+    }
+
+    /// Returns true if this error is transient and the operation may succeed on retry.
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Self::Network(e) => e.is_transient(),
+            Self::Store(e) => e.is_transient(),
+            Self::SettlementFailed(_) => true,
+            Self::InsufficientChannelBalance => true, // May resolve after deposit
+            Self::ChannelRequired | Self::ChannelRequiredWithPeerInfo { .. } => true, // Can open channel and retry
+            _ => false,
+        }
+    }
+
+    /// Suggested retry delay in milliseconds for transient errors.
+    ///
+    /// Returns `None` for non-transient errors.
+    pub fn retry_delay_ms(&self) -> Option<u64> {
+        match self {
+            Self::Network(e) => e.retry_delay_ms(),
+            Self::Store(e) => e.retry_delay_ms(),
+            Self::SettlementFailed(_) => Some(10_000),
+            Self::InsufficientChannelBalance => Some(1_000),
+            Self::ChannelRequired | Self::ChannelRequiredWithPeerInfo { .. } => Some(500),
+            _ => None,
+        }
+    }
+
+    /// Metric labels for monitoring integration.
+    pub fn metric_labels(&self) -> (&'static str, &'static str) {
+        match self {
+            Self::NotFound(_) => ("ops", "not_found"),
+            Self::SourceNotQueried(_) => ("ops", "source_not_queried"),
+            Self::ContentHashMismatch => ("ops", "hash_mismatch"),
+            Self::NotAnL3 => ("ops", "not_l3"),
+            Self::AccessDenied => ("ops", "access_denied"),
+            Self::PaymentRequired(_) => ("ops", "payment_required"),
+            Self::PaymentInsufficient => ("ops", "payment_insufficient"),
+            Self::PaymentValidationFailed(_) => ("ops", "payment_validation"),
+            Self::ChannelRequired | Self::ChannelRequiredWithPeerInfo { .. } => {
+                ("ops", "channel_required")
+            }
+            Self::InsufficientChannelBalance => ("ops", "insufficient_balance"),
+            Self::PrivateKeyRequired => ("ops", "private_key_required"),
+            Self::ChannelNotFound => ("ops", "channel_not_found"),
+            Self::ChannelAlreadyExists => ("ops", "channel_already_exists"),
+            Self::ChannelNotOpen => ("ops", "channel_not_open"),
+            Self::ChannelDepositTooLow { .. } => ("ops", "deposit_too_low"),
+            Self::SettlementFailed(_) => ("ops", "settlement_failed"),
+            Self::SettlementRequired => ("ops", "settlement_required"),
+            Self::InvalidOperation(_) => ("ops", "invalid_operation"),
+            Self::ManifestNotFound(_) => ("ops", "manifest_not_found"),
+            Self::Network(_) => ("ops", "network"),
+            Self::PeerIdNotFound => ("ops", "peer_id_not_found"),
+            Self::Store(_) => ("ops", "store"),
+            Self::Validation(_) => ("ops", "validation"),
+            Self::Econ(_) => ("ops", "econ"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -272,6 +416,54 @@ mod tests {
 
         let err = OpsError::payment_required("need funds");
         assert!(matches!(err, OpsError::PaymentRequired(_)));
+    }
+
+    #[test]
+    fn test_suggestion() {
+        let hash = content_hash(b"test");
+        let err = OpsError::NotFound(hash);
+        assert!(err.suggestion().contains("search"));
+
+        let err = OpsError::PaymentRequired("test".into());
+        assert!(err.suggestion().contains("channel"));
+
+        let err = OpsError::SettlementRequired;
+        assert!(err.suggestion().contains("Hedera"));
+    }
+
+    #[test]
+    fn test_is_transient() {
+        assert!(OpsError::SettlementFailed("test".into()).is_transient());
+        assert!(OpsError::InsufficientChannelBalance.is_transient());
+        assert!(OpsError::ChannelRequired.is_transient());
+
+        let hash = content_hash(b"test");
+        assert!(!OpsError::NotFound(hash).is_transient());
+        assert!(!OpsError::AccessDenied.is_transient());
+        assert!(!OpsError::ContentHashMismatch.is_transient());
+    }
+
+    #[test]
+    fn test_retry_delay() {
+        assert_eq!(
+            OpsError::SettlementFailed("test".into()).retry_delay_ms(),
+            Some(10_000)
+        );
+        assert_eq!(OpsError::ChannelRequired.retry_delay_ms(), Some(500));
+
+        let hash = content_hash(b"test");
+        assert_eq!(OpsError::NotFound(hash).retry_delay_ms(), None);
+    }
+
+    #[test]
+    fn test_metric_labels() {
+        let (cat, var) = OpsError::AccessDenied.metric_labels();
+        assert_eq!(cat, "ops");
+        assert_eq!(var, "access_denied");
+
+        let (cat, var) = OpsError::ChannelRequired.metric_labels();
+        assert_eq!(cat, "ops");
+        assert_eq!(var, "channel_required");
     }
 
     #[test]
