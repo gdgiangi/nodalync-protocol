@@ -26,8 +26,9 @@ tracing = "0.1"
 # Serialization
 serde = { version = "1", features = ["derive"] }
 
-# Cryptography (for GossipSub message IDs)
+# Cryptography (for GossipSub message IDs and identity derivation)
 sha2 = "0.10"
+ed25519-dalek = { workspace = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "test-util"] }

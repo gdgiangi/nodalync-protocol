@@ -151,4 +151,31 @@ mod tests {
         let result = NetworkNode::new(config).await;
         assert!(result.is_ok());
     }
+
+    #[tokio::test]
+    async fn test_stable_peer_id_with_identity_secret() {
+        let secret = [7u8; 32];
+
+        // Create two nodes with the same identity secret
+        let config1 = NetworkConfig::new().with_identity_secret(secret);
+        let config2 = NetworkConfig::new().with_identity_secret(secret);
+
+        let node1 = NetworkNode::new(config1).await.unwrap();
+        let node2 = NetworkNode::new(config2).await.unwrap();
+
+        // They should have the same libp2p PeerId
+        assert_eq!(node1.local_peer_id(), node2.local_peer_id());
+    }
+
+    #[tokio::test]
+    async fn test_random_peer_id_without_secret() {
+        let config1 = NetworkConfig::default();
+        let config2 = NetworkConfig::default();
+
+        let node1 = NetworkNode::new(config1).await.unwrap();
+        let node2 = NetworkNode::new(config2).await.unwrap();
+
+        // Random identities should differ (overwhelmingly likely)
+        assert_ne!(node1.local_peer_id(), node2.local_peer_id());
+    }
 }

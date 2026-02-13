@@ -1,0 +1,198 @@
+import { useState } from "react";
+import { LEVEL_CONFIG, TYPE_COLORS, EDGE_CATEGORY_COLORS } from "../lib/constants";
+
+/**
+ * Floating legend overlay for the graph — shows level hierarchy,
+ * entity type colors, and relationship category meanings.
+ * Collapsed by default to save space.
+ */
+export default function GraphLegend() {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div
+      className="absolute bottom-4 left-4 z-30 animate-fade-in"
+      style={{
+        background: "rgba(6, 6, 10, 0.88)",
+        backdropFilter: "blur(16px)",
+        WebkitBackdropFilter: "blur(16px)",
+        border: "1px solid var(--border-subtle)",
+        borderRadius: "var(--radius-lg)",
+        overflow: "hidden",
+        maxWidth: expanded ? 260 : 120,
+        transition: "max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
+      }}
+    >
+      {/* Toggle header */}
+      <button
+        onClick={() => setExpanded((prev) => !prev)}
+        className="w-full flex items-center justify-between px-3 py-2"
+        style={{
+          background: "transparent",
+          border: "none",
+          cursor: "pointer",
+          color: "var(--text-ghost)",
+        }}
+        onMouseEnter={(e) => (e.currentTarget.style.color = "var(--text-tertiary)")}
+        onMouseLeave={(e) => (e.currentTarget.style.color = "var(--text-ghost)")}
+      >
+        <span
+          style={{
+            fontSize: 7,
+            letterSpacing: "2.5px",
+            textTransform: "uppercase",
+            color: "inherit",
+          }}
+        >
+          LEGEND
+        </span>
+        <svg
+          width="10"
+          height="10"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          style={{
+            transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
+            transition: "transform 0.2s ease",
+          }}
+        >
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+
+      {/* Collapsed: just show level dots inline */}
+      {!expanded && (
+        <div className="flex items-center gap-2 px-3 pb-2">
+          {["L0", "L1", "L2", "L3"].map((level) => {
+            const cfg = LEVEL_CONFIG[level];
+            const size = level === "L0" ? 4 : level === "L1" ? 6 : level === "L2" ? 8 : 10;
+            const color = cfg.color || "var(--accent)";
+            return (
+              <div key={level} className="flex items-center gap-1">
+                <div
+                  style={{
+                    width: size,
+                    height: size,
+                    borderRadius: "50%",
+                    background: color,
+                    opacity: cfg.opacity,
+                    flexShrink: 0,
+                  }}
+                />
+                <span style={{ fontSize: 7, color: "var(--text-ghost)", letterSpacing: "0.5px" }}>
+                  {level}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Expanded content */}
+      {expanded && (
+        <div className="px-3 pb-3 space-y-3">
+          {/* Level hierarchy */}
+          <div>
+            <SectionLabel>Hierarchy</SectionLabel>
+            <div className="space-y-1.5">
+              {["L0", "L1", "L2", "L3"].map((level) => {
+                const cfg = LEVEL_CONFIG[level];
+                const size = level === "L0" ? 5 : level === "L1" ? 7 : level === "L2" ? 10 : 13;
+                const color = cfg.color || "var(--accent)";
+                return (
+                  <div key={level} className="flex items-center gap-2.5">
+                    <div
+                      style={{
+                        width: size,
+                        height: size,
+                        borderRadius: "50%",
+                        background: color,
+                        opacity: cfg.opacity,
+                        flexShrink: 0,
+                      }}
+                    />
+                    <div>
+                      <span style={{ fontSize: 9, color: "var(--text-secondary)", fontWeight: 500 }}>
+                        {level}
+                      </span>
+                      <span style={{ fontSize: 9, color: "var(--text-ghost)", marginLeft: 4 }}>
+                        {cfg.label}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Entity types (L2 colors) */}
+          <div>
+            <SectionLabel>Entity Types</SectionLabel>
+            <div className="flex flex-wrap gap-1.5">
+              {Object.entries(TYPE_COLORS).slice(0, 8).map(([type, color]) => (
+                <div key={type} className="flex items-center gap-1.5">
+                  <div
+                    style={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: "50%",
+                      background: color,
+                      opacity: 0.8,
+                      flexShrink: 0,
+                    }}
+                  />
+                  <span style={{ fontSize: 8, color: "var(--text-ghost)" }}>
+                    {type}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Edge categories */}
+          <div>
+            <SectionLabel>Relationships</SectionLabel>
+            <div className="space-y-1">
+              {Object.entries(EDGE_CATEGORY_COLORS).map(([cat, color]) => (
+                <div key={cat} className="flex items-center gap-2">
+                  <div
+                    style={{
+                      width: 16,
+                      height: 2,
+                      borderRadius: 1,
+                      background: color.replace(/[\d.]+\)$/, "0.7)"),
+                      flexShrink: 0,
+                    }}
+                  />
+                  <span style={{ fontSize: 8, color: "var(--text-ghost)", textTransform: "capitalize" }}>
+                    {cat}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SectionLabel({ children }) {
+  return (
+    <div
+      style={{
+        fontSize: 7,
+        letterSpacing: "2px",
+        textTransform: "uppercase",
+        color: "rgba(255, 255, 255, 0.2)",
+        marginBottom: 4,
+      }}
+    >
+      {children}
+    </div>
+  );
+}

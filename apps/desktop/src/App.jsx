@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import GraphView from "./components/GraphView";
 import Sidebar from "./components/Sidebar";
@@ -8,6 +8,7 @@ import EntityDetailPanel from "./components/EntityDetailPanel";
 import { useTauriEvents } from "./hooks/useTauriEvents";
 import CreateContentDialog from "./components/CreateContentDialog";
 import CommandPalette from "./components/CommandPalette";
+import GraphLegend from "./components/GraphLegend";
 
 function App() {
   const [graphData, setGraphData] = useState({ nodes: [], links: [] });
@@ -19,6 +20,7 @@ function App() {
   const [viewMode, setViewMode] = useState("full"); // 'full' or 'subgraph'
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const graphRef = useRef(null);
 
   // Load full graph on mount
   useEffect(() => {
@@ -93,8 +95,22 @@ function App() {
 
   function handleNodeClick(node) {
     setSelectedEntity(node);
-    // Open the detail panel
     setDetailEntity(node);
+    // Zoom camera to center the clicked entity
+    if (graphRef.current) {
+      graphRef.current.zoomToEntity(node.id);
+    }
+  }
+
+  function handleBackgroundClick() {
+    // Click away → deselect and return to full view
+    if (selectedEntity) {
+      setSelectedEntity(null);
+      setDetailEntity(null);
+      if (graphRef.current) {
+        graphRef.current.resetZoom();
+      }
+    }
   }
 
   function handleDetailClose() {
@@ -292,10 +308,15 @@ function App() {
         {/* Graph visualization */}
         <div className="flex-1 relative overflow-hidden">
           <GraphView
+            ref={graphRef}
             data={graphData}
             onNodeClick={handleNodeClick}
+            onBackgroundClick={handleBackgroundClick}
             selectedEntity={selectedEntity}
           />
+
+          {/* Graph legend */}
+          {graphData.nodes.length > 0 && <GraphLegend />}
 
           {/* Empty state overlay */}
           {!loading && graphData.nodes.length === 0 && (
