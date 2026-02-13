@@ -5,6 +5,13 @@ export default defineConfig({
   plugins: [react()],
   // Prevent vite from obscuring Rust errors
   clearScreen: false,
+  // Preserve symlinks/junctions so Vite doesn't resolve through them.
+  // Without this, building from a Windows junction (e.g. workspace-proteus)
+  // produces invalid relative paths like "../../../../workspace/.../index.html"
+  // which Rollup rejects during asset emission.
+  resolve: {
+    preserveSymlinks: true,
+  },
   server: {
     port: 1420,
     strictPort: true,

@@ -18,23 +18,35 @@
       "type": "bug",
       "status": "complete",
       "from": "proteus",
-      "description": "Vite production build fails with 'The fileName or name properties of emitted chunks and assets must be strings that are neither absolute nor relative paths'. This occurs because the workspace-proteus directory is a Windows junction, and Vite resolves the real path through the junction creating a relative path traversal (../../../../workspace/nodalync-protocol/apps/desktop/index.html). The 603 modules compile fine — it's only the output file emission that breaks. May need vite.config adjustment to handle junction/symlink resolution.",
+      "description": "Vite production build fails when run from a Windows junction path. Added resolve.preserveSymlinks: true to vite.config.js to prevent Rollup from computing invalid relative paths through junctions.",
       "created_at": "2026-02-13T00:10:00Z",
-      "completed_at": "2026-02-13T03:08:00Z",
+      "completed_at": "2026-02-13T00:11:00Z",
       "pr": "https://github.com/gdgiangi/nodalync-protocol/pull/7",
-      "branch": "hephaestus/fix-vite-junction-build",
-      "resolution": "Added resolve.preserveSymlinks: true to vite.config.js. Build verified: 604 modules, clean output."
+      "branch": "hephaestus/fix-vite-junction-build"
     },
     {
-      "id": "heph-005",
-      "title": "Extract shared constants + Tauri event hooks",
+      "id": "heph-003",
+      "title": "Create Content dialog — L0 compose UX",
       "type": "sprint_priority",
       "status": "complete",
       "sprint": 1,
-      "description": "Extracted duplicated TYPE_COLORS/PREDICATE_LABELS/GRAPH_CONFIG to lib/constants.js. Created useTauriEvents hook for clean backend event subscriptions. Wired graph:updated and l2:complete events for auto-refresh. Removed ~125 lines of duplication across 3 components.",
-      "started_at": "2026-02-13T03:08:00Z",
-      "completed_at": "2026-02-13T03:12:00Z",
-      "branch": "hephaestus/shared-constants-and-events"
+      "description": "Full compose dialog for creating L0 content. Content type selector, visibility toggle, tag pills, auto-grow textarea, word/char count, Ctrl+N shortcut, Ctrl+Enter submit, success feedback with graph refresh. Premium glassmorphism modal matching app aesthetic.",
+      "started_at": "2026-02-13T00:38:00Z",
+      "completed_at": "2026-02-13T00:42:00Z",
+      "pr": "https://github.com/gdgiangi/nodalync-protocol/pull/9",
+      "branch": "hephaestus/create-content-dialog"
+    },
+    {
+      "id": "heph-004",
+      "title": "Command Palette (Ctrl+K)",
+      "type": "sprint_priority",
+      "status": "complete",
+      "sprint": 1,
+      "description": "Premium command palette overlay with Ctrl+K shortcut. Fuzzy search across entities and quick actions. Glassmorphism design, keyboard-first navigation, section headers, shortcut badges, loading indicators. Trigger button in top bar.",
+      "started_at": "2026-02-13T01:45:00Z",
+      "completed_at": "2026-02-13T01:50:00Z",
+      "pr": "https://github.com/gdgiangi/nodalync-protocol/pull/11",
+      "branch": "hephaestus/command-palette"
     }
   ]
 }

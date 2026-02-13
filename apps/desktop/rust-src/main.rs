@@ -2,18 +2,22 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use nodalync_graph::L2GraphDB;
-use std::sync::Mutex as StdMutex;
+use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex as TokioMutex;
 use tauri::Manager;
 use tracing::info;
 
 mod discovery_commands;
+mod event_loop;
+mod fee_commands;
 mod graph_commands;
 mod network_commands;
+mod peer_store;
 mod protocol;
 mod publish_commands;
 
 use discovery_commands::*;
+use fee_commands::*;
 use graph_commands::*;
 use network_commands::*;
 use publish_commands::*;
@@ -54,8 +58,14 @@ fn main() {
     let graph_db = L2GraphDB::new(&db_path).expect("Failed to open graph database");
     info!("Graph database opened successfully");
 
-    // Protocol state starts as None — user must init or unlock
-    let protocol_state: TokioMutex<Option<protocol::ProtocolState>> = TokioMutex::new(None);
+    // Protocol state starts as None — user must init or unlock.
+    // Wrapped in Arc so the network event loop can hold a clone.
+    let protocol_state: Arc<TokioMutex<Option<protocol::ProtocolState>>> =
+        Arc::new(TokioMutex::new(None));
+
+    // Event loop handle — populated when the network starts, cleared on stop
+    let event_loop_handle: TokioMutex<Option<event_loop::EventLoopHandle>> =
+        TokioMutex::new(None);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -63,6 +73,7 @@ fn main() {
             info!("Setting up Tauri application");
             app.manage(StdMutex::new(graph_db));
             app.manage(protocol_state);
+            app.manage(event_loop_handle);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -98,6 +109,16 @@ fn main() {
             get_network_info,
             start_network_configured,
             dial_peer,
+            // Fee commands (D2 — application-level fee)
+            get_fee_config,
+            set_fee_rate,
+            get_transaction_history,
+            get_fee_quote,
+            // Peer persistence commands
+            auto_start_network,
+            save_known_peers,
+            get_known_peers,
+            add_known_peer,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
