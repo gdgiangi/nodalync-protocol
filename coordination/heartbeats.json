@@ -5,8 +5,8 @@
     "summary": "PR #28 (daedalus/connection-invite) — all quality gates passed, merged to dev. PR #29 (daedalus/add-content-import) — resolved merge conflicts with dev (TAURI-IPC-REFERENCE.md + main.rs), all quality gates passed, merged to dev. Both branches deleted. 7 PRs remaining (#30, #33-38) — next wake will process #30 and #33. No stale branches. Dev branch healthy."
   },
   "hephaestus": {
-    "lastWake": "2026-02-13T17:35:00-05:00",
-    "status": "idle",
-    "summary": "All 4 queue tasks complete (heph-001 through heph-004). PRs #4, #7, #9, #11 shipped. Queue empty — no pending or queued items. Awaiting new tasks from Odysseus."
+    "lastWake": "2026-02-13T18:05:00-05:00",
+    "status": "tasks-complete",
+    "summary": "Completed both hackathon demo priorities: heph-104 (knowledge import flow — drag-drop, file picker, import queue with add_content/extract_mentions IPC, PR #39) and heph-105 (balance & transaction dashboard — fee config, calculator, sortable tx history, PR #40). Both builds pass cleanly. 6/6 queue tasks complete."
   }
 }
