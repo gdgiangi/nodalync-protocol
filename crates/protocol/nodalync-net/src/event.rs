@@ -6,6 +6,28 @@ use libp2p::Multiaddr;
 use nodalync_crypto::Hash;
 use nodalync_wire::Message;
 
+/// NAT status as detected by AutoNAT.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NatStatus {
+    /// NAT status unknown (probing in progress).
+    Unknown,
+    /// Node is publicly reachable (no NAT or UPnP succeeded).
+    Public,
+    /// Node is behind NAT and not directly reachable.
+    /// Relay or hole-punching needed for inbound connections.
+    Private,
+}
+
+impl std::fmt::Display for NatStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NatStatus::Unknown => write!(f, "unknown"),
+            NatStatus::Public => write!(f, "public"),
+            NatStatus::Private => write!(f, "private"),
+        }
+    }
+}
+
 /// Events emitted by the network layer.
 ///
 /// These events are returned by `Network::next_event()` and represent
@@ -86,6 +108,30 @@ pub enum NetworkEvent {
         /// The raw request data.
         data: Vec<u8>,
     },
+
+    /// NAT status changed (detected by AutoNAT).
+    NatStatusChanged {
+        /// The new NAT status.
+        status: NatStatus,
+    },
+
+    /// Successfully reserved a slot on a relay node.
+    RelayReservation {
+        /// The relay peer ID.
+        relay: libp2p::PeerId,
+    },
+
+    /// UPnP port mapping succeeded — node is externally reachable.
+    UpnpMapped {
+        /// The external address mapped by UPnP.
+        address: Multiaddr,
+    },
+
+    /// Direct connection established via DCUtR hole-punching.
+    HolePunched {
+        /// The peer we hole-punched to.
+        peer: libp2p::PeerId,
+    },
 }
 
 impl NetworkEvent {
@@ -97,6 +143,8 @@ impl NetworkEvent {
             NetworkEvent::PeerDisconnected { peer } => Some(peer),
             NetworkEvent::PeerDiscovered { peer, .. } => Some(peer),
             NetworkEvent::InboundRequest { peer, .. } => Some(peer),
+            NetworkEvent::RelayReservation { relay } => Some(relay),
+            NetworkEvent::HolePunched { peer } => Some(peer),
             _ => None,
         }
     }

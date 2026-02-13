@@ -114,13 +114,13 @@ pub mod transport;
 // Re-export main types at crate root
 
 // Configuration
-pub use config::NetworkConfig;
+pub use config::{NatTraversal, NetworkConfig};
 
 // Error types
 pub use error::{NetworkError, NetworkResult};
 
 // Event types
-pub use event::NetworkEvent;
+pub use event::{NatStatus, NetworkEvent};
 
 // Node
 pub use node::NetworkNode;

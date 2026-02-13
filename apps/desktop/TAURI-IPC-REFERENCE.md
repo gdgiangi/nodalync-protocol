@@ -321,6 +321,23 @@ Re-announce all published (Shared) content to the network.
 - **Returns:** `number` — count of items re-announced
 - **Use case:** After network start, or when peers may have lost track of our content. Called automatically by `auto_start_network`, but can be triggered manually.
 
+### `get_nat_status`
+Get the current NAT traversal status as detected by AutoNAT.
+- **Args:** none
+- **Returns:**
+  ```typescript
+  {
+    status: "unknown" | "public" | "private",
+    nat_traversal_enabled: boolean,
+    relay_reservations: number
+  }
+  ```
+- **`status`** meanings:
+  - `"public"` — node is directly reachable from the internet (no NAT or UPnP succeeded)
+  - `"private"` — node is behind NAT, using relay/hole-punching for inbound connections
+  - `"unknown"` — AutoNAT probing in progress (normal on startup, resolves within ~30s)
+- **Use case:** Show NAT status in the network view. If `"private"`, the node can still communicate but may have slower initial connections via relay before DCUtR hole-punching upgrades them to direct.
+
 ---
 
 ## Notes for Frontend
@@ -335,3 +352,4 @@ Re-announce all published (Shared) content to the network.
 8. **Price values:** Frontend sends NDL (e.g. 0.001), backend converts to tinybars internally
 9. **Hash format:** Always 64-char lowercase hex strings
 10. **Error handling:** All commands return `Result<T, String>` — errors are human-readable strings
+11. **NAT traversal:** Enabled by default (AutoNAT + UPnP + Relay + DCUtR). Use `get_nat_status` to display connectivity status. Most desktop users are behind NAT — the protocol automatically handles relay fallback and hole-punching.
