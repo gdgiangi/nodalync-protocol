@@ -9,6 +9,7 @@ import { useTauriEvents } from "./hooks/useTauriEvents";
 import CreateContentDialog from "./components/CreateContentDialog";
 import CommandPalette from "./components/CommandPalette";
 import GraphLegend from "./components/GraphLegend";
+import BalanceDashboard from "./components/BalanceDashboard";
 
 function App() {
   const [graphData, setGraphData] = useState({ nodes: [], links: [] });
@@ -20,6 +21,7 @@ function App() {
   const [viewMode, setViewMode] = useState("full"); // 'full' or 'subgraph'
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [showBalance, setShowBalance] = useState(false);
   const graphRef = useRef(null);
 
   // Load full graph on mount
@@ -164,6 +166,9 @@ function App() {
       case "action:settings":
         // TODO: Open settings panel
         break;
+      case "action:balance":
+        setShowBalance(true);
+        break;
     }
   }
 
@@ -243,6 +248,32 @@ function App() {
               <line x1="5" y1="12" x2="19" y2="12" />
             </svg>
             New
+          </button>
+
+          {/* Balance dashboard button */}
+          <button
+            onClick={() => setShowBalance(true)}
+            className="btn text-[10px] flex-shrink-0"
+            style={{
+              borderColor: "rgba(250, 204, 21, 0.2)",
+              background: "rgba(250, 204, 21, 0.05)",
+              color: "var(--yellow)",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "rgba(250, 204, 21, 0.1)";
+              e.currentTarget.style.borderColor = "rgba(250, 204, 21, 0.35)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "rgba(250, 204, 21, 0.05)";
+              e.currentTarget.style.borderColor = "rgba(250, 204, 21, 0.2)";
+            }}
+            title="Balance & Transactions"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="1" x2="12" y2="23" />
+              <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+            </svg>
+            Balance
           </button>
 
           {/* Command palette trigger */}
@@ -385,6 +416,12 @@ function App() {
         onEntitySelect={(entityId) => {
           handleEntitySelect(entityId);
         }}
+      />
+
+      {/* Balance & Transaction Dashboard */}
+      <BalanceDashboard
+        isOpen={showBalance}
+        onClose={() => setShowBalance(false)}
       />
     </div>
   );
