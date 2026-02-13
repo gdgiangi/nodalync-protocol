@@ -126,7 +126,10 @@ Unpublish content (sets Private, removes from DHT).
 ## Discovery Commands
 
 ### `search_network`
-Search local + cached + peer results, deduplicated.
+Search local + cached + peer results, deduplicated. Uses **multi-hop forwarding** —
+connected peers relay the search to *their* peers (1 hop by default), effectively
+tripling network reach. Results from non-connected peers include `publisher_addresses`
+for dial-on-demand during `preview_content` / `query_content`.
 - **Args:** `{ query: string, content_type?: "l0"|"l1"|"l2", limit?: number }`
 - **Returns:** `SearchResult[]` — `{ hash, title, content_type, price, owner, mention_count, primary_topics, summary, total_queries, source }`
 - **`source`** is one of: `"local"`, `"cached"`, `"peer"`
