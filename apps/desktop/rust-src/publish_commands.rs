@@ -599,3 +599,167 @@ pub async fn get_peers(
 
     Ok(peers)
 }
+
+// ─── Content Import Commands ─────────────────────────────────────────────────
+
+/// Result of importing content (L0 add without network publish).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportResult {
+    pub hash: String,
+    pub title: String,
+    pub size: u64,
+    pub content_type: String,
+    pub mentions: Option<usize>,
+}
+
+/// Import a file as L0 content without publishing to the network.
+///
+/// This is the "add knowledge" flow for the desktop app:
+/// 1. Read and store the file locally
+/// 2. Extract L1 mentions
+/// 3. Return hash for further operations (graph linking, later publish)
+///
+/// Unlike `publish_file`, this does NOT set visibility/price or announce
+/// to the network. The content stays local until explicitly published.
+#[tauri::command]
+pub async fn add_content(
+    file_path: String,
+    title: Option<String>,
+    description: Option<String>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
+) -> Result<ImportResult, String> {
+    let mut guard = protocol.lock().await;
+    let state = guard.as_mut().ok_or("Node not initialized - unlock first")?;
+
+    let path = PathBuf::from(&file_path);
+    if !path.exists() {
+        return Err(format!("File not found: {}", file_path));
+    }
+    if path.is_dir() {
+        return Err("Cannot import a directory. Please specify a file.".into());
+    }
+
+    // Read file
+    let content = std::fs::read(&path)
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+    if content.is_empty() {
+        return Err("Cannot import an empty file.".into());
+    }
+
+    // Resolve title from filename if not provided
+    let title = title.unwrap_or_else(|| {
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("Untitled")
+            .to_string()
+    });
+
+    // Detect MIME type from extension
+    let mime = path.extension()
+        .and_then(|e| e.to_str())
+        .map(|ext| match ext.to_lowercase().as_str() {
+            "txt" => "text/plain",
+            "md" => "text/markdown",
+            "html" | "htm" => "text/html",
+            "json" => "application/json",
+            "pdf" => "application/pdf",
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "csv" => "text/csv",
+            "xml" => "application/xml",
+            "yaml" | "yml" => "text/yaml",
+            _ => "application/octet-stream",
+        })
+        .unwrap_or("application/octet-stream");
+
+    // Check for duplicate
+    let computed_hash = content_hash(&content);
+    if let Ok(Some(_existing)) = state.ops.get_content_manifest(&computed_hash) {
+        return Err(format!(
+            "Content with this hash already exists ({}). Use the existing hash.",
+            computed_hash
+        ));
+    }
+
+    // Create metadata
+    let mut metadata = Metadata::new(&title, content.len() as u64);
+    metadata = metadata.with_mime_type(mime);
+    if let Some(desc) = description {
+        metadata = metadata.with_description(&desc);
+    }
+
+    // Store content locally (L0)
+    let hash = state.ops.create_content(&content, metadata)
+        .map_err(|e| format!("Failed to store content: {}", e))?;
+
+    // Extract L1 mentions (best-effort — don't fail the import if extraction fails)
+    let mentions = state.ops.extract_l1_summary(&hash)
+        .ok()
+        .map(|s| s.mention_count as usize);
+
+    info!("Imported L0 content: {} ({}) — {} bytes, {:?} mentions",
+        title, hash, content.len(), mentions);
+
+    Ok(ImportResult {
+        hash: hash.to_string(),
+        title,
+        size: content.len() as u64,
+        content_type: mime.to_string(),
+        mentions,
+    })
+}
+
+/// Import text directly as L0 content without publishing to the network.
+///
+/// Same as `add_content` but for text input (paste, typed notes).
+#[tauri::command]
+pub async fn add_text_content(
+    text: String,
+    title: String,
+    description: Option<String>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
+) -> Result<ImportResult, String> {
+    let mut guard = protocol.lock().await;
+    let state = guard.as_mut().ok_or("Node not initialized - unlock first")?;
+
+    let content = text.as_bytes();
+    if content.is_empty() {
+        return Err("Cannot import empty text.".into());
+    }
+
+    // Check for duplicate
+    let computed_hash = content_hash(content);
+    if let Ok(Some(_existing)) = state.ops.get_content_manifest(&computed_hash) {
+        return Err(format!(
+            "Content with this hash already exists ({}). Use the existing hash.",
+            computed_hash
+        ));
+    }
+
+    // Create metadata
+    let mut metadata = Metadata::new(&title, content.len() as u64);
+    metadata = metadata.with_mime_type("text/plain");
+    if let Some(desc) = description {
+        metadata = metadata.with_description(&desc);
+    }
+
+    // Store content locally (L0)
+    let hash = state.ops.create_content(content, metadata)
+        .map_err(|e| format!("Failed to store content: {}", e))?;
+
+    // Extract L1 mentions
+    let mentions = state.ops.extract_l1_summary(&hash)
+        .ok()
+        .map(|s| s.mention_count as usize);
+
+    info!("Imported L0 text: {} ({}) — {} bytes, {:?} mentions",
+        title, hash, content.len(), mentions);
+
+    Ok(ImportResult {
+        hash: hash.to_string(),
+        title,
+        size: content.len() as u64,
+        content_type: "text/plain".to_string(),
+        mentions,
+    })
+}

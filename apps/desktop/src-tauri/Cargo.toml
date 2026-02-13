@@ -7,6 +7,7 @@ edition = "2021"
 
 [lib]
 name = "nodalync_desktop"
+path = "../rust-src/main.rs"
 crate-type = ["cdylib", "rlib"]
 
 [build-dependencies]
