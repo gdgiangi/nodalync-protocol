@@ -1,63 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-
-const TYPE_COLORS = {
-  Person: "#e599f7",
-  Organization: "#74c0fc",
-  Concept: "#69db7c",
-  Decision: "#ffd43b",
-  Task: "#ff8787",
-  Asset: "#a9e34b",
-  Goal: "#f783ac",
-  Pattern: "#66d9e8",
-  Insight: "#b197fc",
-  Value: "#ffa94d",
-  Technology: "#20c997",
-  Event: "#87ceeb",
-  Location: "#dda0dd",
-  Product: "#98d8c8",
-  Work: "#fff176",
-  Metric: "#ff7043",
-  TimePoint: "#ab47bc",
-};
-
-function getColor(type) {
-  return TYPE_COLORS[type] || "#868e96";
-}
-
-// Predicate display names
-const PREDICATE_LABELS = {
-  worksFor: "works for",
-  workedFor: "worked for",
-  locatedIn: "located in",
-  basedIn: "based in",
-  createdBy: "created by",
-  authorOf: "author of",
-  partOf: "part of",
-  memberOf: "member of",
-  relatedTo: "related to",
-  mentions: "mentions",
-  discusses: "discusses",
-  before: "before",
-  after: "after",
-  during: "during",
-  causes: "causes",
-  enables: "enables",
-  prevents: "prevents",
-  isA: "is a",
-  instanceOf: "instance of",
-  hasProperty: "has property",
-  hasAttribute: "has attribute",
-  uses: "uses",
-  usedBy: "used by",
-  fundedBy: "funded by",
-  investedIn: "invested in",
-  acquiredBy: "acquired by",
-};
-
-function formatPredicate(pred) {
-  return PREDICATE_LABELS[pred] || pred;
-}
+import { getEntityColor, formatPredicate } from "../lib/constants";
 
 function formatTimestamp(ts) {
   if (!ts) return "—";
@@ -119,7 +62,7 @@ export default function EntityDetailPanel({
   if (!entity) return null;
 
   const label = entity.label || entity.canonical_label || entity.id;
-  const color = getColor(entity.entity_type);
+  const color = getEntityColor(entity.entity_type);
   const aliases = entity.aliases || [];
   const confidence = entity.confidence != null ? entity.confidence : null;
   const sourceCount = entity.source_count || 0;
@@ -638,7 +581,7 @@ function ConnectionsTab({
                       <span
                         className="inline-block w-[7px] h-[7px] rounded-full flex-shrink-0"
                         style={{
-                          backgroundColor: getColor(otherType),
+                          backgroundColor: getEntityColor(otherType),
                           opacity: 0.8,
                         }}
                       />
@@ -710,7 +653,7 @@ function ConnectionsTab({
                     <span
                       className="inline-block w-[7px] h-[7px] rounded-full flex-shrink-0"
                       style={{
-                        backgroundColor: getColor(e.entity_type),
+                        backgroundColor: getEntityColor(e.entity_type),
                         opacity: 0.8,
                       }}
                     />

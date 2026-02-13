@@ -1,37 +1,8 @@
 import { useRef, useEffect, useCallback } from "react";
 import * as d3 from "d3";
+import { getEntityColor, GRAPH_CONFIG } from "../lib/constants";
 
-// Entity type → color mapping (vibrant but not garish)
-const TYPE_COLORS = {
-  Person: "#e599f7",
-  Organization: "#74c0fc",
-  Concept: "#69db7c",
-  Decision: "#ffd43b",
-  Task: "#ff8787",
-  Asset: "#a9e34b",
-  Goal: "#f783ac",
-  Pattern: "#66d9e8",
-  Insight: "#b197fc",
-  Value: "#ffa94d",
-  Technology: "#20c997",
-  Event: "#87ceeb",
-  Location: "#dda0dd",
-  Product: "#98d8c8",
-  Work: "#fff176",
-  Metric: "#ff7043",
-  TimePoint: "#ab47bc",
-};
-
-const DEFAULT_COLOR = "#868e96";
-const BG_COLOR = "#06060a";
-const LINK_COLOR = "rgba(255, 255, 255, 0.06)";
-const LINK_HOVER_COLOR = "rgba(255, 255, 255, 0.12)";
-const LABEL_COLOR = "rgba(255, 255, 255, 0.45)";
-const LABEL_DIM_COLOR = "rgba(255, 255, 255, 0.2)";
-
-function getColor(type) {
-  return TYPE_COLORS[type] || DEFAULT_COLOR;
-}
+const { BG_COLOR, LINK_COLOR, LINK_HOVER_COLOR, LABEL_COLOR, LABEL_DIM_COLOR, LINK_LABEL_THRESHOLD } = GRAPH_CONFIG;
 
 function getRadius(node) {
   // Scale by source_count: min 4, max 20
@@ -148,7 +119,7 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
 
     // Link labels — only for small graphs
     let linkLabel;
-    if (links.length < 80) {
+    if (links.length < LINK_LABEL_THRESHOLD) {
       linkLabel = g
         .append("g")
         .selectAll("text")
@@ -171,7 +142,7 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
       .join("circle")
       .attr("r", (d) => getRadius(d) + 8)
       .attr("fill", (d) => {
-        const color = getColor(d.entity_type);
+        const color = getEntityColor(d.entity_type);
         return color + "15"; // ~8% opacity hex
       });
 
@@ -182,7 +153,7 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
       .data(nodes)
       .join("circle")
       .attr("r", (d) => getRadius(d))
-      .attr("fill", (d) => getColor(d.entity_type))
+      .attr("fill", (d) => getEntityColor(d.entity_type))
       .attr("fill-opacity", (d) => getOpacity(d))
       .attr("stroke", "transparent")
       .attr("stroke-width", 2)
@@ -190,7 +161,7 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
       .on("click", handleNodeClick)
       .on("mouseover", function (event, d) {
         d3.select(this)
-          .attr("stroke", getColor(d.entity_type))
+          .attr("stroke", getEntityColor(d.entity_type))
           .attr("stroke-opacity", 0.5)
           .attr("filter", "url(#node-glow)");
         // Highlight connected links

@@ -1,28 +1,5 @@
 import { useState } from "react";
-
-const TYPE_COLORS = {
-  Person: "#e599f7",
-  Organization: "#74c0fc",
-  Concept: "#69db7c",
-  Decision: "#ffd43b",
-  Task: "#ff8787",
-  Asset: "#a9e34b",
-  Goal: "#f783ac",
-  Pattern: "#66d9e8",
-  Insight: "#b197fc",
-  Value: "#ffa94d",
-  Technology: "#20c997",
-  Event: "#87ceeb",
-  Location: "#dda0dd",
-  Product: "#98d8c8",
-  Work: "#fff176",
-  Metric: "#ff7043",
-  TimePoint: "#ab47bc",
-};
-
-function getColor(type) {
-  return TYPE_COLORS[type] || "#868e96";
-}
+import { getEntityColor, APP_VERSION } from "../lib/constants";
 
 export default function Sidebar({
   stats,
@@ -55,7 +32,7 @@ export default function Sidebar({
           <div
             key={t.entity_type}
             className="w-2 h-2 rounded-full opacity-50"
-            style={{ backgroundColor: getColor(t.entity_type) }}
+            style={{ backgroundColor: getEntityColor(t.entity_type) }}
             title={`${t.entity_type}: ${t.count}`}
           />
         ))}
@@ -130,7 +107,7 @@ export default function Sidebar({
               <div className="flex items-center gap-2">
                 <span
                   className="inline-block w-[7px] h-[7px] rounded-full"
-                  style={{ backgroundColor: getColor(t.entity_type), opacity: 0.8 }}
+                  style={{ backgroundColor: getEntityColor(t.entity_type), opacity: 0.8 }}
                 />
                 <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
                   {t.entity_type}
@@ -174,7 +151,7 @@ export default function Sidebar({
               <div className="flex items-center gap-2">
                 <span
                   className="inline-block w-[7px] h-[7px] rounded-full flex-shrink-0"
-                  style={{ backgroundColor: getColor(r.entity_type), opacity: 0.8 }}
+                  style={{ backgroundColor: getEntityColor(r.entity_type), opacity: 0.8 }}
                 />
                 <span className="text-[12px] truncate" style={{ color: 'var(--text-primary)' }}>
                   {r.label}
@@ -204,7 +181,7 @@ export default function Sidebar({
           <div className="flex items-center gap-2">
             <span
               className="inline-block w-2 h-2 rounded-full flex-shrink-0"
-              style={{ backgroundColor: getColor(selectedEntity.entity_type), opacity: 0.9 }}
+              style={{ backgroundColor: getEntityColor(selectedEntity.entity_type), opacity: 0.9 }}
             />
             <span className="text-[12px] truncate" style={{ color: 'var(--text-primary)' }}>
               {selectedEntity.label}
@@ -231,7 +208,7 @@ export default function Sidebar({
         ) : (
           <div className="text-center">
             <span className="label-xs" style={{ color: 'var(--text-ghost)', letterSpacing: '2px' }}>
-              NODALYNC STUDIO v0.1.0
+              NODALYNC STUDIO v{APP_VERSION}
             </span>
           </div>
         )}
