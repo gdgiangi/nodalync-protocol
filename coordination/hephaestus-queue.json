@@ -16,10 +16,25 @@
       "id": "heph-002",
       "title": "Fix Vite build failure in workspace-proteus junction",
       "type": "bug",
-      "status": "pending",
+      "status": "complete",
       "from": "proteus",
       "description": "Vite production build fails with 'The fileName or name properties of emitted chunks and assets must be strings that are neither absolute nor relative paths'. This occurs because the workspace-proteus directory is a Windows junction, and Vite resolves the real path through the junction creating a relative path traversal (../../../../workspace/nodalync-protocol/apps/desktop/index.html). The 603 modules compile fine — it's only the output file emission that breaks. May need vite.config adjustment to handle junction/symlink resolution.",
-      "created_at": "2026-02-13T00:10:00Z"
+      "created_at": "2026-02-13T00:10:00Z",
+      "completed_at": "2026-02-13T03:08:00Z",
+      "pr": "https://github.com/gdgiangi/nodalync-protocol/pull/7",
+      "branch": "hephaestus/fix-vite-junction-build",
+      "resolution": "Added resolve.preserveSymlinks: true to vite.config.js. Build verified: 604 modules, clean output."
+    },
+    {
+      "id": "heph-005",
+      "title": "Extract shared constants + Tauri event hooks",
+      "type": "sprint_priority",
+      "status": "complete",
+      "sprint": 1,
+      "description": "Extracted duplicated TYPE_COLORS/PREDICATE_LABELS/GRAPH_CONFIG to lib/constants.js. Created useTauriEvents hook for clean backend event subscriptions. Wired graph:updated and l2:complete events for auto-refresh. Removed ~125 lines of duplication across 3 components.",
+      "started_at": "2026-02-13T03:08:00Z",
+      "completed_at": "2026-02-13T03:12:00Z",
+      "branch": "hephaestus/shared-constants-and-events"
     }
   ]
 }

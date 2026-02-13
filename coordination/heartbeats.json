@@ -1,10 +1,10 @@
 {
   "hephaestus": {
-    "last_seen": "2026-02-12T23:45:00Z",
+    "last_seen": "2026-02-13T03:12:00Z",
     "status": "idle",
     "current_task": null,
-    "last_completed": "heph-001",
-    "branch": "hephaestus/premium-ui-polish"
+    "last_completed": "heph-005",
+    "branch": "hephaestus/shared-constants-and-events"
   },
   "proteus": {
     "last_seen": "2026-02-13T00:10:00Z",
