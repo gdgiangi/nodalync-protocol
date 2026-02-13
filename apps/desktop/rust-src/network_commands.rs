@@ -46,7 +46,7 @@ pub struct DialResult {
 /// their listen addresses can be used as bootstrap nodes.
 #[tauri::command]
 pub async fn get_network_info(
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<NetworkInfo, String> {
     let guard = protocol.lock().await;
     let state = guard
@@ -102,7 +102,8 @@ pub async fn get_network_info(
 pub async fn start_network_configured(
     listen_port: Option<u16>,
     bootstrap_nodes: Option<Vec<String>>,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
+    event_loop: State<'_, Mutex<Option<crate::event_loop::EventLoopHandle>>>,
 ) -> Result<NetworkInfo, String> {
     // Check node is initialized
     {
@@ -170,6 +171,14 @@ pub async fn start_network_configured(
         info!("Announcement subscription note: {}", e);
     }
 
+    // Spawn the network event loop for inbound request handling
+    let protocol_arc = Arc::clone(&*protocol);
+    let handle = crate::event_loop::spawn_event_loop(node.clone(), protocol_arc);
+    {
+        let mut el_guard = event_loop.lock().await;
+        *el_guard = Some(handle);
+    }
+
     // Return network info
     let listen_addrs: Vec<String> = node
         .listen_addresses()
@@ -211,7 +220,7 @@ pub async fn start_network_configured(
 #[tauri::command]
 pub async fn dial_peer(
     address: String,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<DialResult, String> {
     let guard = protocol.lock().await;
     let state = guard

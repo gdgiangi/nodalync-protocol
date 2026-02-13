@@ -4,6 +4,7 @@
 //! React frontend via Tauri's invoke system.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use nodalync_crypto::{content_hash, Hash};
 use nodalync_net::{Network, NetworkConfig, NetworkNode};
@@ -99,7 +100,7 @@ pub async fn check_identity() -> Result<bool, String> {
 pub async fn init_node(
     password: String,
     name: Option<String>,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<IdentityInfo, String> {
     let data_dir = ProtocolState::default_data_dir();
     info!("Initializing new node at {}", data_dir.display());
@@ -127,7 +128,7 @@ pub async fn init_node(
 #[tauri::command]
 pub async fn unlock_node(
     password: String,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<IdentityInfo, String> {
     let data_dir = ProtocolState::default_data_dir();
     info!("Unlocking node at {}", data_dir.display());
@@ -155,7 +156,7 @@ pub async fn unlock_node(
 /// Hephaestus uses this for the dashboard and profile display.
 #[tauri::command]
 pub async fn get_identity(
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<IdentityInfo, String> {
     let guard = protocol.lock().await;
     let state = guard.as_ref().ok_or("Node not initialized — unlock first")?;
@@ -182,7 +183,7 @@ pub async fn publish_file(
     description: Option<String>,
     price: Option<f64>,
     visibility: Option<String>,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<PublishResult, String> {
     let mut guard = protocol.lock().await;
     let state = guard.as_mut().ok_or("Node not initialized — unlock first")?;
@@ -293,7 +294,7 @@ pub async fn publish_text(
     description: Option<String>,
     price: Option<f64>,
     visibility: Option<String>,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<PublishResult, String> {
     let mut guard = protocol.lock().await;
     let state = guard.as_mut().ok_or("Node not initialized — unlock first")?;
@@ -358,7 +359,7 @@ pub async fn publish_text(
 /// List all published content on this node.
 #[tauri::command]
 pub async fn list_content(
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<Vec<ContentItem>, String> {
     let guard = protocol.lock().await;
     let state = guard.as_ref().ok_or("Node not initialized — unlock first")?;
@@ -388,7 +389,7 @@ pub async fn list_content(
 #[tauri::command]
 pub async fn get_content_details(
     hash: String,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<ContentItem, String> {
     let guard = protocol.lock().await;
     let state = guard.as_ref().ok_or("Node not initialized — unlock first")?;
@@ -415,7 +416,7 @@ pub async fn get_content_details(
 #[tauri::command]
 pub async fn delete_content(
     hash: String,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<(), String> {
     let mut guard = protocol.lock().await;
     let state = guard.as_mut().ok_or("Node not initialized — unlock first")?;
@@ -442,7 +443,7 @@ pub async fn delete_content(
 /// Works whether or not the node is initialized — returns partial info.
 #[tauri::command]
 pub async fn get_node_status(
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<NodeStatus, String> {
     let data_dir = ProtocolState::default_data_dir();
     let guard = protocol.lock().await;
@@ -486,14 +487,13 @@ pub async fn get_node_status(
 /// Start the P2P network layer.
 ///
 /// Must drop the MutexGuard before the async call to satisfy Send bounds.
+/// Spawns a background event loop to process inbound peer requests.
 #[tauri::command]
 pub async fn start_network(
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
+    event_loop: State<'_, Mutex<Option<crate::event_loop::EventLoopHandle>>>,
 ) -> Result<(), String> {
-    // We can't hold a MutexGuard across an .await, so we check first,
-    // then do the async work outside the lock, then store the result.
-    // However, start_network needs &mut self. Since NetworkNode::new
-    // is the only async part, we extract that.
+    // Check that protocol is initialized
     {
         let guard = protocol.lock().await;
         if guard.is_none() {
@@ -506,27 +506,49 @@ pub async fn start_network(
     let node = NetworkNode::new(config)
         .await
         .map_err(|e| format!("Failed to create network node: {}", e))?;
-    let node = std::sync::Arc::new(node);
+    let node = Arc::new(node);
 
-    // Now lock again and store the result
-    let mut guard = protocol.lock().await;
-    let state = guard.as_mut().ok_or("Node not initialized — unlock first")?;
+    // Store the network in protocol state
+    {
+        let mut guard = protocol.lock().await;
+        let state = guard.as_mut().ok_or("Node not initialized — unlock first")?;
+        state.ops.set_network(node.clone());
+        state.network = Some(node.clone());
+    }
 
-    state.ops.set_network(node.clone());
-    state.network = Some(node);
-    info!("P2P network started");
+    // Spawn the network event loop
+    let protocol_arc = Arc::clone(&*protocol);
+    let handle = crate::event_loop::spawn_event_loop(node, protocol_arc);
 
+    // Store the event loop handle
+    let mut el_guard = event_loop.lock().await;
+    *el_guard = Some(handle);
+
+    info!("P2P network started with event loop");
     Ok(())
 }
 
 /// Stop the P2P network layer.
+///
+/// Shuts down the event loop and clears the network from protocol state.
 #[tauri::command]
 pub async fn stop_network(
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
+    event_loop: State<'_, Mutex<Option<crate::event_loop::EventLoopHandle>>>,
 ) -> Result<(), String> {
+    // Stop the event loop first
+    let handle = {
+        let mut el_guard = event_loop.lock().await;
+        el_guard.take()
+    };
+    if let Some(handle) = handle {
+        handle.shutdown().await;
+        info!("Network event loop stopped");
+    }
+
+    // Now stop the network in protocol state
     let mut guard = protocol.lock().await;
     let state = guard.as_mut().ok_or("Node not initialized — unlock first")?;
-
     state.stop_network();
     Ok(())
 }
@@ -534,7 +556,7 @@ pub async fn stop_network(
 /// Get list of connected peers.
 #[tauri::command]
 pub async fn get_peers(
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<Vec<String>, String> {
     let guard = protocol.lock().await;
     let state = guard.as_ref().ok_or("Node not initialized — unlock first")?;
