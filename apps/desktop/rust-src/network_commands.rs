@@ -4,17 +4,19 @@
 //! and network configuration to the React frontend.
 //! Includes peer persistence: known peers are saved to disk and
 //! used as bootstrap nodes on next startup.
+//! Includes seed node management for first-run network discovery.
 
 use nodalync_net::{Network, NetworkConfig, NetworkNode};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::health_monitor::{self, NetworkHealth, SharedHealth};
 use crate::peer_store::PeerStore;
 use crate::protocol::ProtocolState;
+use crate::seed_store::{SeedNode, SeedSource, SeedStore};
 
 // ─── Response Types ──────────────────────────────────────────────────────────
 
@@ -430,9 +432,13 @@ pub async fn auto_start_network(
         state.ops.private_key().map(|k| *k.as_bytes())
     };
 
-    // Load known peers
-    let store = PeerStore::load(&data_dir);
-    let bootstrap_entries = store.bootstrap_entries(20);
+    // Load seed nodes (builtin testnet seeds + user-configured)
+    let seed_store = SeedStore::load(&data_dir);
+    let seed_entries = seed_store.bootstrap_entries();
+
+    // Load known peers (previously connected peers)
+    let peer_store = PeerStore::load(&data_dir);
+    let peer_entries = peer_store.bootstrap_entries(20);
 
     // Build config with mDNS enabled, known peers as bootstrap, and stable identity
     let mut config = NetworkConfig::default().with_mdns(true);
@@ -450,22 +456,43 @@ pub async fn auto_start_network(
         config.listen_addresses = vec![addr];
     }
 
-    // Add known peers as bootstrap nodes
-    let mut bootstrap_count = 0;
-    for (peer_id_str, addr_str) in &bootstrap_entries {
+    // Priority 1: Add seed nodes as bootstrap (highest priority — enable first-run discovery)
+    let mut seed_count = 0;
+    for (peer_id_str, addr_str) in &seed_entries {
         match (peer_id_str.parse(), addr_str.parse()) {
             (Ok(pid), Ok(addr)) => {
                 config.bootstrap_nodes.push((pid, addr));
-                bootstrap_count += 1;
+                seed_count += 1;
+            }
+            (Err(e), _) => warn!("Skipping seed (bad peer ID): {}", e),
+            (_, Err(e)) => warn!("Skipping seed (bad address): {}", e),
+        }
+    }
+
+    // Priority 2: Add known peers as bootstrap (avoid duplicates with seeds)
+    let mut peer_count_bootstrap = 0;
+    let seed_peer_ids: std::collections::HashSet<&str> =
+        seed_entries.iter().map(|(pid, _)| *pid).collect();
+    for (peer_id_str, addr_str) in &peer_entries {
+        if seed_peer_ids.contains(peer_id_str) {
+            debug!("Skipping known peer {} (already in seeds)", peer_id_str);
+            continue;
+        }
+        match (peer_id_str.parse(), addr_str.parse()) {
+            (Ok(pid), Ok(addr)) => {
+                config.bootstrap_nodes.push((pid, addr));
+                peer_count_bootstrap += 1;
             }
             (Err(e), _) => warn!("Skipping saved peer (bad peer ID): {}", e),
             (_, Err(e)) => warn!("Skipping saved peer (bad address): {}", e),
         }
     }
 
+    let bootstrap_count = seed_count + peer_count_bootstrap;
+
     info!(
-        "Auto-starting network: port={:?}, mDNS=true, bootstrap_peers={}",
-        listen_port, bootstrap_count
+        "Auto-starting network: port={:?}, mDNS=true, seeds={}, known_peers={}, total_bootstrap={}",
+        listen_port, seed_count, peer_count_bootstrap, bootstrap_count
     );
 
     // Create network node
@@ -666,4 +693,205 @@ pub async fn get_network_health(
 ) -> Result<NetworkHealth, String> {
     let health = shared_health.lock().await;
     Ok(health.clone())
+}
+
+// ─── Seed Node Commands ──────────────────────────────────────────────────────
+
+/// Seed node info returned to the frontend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SeedNodeInfo {
+    pub peer_id: String,
+    pub address: String,
+    pub label: Option<String>,
+    pub source: String,
+    pub enabled: bool,
+    pub added_at: String,
+}
+
+impl From<&SeedNode> for SeedNodeInfo {
+    fn from(seed: &SeedNode) -> Self {
+        Self {
+            peer_id: seed.peer_id.clone(),
+            address: seed.address.clone(),
+            label: seed.label.clone(),
+            source: match seed.source {
+                SeedSource::Builtin => "builtin".to_string(),
+                SeedSource::User => "user".to_string(),
+                SeedSource::Dns => "dns".to_string(),
+                SeedSource::PeerExchange => "peer_exchange".to_string(),
+            },
+            enabled: seed.enabled,
+            added_at: seed.added_at.to_rfc3339(),
+        }
+    }
+}
+
+/// Get all configured seed nodes.
+///
+/// Returns builtin testnet seeds + any user-added seeds.
+/// Use this to display seed configuration in the network settings UI.
+#[tauri::command]
+pub async fn get_seed_nodes(
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
+) -> Result<Vec<SeedNodeInfo>, String> {
+    let guard = protocol.lock().await;
+    let state = guard
+        .as_ref()
+        .ok_or("Node not initialized — unlock first")?;
+
+    let store = SeedStore::load(&state.data_dir);
+    Ok(store.seeds.iter().map(SeedNodeInfo::from).collect())
+}
+
+/// Add a seed node for network discovery.
+///
+/// The seed will be used as a bootstrap node on the next network start.
+/// If the network is currently running, the seed is saved but not used
+/// until the next restart.
+///
+/// Peer ID: libp2p PeerId string (e.g. "12D3KooW...")
+/// Address: Multiaddr (e.g. "/ip4/x.x.x.x/tcp/9000" or "/dns4/seed.nodalync.io/tcp/9000")
+#[tauri::command]
+pub async fn add_seed_node(
+    peer_id: String,
+    address: String,
+    label: Option<String>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
+) -> Result<Vec<SeedNodeInfo>, String> {
+    let guard = protocol.lock().await;
+    let state = guard
+        .as_ref()
+        .ok_or("Node not initialized — unlock first")?;
+
+    let mut store = SeedStore::load(&state.data_dir);
+    store.add_seed(peer_id, address, label)?;
+    store
+        .save(&state.data_dir)
+        .map_err(|e| format!("Failed to save seeds: {}", e))?;
+
+    Ok(store.seeds.iter().map(SeedNodeInfo::from).collect())
+}
+
+/// Remove a seed node. Builtin seeds are disabled instead of removed.
+#[tauri::command]
+pub async fn remove_seed_node(
+    peer_id: String,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
+) -> Result<Vec<SeedNodeInfo>, String> {
+    let guard = protocol.lock().await;
+    let state = guard
+        .as_ref()
+        .ok_or("Node not initialized — unlock first")?;
+
+    let mut store = SeedStore::load(&state.data_dir);
+    store.remove_seed(&peer_id)?;
+    store
+        .save(&state.data_dir)
+        .map_err(|e| format!("Failed to save seeds: {}", e))?;
+
+    Ok(store.seeds.iter().map(SeedNodeInfo::from).collect())
+}
+
+/// Network diagnostics — analyze why the node can't find peers.
+///
+/// Checks seed nodes, known peers, NAT status, and network health
+/// to produce actionable diagnostic info.
+#[tauri::command]
+pub async fn diagnose_network(
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
+    shared_health: State<'_, SharedHealth>,
+) -> Result<NetworkDiagnostics, String> {
+    let guard = protocol.lock().await;
+    let state = guard
+        .as_ref()
+        .ok_or("Node not initialized — unlock first")?;
+
+    let seed_store = SeedStore::load(&state.data_dir);
+    let peer_store = PeerStore::load(&state.data_dir);
+    let health = shared_health.lock().await;
+
+    let mut issues: Vec<String> = Vec::new();
+    let mut suggestions: Vec<String> = Vec::new();
+
+    // Check seeds
+    let enabled_seeds = seed_store.enabled_count();
+    if enabled_seeds == 0 {
+        issues.push("No seed nodes configured. Cannot discover the network.".to_string());
+        suggestions.push(
+            "Add a seed node: invoke('add_seed_node', { peer_id: '...', address: '...' })"
+                .to_string(),
+        );
+    }
+
+    // Check known peers
+    let known_peer_count = peer_store.peers.len();
+    if known_peer_count == 0 && enabled_seeds == 0 {
+        issues.push("No known peers and no seeds. Node is isolated.".to_string());
+        suggestions.push(
+            "If another node is on your LAN, mDNS will find it. Otherwise, add a seed node."
+                .to_string(),
+        );
+    }
+
+    // Check network state
+    let network_active = state.network.is_some();
+    if !network_active {
+        issues.push("Network is not running.".to_string());
+        suggestions.push("Start the network: invoke('auto_start_network')".to_string());
+    }
+
+    // Check NAT
+    let nat_status = if let Some(network) = &state.network {
+        network.nat_status().to_string()
+    } else {
+        "offline".to_string()
+    };
+
+    if nat_status == "private" {
+        suggestions.push(
+            "Node is behind NAT. Relay and hole-punching are active but connections may be slower."
+                .to_string(),
+        );
+    }
+
+    // Check health
+    let connected = health.connected_peers;
+    if network_active && connected == 0 {
+        issues.push("Network is running but no peers connected.".to_string());
+        if enabled_seeds > 0 {
+            suggestions.push("Seeds are configured but unreachable. Check your internet connection or verify seed addresses.".to_string());
+        }
+    }
+
+    let overall = if issues.is_empty() {
+        "healthy".to_string()
+    } else if connected > 0 {
+        "degraded".to_string()
+    } else {
+        "disconnected".to_string()
+    };
+
+    Ok(NetworkDiagnostics {
+        overall_status: overall,
+        network_active,
+        connected_peers: connected,
+        known_peers: known_peer_count,
+        seed_nodes: enabled_seeds,
+        nat_status,
+        issues,
+        suggestions,
+    })
+}
+
+/// Network diagnostics result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkDiagnostics {
+    pub overall_status: String,
+    pub network_active: bool,
+    pub connected_peers: usize,
+    pub known_peers: usize,
+    pub seed_nodes: usize,
+    pub nat_status: String,
+    pub issues: Vec<String>,
+    pub suggestions: Vec<String>,
 }
