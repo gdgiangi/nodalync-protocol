@@ -10,7 +10,50 @@ use nodalync_crypto::{peer_id_from_public_key, PeerId, PublicKey};
 use nodalync_net::{NetworkConfig, NetworkNode};
 use nodalync_ops::DefaultNodeOperations;
 use nodalync_store::NodeState;
+use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
+
+/// User profile stored alongside the identity.
+///
+/// Persisted to `{data_dir}/identity/profile.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeProfile {
+    /// Display name chosen during onboarding.
+    pub name: String,
+    /// ISO-8601 creation timestamp.
+    pub created_at: String,
+}
+
+impl NodeProfile {
+    /// Create a new profile with the current timestamp.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    /// Load profile from disk. Returns None if file doesn't exist.
+    pub fn load(data_dir: &PathBuf) -> Option<Self> {
+        let path = data_dir.join("identity").join("profile.json");
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+    }
+
+    /// Save profile to disk.
+    pub fn save(&self, data_dir: &PathBuf) -> Result<(), ProtocolError> {
+        let dir = data_dir.join("identity");
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| ProtocolError::Store(format!("Failed to create identity dir: {}", e)))?;
+        let path = dir.join("profile.json");
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| ProtocolError::Store(format!("Failed to serialize profile: {}", e)))?;
+        std::fs::write(&path, json)
+            .map_err(|e| ProtocolError::Store(format!("Failed to write profile: {}", e)))?;
+        Ok(())
+    }
+}
 
 /// Protocol state shared across Tauri commands.
 ///
@@ -26,6 +69,8 @@ pub struct ProtocolState {
     pub ops: DefaultNodeOperations,
     /// Network node (None if offline / not yet started).
     pub network: Option<Arc<NetworkNode>>,
+    /// User profile (name, creation date).
+    pub profile: Option<NodeProfile>,
 }
 
 impl ProtocolState {
@@ -63,12 +108,16 @@ impl ProtocolState {
         let mut ops = DefaultNodeOperations::with_defaults(state, peer_id);
         ops.set_private_key(private_key);
 
+        // Load profile if it exists
+        let profile = NodeProfile::load(data_dir);
+
         Ok(Self {
             data_dir: data_dir.clone(),
             peer_id,
             public_key,
             ops,
             network: None,
+            profile,
         })
     }
 
@@ -77,6 +126,15 @@ impl ProtocolState {
     /// Generates an Ed25519 keypair, encrypts it with the password,
     /// and stores it. Then opens the full protocol state.
     pub fn init(data_dir: &PathBuf, password: &str) -> Result<Self, ProtocolError> {
+        Self::init_with_name(data_dir, password, None)
+    }
+
+    /// Initialize a brand-new node identity with an optional display name.
+    pub fn init_with_name(
+        data_dir: &PathBuf,
+        password: &str,
+        name: Option<String>,
+    ) -> Result<Self, ProtocolError> {
         std::fs::create_dir_all(data_dir)
             .map_err(|e| ProtocolError::Store(format!("Failed to create data dir: {}", e)))?;
 
@@ -94,7 +152,13 @@ impl ProtocolState {
             .generate(password)
             .map_err(|e| ProtocolError::Identity(format!("Failed to generate identity: {}", e)))?;
 
-        // Now open normally
+        // Save profile with name
+        let display_name = name.unwrap_or_else(|| "Anonymous".to_string());
+        let profile = NodeProfile::new(&display_name);
+        profile.save(data_dir)?;
+        info!("Created profile for '{}'", display_name);
+
+        // Now open normally (this will load the profile we just saved)
         Self::open(data_dir, password)
     }
 
