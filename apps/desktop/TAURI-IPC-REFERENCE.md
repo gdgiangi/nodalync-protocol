@@ -32,6 +32,33 @@ Get focused context for an entity (compact, agent-friendly).
 - **Args:** `{ entity_id: number, max_hops?: number }`
 - **Returns:** `string` (formatted context text)
 
+### `extract_mentions`
+Run L1 extraction on content and bridge results to L2 graph.
+- **Args:** `{ content_hash: string }` (64-char hex)
+- **Returns:** `ExtractionResult`
+  ```typescript
+  {
+    content_hash: string,
+    content_id: string,       // Stable ID in graph DB
+    mention_count: number,    // Total mentions found
+    entities: ExtractedEntity[],
+    topics: string[],
+    summary: string
+  }
+  ```
+- **`ExtractedEntity`:**
+  ```typescript
+  {
+    entity_id: string,        // ID in L2 graph DB
+    label: string,
+    entity_type: string,      // "concept" | "technology" | "organization"
+    existing: boolean,        // true if matched existing graph entity
+    confidence: number,       // 1.0 for exact match, 0.6 for new stubs
+    source_mention?: string   // The mention text that produced this entity
+  }
+  ```
+- **Flow:** After `publish_file` or `publish_text`, call this with the returned hash to populate the graph.
+
 ---
 
 ## Identity Commands
@@ -43,13 +70,22 @@ Check if a node identity exists (no password needed).
 
 ### `init_node`
 Create a new node identity (Ed25519 keypair, encrypted).
-- **Args:** `{ password: string }`
-- **Returns:** `{ peer_id: string, data_dir: string }`
+- **Args:** `{ password: string, name?: string }`
+- **Returns:** `{ name?: string, peer_id: string, public_key: string, data_dir: string, created_at?: string }`
+- **`name`** is stored in a profile — defaults to "Anonymous" if omitted.
+- **`public_key`** is hex-encoded Ed25519 public key.
+- **`created_at`** is ISO-8601 timestamp.
 
 ### `unlock_node`
 Decrypt an existing node identity.
 - **Args:** `{ password: string }`
-- **Returns:** `{ peer_id: string, data_dir: string }`
+- **Returns:** `{ name?: string, peer_id: string, public_key: string, data_dir: string, created_at?: string }`
+
+### `get_identity`
+Get current identity info (node must be unlocked, no password needed).
+- **Args:** none
+- **Returns:** `{ name?: string, peer_id: string, public_key: string, data_dir: string, created_at?: string }`
+- Use for dashboard/profile display after unlock.
 
 ---
 
@@ -156,8 +192,9 @@ Manually connect to a peer by multiaddress.
 
 ## Notes for Frontend
 
-1. **Startup flow:** `check_identity` → if false: show onboarding → `init_node`; if true: show password → `unlock_node`
-2. **After unlock:** `start_network_configured` (or `start_network` for quick start)
-3. **Price values:** Frontend sends NDL (e.g. 0.001), backend converts to tinybars internally
+1. **Startup flow:** `check_identity` → if false: show onboarding → `init_node(password, name)`; if true: show password → `unlock_node`
+2. **After unlock:** `get_identity` for profile display, then `start_network_configured` (or `start_network` for quick start)
+3. **Publish flow:** `publish_file`/`publish_text` → `extract_mentions(hash)` to populate L2 graph
+4. **Price values:** Frontend sends NDL (e.g. 0.001), backend converts to tinybars internally
 4. **Hash format:** Always 64-char lowercase hex strings
 5. **Error handling:** All commands return `Result<T, String>` — errors are human-readable strings
