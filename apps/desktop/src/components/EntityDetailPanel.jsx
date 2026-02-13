@@ -682,10 +682,37 @@ function ConnectionsTab({
 // ─── Sources Tab ─────────────────────────────────────────────────────────────
 
 function SourcesTab({ entity, sourceCount }) {
-  // Sources would be loaded from entity_sources once the backend supports it.
-  // For now, show what we have from the entity data.
+  const [contentLinks, setContentLinks] = useState([]);
+  const [linksLoading, setLinksLoading] = useState(false);
+  const [linksError, setLinksError] = useState(null);
 
-  if (sourceCount === 0) {
+  useEffect(() => {
+    if (!entity?.id) return;
+    loadContentLinks(entity.id);
+  }, [entity?.id]);
+
+  async function loadContentLinks(entityId) {
+    try {
+      setLinksLoading(true);
+      setLinksError(null);
+      const links = await invoke("get_entity_content_links", {
+        entityId: String(entityId),
+      });
+      setContentLinks(links || []);
+    } catch (err) {
+      console.error("Failed to load content links:", err);
+      setLinksError(String(err));
+      setContentLinks([]);
+    } finally {
+      setLinksLoading(false);
+    }
+  }
+
+  if (linksLoading) {
+    return <LoadingSkeleton />;
+  }
+
+  if (sourceCount === 0 && contentLinks.length === 0) {
     return (
       <div className="empty-state animate-fade-in">
         <p>No sources linked yet</p>
@@ -695,73 +722,130 @@ function SourcesTab({ entity, sourceCount }) {
 
   return (
     <div className="animate-fade-in">
-      <SectionLabel>Source References</SectionLabel>
+      {/* L0 Content Links from IPC */}
+      {contentLinks.length > 0 && (
+        <>
+          <SectionLabel>Linked Content (L0)</SectionLabel>
+          <div className="space-y-1.5">
+            {contentLinks.map((cl, i) => (
+              <div
+                key={cl.content_id || cl.content_hash || i}
+                className="card animate-slide-up"
+                style={{
+                  animationDelay: `${i * 50}ms`,
+                  animationFillMode: "both",
+                }}
+              >
+                <div className="flex items-center gap-3">
+                  <div
+                    className="w-8 h-8 rounded flex items-center justify-center flex-shrink-0"
+                    style={{
+                      background: "var(--accent-dim)",
+                      border: "1px solid rgba(92, 124, 250, 0.2)",
+                    }}
+                  >
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      style={{ color: "var(--accent)" }}
+                    >
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <polyline points="14 2 14 8 20 8" />
+                      <line x1="16" y1="13" x2="8" y2="13" />
+                      <line x1="16" y1="17" x2="8" y2="17" />
+                    </svg>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p
+                      className="text-[11px] truncate"
+                      style={{ color: "var(--text-secondary)" }}
+                    >
+                      {cl.content_hash
+                        ? cl.content_hash.substring(0, 16) + "…"
+                        : cl.content_id}
+                    </p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="pill pill-neutral" style={{ fontSize: 7 }}>
+                        {cl.content_type || "L0"}
+                      </span>
+                      {cl.linked_at && (
+                        <span
+                          className="text-[9px]"
+                          style={{ color: "var(--text-ghost)" }}
+                        >
+                          {formatTimestamp(cl.linked_at)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
 
-      <div
-        className="card"
-        style={{
-          background: "var(--bg-surface)",
-        }}
-      >
-        <div className="flex items-center gap-3">
-          <div
-            className="w-8 h-8 rounded flex items-center justify-center flex-shrink-0"
-            style={{
-              background: "var(--accent-dim)",
-              border: "1px solid rgba(92, 124, 250, 0.2)",
-            }}
-          >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              style={{ color: "var(--accent)" }}
-            >
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-              <polyline points="14 2 14 8 20 8" />
-              <line x1="16" y1="13" x2="8" y2="13" />
-              <line x1="16" y1="17" x2="8" y2="17" />
-            </svg>
+      {/* Fallback: summary count when IPC returned nothing but entity has sources */}
+      {contentLinks.length === 0 && sourceCount > 0 && (
+        <>
+          <SectionLabel>Source References</SectionLabel>
+          <div className="card" style={{ background: "var(--bg-surface)" }}>
+            <div className="flex items-center gap-3">
+              <div
+                className="w-8 h-8 rounded flex items-center justify-center flex-shrink-0"
+                style={{
+                  background: "var(--accent-dim)",
+                  border: "1px solid rgba(92, 124, 250, 0.2)",
+                }}
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={{ color: "var(--accent)" }}
+                >
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="16" y1="13" x2="8" y2="13" />
+                  <line x1="16" y1="17" x2="8" y2="17" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-[12px]" style={{ color: "var(--text-secondary)" }}>
+                  {sourceCount} L0 document{sourceCount !== 1 ? "s" : ""} reference this entity
+                </p>
+              </div>
+            </div>
           </div>
-          <div>
-            <p
-              className="text-[12px]"
-              style={{ color: "var(--text-secondary)" }}
-            >
-              {sourceCount} L0 document{sourceCount !== 1 ? "s" : ""} reference
-              this entity
-            </p>
-            <p
-              className="text-[10px] mt-0.5"
-              style={{ color: "var(--text-ghost)" }}
-            >
-              Content linking available when L0 management is enabled
-            </p>
-          </div>
+        </>
+      )}
+
+      {/* Error display */}
+      {linksError && (
+        <div className="mt-3 p-2 rounded" style={{ background: "var(--red-dim)", border: "1px solid rgba(248, 113, 113, 0.2)" }}>
+          <p className="text-[10px]" style={{ color: "var(--red)" }}>
+            Failed to load content links: {linksError}
+          </p>
         </div>
-      </div>
+      )}
 
       {/* Metadata about extraction */}
       <SectionLabel>Extraction Info</SectionLabel>
       <div className="space-y-2">
-        <MetadataRow
-          label="Entity ID"
-          value={entity.id}
-          mono
-        />
-        <MetadataRow
-          label="First extracted"
-          value={formatTimestamp(entity.first_seen)}
-        />
-        <MetadataRow
-          label="Last updated"
-          value={formatTimestamp(entity.last_updated)}
-        />
+        <MetadataRow label="Entity ID" value={entity.id} mono />
+        <MetadataRow label="First extracted" value={formatTimestamp(entity.first_seen)} />
+        <MetadataRow label="Last updated" value={formatTimestamp(entity.last_updated)} />
         <MetadataRow
           label="Confidence"
           value={
