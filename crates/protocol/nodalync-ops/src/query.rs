@@ -1238,7 +1238,11 @@ mod tests {
 
         let score = relevance_score(&result, query, &terms);
         // Should get exact match bonus (100) + local bonus (20) + term matches (20)
-        assert!(score >= 100.0, "Exact match should score >= 100, got {}", score);
+        assert!(
+            score >= 100.0,
+            "Exact match should score >= 100, got {}",
+            score
+        );
     }
 
     #[test]
