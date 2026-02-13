@@ -69,6 +69,13 @@ pub struct NetworkConfig {
     ///
     /// Default: 30 seconds.
     pub idle_connection_timeout: Duration,
+
+    /// Ed25519 secret key bytes (32 bytes) for stable identity.
+    ///
+    /// When provided, the network node derives its libp2p keypair from this
+    /// seed, giving a stable PeerId across restarts. When `None`, a random
+    /// keypair is generated (useful for tests).
+    pub identity_secret: Option<[u8; 32]>,
 }
 
 impl Default for NetworkConfig {
@@ -86,6 +93,7 @@ impl Default for NetworkConfig {
             dht_query_timeout: Duration::from_secs(60),
             gossipsub_topic: "/nodalync/announce/1.0.0".to_string(),
             idle_connection_timeout: Duration::from_secs(30),
+            identity_secret: None,
         }
     }
 }
@@ -130,6 +138,27 @@ impl NetworkConfig {
     pub fn with_mdns(mut self, enable: bool) -> Self {
         self.enable_mdns = enable;
         self
+    }
+
+    /// Set the Ed25519 identity secret for stable peer identity.
+    ///
+    /// When set, the node derives its libp2p keypair from this 32-byte seed,
+    /// giving a deterministic PeerId that persists across restarts.
+    pub fn with_identity_secret(mut self, secret: [u8; 32]) -> Self {
+        self.identity_secret = Some(secret);
+        self
+    }
+
+    /// Preview the libp2p PeerId that would result from the configured identity.
+    ///
+    /// Returns `None` if no identity secret is set.
+    /// Useful for displaying the stable PeerId before starting the network.
+    pub fn preview_peer_id(&self) -> Option<libp2p::PeerId> {
+        self.identity_secret.as_ref().and_then(|secret| {
+            libp2p::identity::Keypair::ed25519_from_bytes(secret.clone())
+                .ok()
+                .map(|kp| kp.public().to_peer_id())
+        })
     }
 }
 
@@ -230,5 +259,43 @@ mod tests {
         // Other defaults should remain unchanged
         assert_eq!(config.request_timeout, Duration::from_millis(30_000));
         assert_eq!(config.max_retries, 3);
+    }
+
+    #[test]
+    fn test_identity_secret_default_none() {
+        let config = NetworkConfig::default();
+        assert!(config.identity_secret.is_none());
+        assert!(config.preview_peer_id().is_none());
+    }
+
+    #[test]
+    fn test_identity_secret_deterministic_peer_id() {
+        let secret = [42u8; 32];
+
+        let config1 = NetworkConfig::new().with_identity_secret(secret);
+        let config2 = NetworkConfig::new().with_identity_secret(secret);
+
+        let pid1 = config1.preview_peer_id().expect("should have PeerId");
+        let pid2 = config2.preview_peer_id().expect("should have PeerId");
+
+        // Same secret → same PeerId
+        assert_eq!(pid1, pid2);
+    }
+
+    #[test]
+    fn test_different_secrets_different_peer_ids() {
+        let secret_a = [1u8; 32];
+        let secret_b = [2u8; 32];
+
+        let pid_a = NetworkConfig::new()
+            .with_identity_secret(secret_a)
+            .preview_peer_id()
+            .unwrap();
+        let pid_b = NetworkConfig::new()
+            .with_identity_secret(secret_b)
+            .preview_peer_id()
+            .unwrap();
+
+        assert_ne!(pid_a, pid_b);
     }
 }

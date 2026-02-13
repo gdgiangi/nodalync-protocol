@@ -176,12 +176,29 @@ impl NetworkNode {
     ///
     /// This starts the swarm task in the background.
     pub async fn new(config: NetworkConfig) -> NetworkResult<Self> {
-        // Generate identity
-        let (private_key, public_key) = generate_identity();
-        let nodalync_peer_id = peer_id_from_public_key(&public_key);
+        // Derive identity: use provided secret for stable PeerId, or generate random
+        let (private_key, public_key, keypair) = if let Some(secret) = &config.identity_secret {
+            // Derive libp2p keypair from the Nodalync identity secret
+            let kp = libp2p::identity::Keypair::ed25519_from_bytes(secret.clone())
+                .map_err(|e| NetworkError::Transport(format!(
+                    "Failed to derive libp2p keypair from identity secret: {}", e
+                )))?;
 
-        // Create libp2p keypair from our private key
-        let keypair = libp2p::identity::Keypair::generate_ed25519();
+            // Also derive the Nodalync keys from the same seed
+            let signing_key = ed25519_dalek::SigningKey::from_bytes(secret);
+            let verifying_key = signing_key.verifying_key();
+            let priv_key = nodalync_crypto::PrivateKey::from_bytes(*secret);
+            let pub_key = nodalync_crypto::PublicKey(verifying_key.to_bytes());
+
+            (priv_key, pub_key, kp)
+        } else {
+            // Generate random identity (tests, ephemeral nodes)
+            let (priv_key, pub_key) = generate_identity();
+            let kp = libp2p::identity::Keypair::generate_ed25519();
+            (priv_key, pub_key, kp)
+        };
+
+        let nodalync_peer_id = peer_id_from_public_key(&public_key);
         let local_peer_id = keypair.public().to_peer_id();
 
         info!("Creating network node with peer ID: {}", local_peer_id);

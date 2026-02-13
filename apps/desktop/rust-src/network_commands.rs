@@ -108,19 +108,25 @@ pub async fn start_network_configured(
     protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
     event_loop: State<'_, Mutex<Option<crate::event_loop::EventLoopHandle>>>,
 ) -> Result<NetworkInfo, String> {
-    // Check node is initialized
-    {
+    // Check node is initialized and get identity secret
+    let identity_secret = {
         let guard = protocol.lock().await;
         if guard.is_none() {
             return Err("Node not initialized — unlock first".into());
         }
-        if guard.as_ref().unwrap().network.is_some() {
+        let state = guard.as_ref().unwrap();
+        if state.network.is_some() {
             return Err("Network already running. Stop it first.".into());
         }
-    }
+        state.ops.private_key().map(|k| *k.as_bytes())
+    };
 
-    // Build config
+    // Build config with stable identity
     let mut config = NetworkConfig::default();
+
+    if let Some(secret) = identity_secret {
+        config = config.with_identity_secret(secret);
+    }
 
     if let Some(port) = listen_port {
         let addr: nodalync_net::Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", port)
@@ -414,12 +420,25 @@ pub async fn auto_start_network(
         state.data_dir.clone()
     };
 
+    // Get identity secret for stable PeerId
+    let identity_secret = {
+        let guard = protocol.lock().await;
+        let state = guard.as_ref().ok_or("Node not initialized — unlock first")?;
+        state.ops.private_key().map(|k| *k.as_bytes())
+    };
+
     // Load known peers
     let store = PeerStore::load(&data_dir);
     let bootstrap_entries = store.bootstrap_entries(20);
 
-    // Build config with mDNS enabled and known peers as bootstrap
+    // Build config with mDNS enabled, known peers as bootstrap, and stable identity
     let mut config = NetworkConfig::default().with_mdns(true);
+
+    // Use the node's identity for a stable PeerId across restarts
+    if let Some(secret) = identity_secret {
+        config = config.with_identity_secret(secret);
+        info!("Using persistent identity for stable PeerId");
+    }
 
     if let Some(port) = listen_port {
         let addr: nodalync_net::Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", port)
