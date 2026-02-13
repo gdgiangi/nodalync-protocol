@@ -270,6 +270,49 @@ Preview the fee breakdown before querying content.
 
 ---
 
+## L3 Synthesis Commands
+
+### `create_l3_summary`
+Create an L3 synthesis entity from selected L2 entities.
+- **Args:** `{ title: string, summary_text: string, entity_ids: string[] }`
+- **Validation:** 1–100 entities, non-empty title
+- **Returns:**
+  ```typescript
+  {
+    summary: {
+      entity_id: string,           // Graph entity ID (e.g. "e42")
+      title: string,
+      summary_text: string,
+      source_entity_ids: string[], // IDs of synthesized entities
+      source_entity_labels: string[], // Labels for display
+      created_at: string           // ISO-8601
+    },
+    relationships_created: number  // "synthesizes" edges created
+  }
+  ```
+- **Flow:** User selects entities in graph → enters title + summary → this command creates the L3 entity with `synthesizes` relationships to each source.
+
+### `get_l3_summaries`
+List all L3 summaries in the graph.
+- **Args:** `{ limit?: number }` (default 50, max 500)
+- **Returns:** `L3Summary[]` — same structure as `create_l3_summary.summary`, sorted newest-first.
+
+### `get_entity_content_links`
+Get L0 content items linked to a specific entity.
+- **Args:** `{ entity_id: string }`
+- **Returns:**
+  ```typescript
+  EntityContentLink[] = {
+    content_id: string,    // Registry content ID
+    content_hash: string,  // 64-char hex hash
+    content_type: string,  // e.g. "L0"
+    linked_at: string      // ISO-8601
+  }[]
+  ```
+- **Use case:** Powers the "L0 focus → L1 tendrils" interaction. When a user clicks an entity, show which raw content contributed to it.
+
+---
+
 ## Notes for Frontend
 
 1. **Startup flow:** `check_identity` → if false: show onboarding → `init_node(password, name)`; if true: show password → `unlock_node`
@@ -277,6 +320,8 @@ Preview the fee breakdown before querying content.
 3. **Publish flow:** `publish_file`/`publish_text` → `extract_mentions(hash)` to populate L2 graph
 4. **Query flow:** `get_fee_quote(price)` to show breakdown → `query_content(hash, amount)` — fee is auto-recorded
 5. **Fee dashboard:** `get_fee_config` for summary, `get_transaction_history` for details, `set_fee_rate` to configure
-6. **Price values:** Frontend sends NDL (e.g. 0.001), backend converts to tinybars internally
-7. **Hash format:** Always 64-char lowercase hex strings
-8. **Error handling:** All commands return `Result<T, String>` — errors are human-readable strings
+6. **L3 synthesis:** Select entities in graph → `create_l3_summary(title, text, ids)` → new L3 node appears with `synthesizes` edges. List all with `get_l3_summaries`.
+7. **Entity drill-down:** `get_entity_content_links(entity_id)` → shows which L0 content contributed to this entity. Combined with `get_subgraph`, this powers the full L0→L1→L2→L3 hierarchy view.
+8. **Price values:** Frontend sends NDL (e.g. 0.001), backend converts to tinybars internally
+9. **Hash format:** Always 64-char lowercase hex strings
+10. **Error handling:** All commands return `Result<T, String>` — errors are human-readable strings
