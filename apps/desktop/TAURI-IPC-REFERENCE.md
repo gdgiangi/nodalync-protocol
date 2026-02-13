@@ -184,7 +184,8 @@ Get list of connected peer IDs (simple).
 Get detailed network info including listen addresses.
 - **Args:** none
 - **Returns:** `{ active, listen_addresses: string[], connected_peers: PeerInfo[], peer_count }`
-- **PeerInfo:** `{ libp2p_id, nodalync_id? }`
+- **PeerInfo:** `{ libp2p_id, nodalync_id?, protocol_version?, content_count?, node_name?, handshake_complete }`
+- **Note:** `handshake_complete` is `true` once the peer has exchanged identity info. Until then, signature verification is unavailable for that peer.
 
 ### `dial_peer`
 Manually connect to a peer by multiaddress.

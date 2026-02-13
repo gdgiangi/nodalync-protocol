@@ -34,6 +34,48 @@ pub struct NetworkInfo {
 pub struct PeerInfo {
     pub libp2p_id: String,
     pub nodalync_id: Option<String>,
+    /// Protocol version from handshake (None if handshake not yet complete)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol_version: Option<String>,
+    /// Number of content items the peer hosts
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_count: Option<u64>,
+    /// Node display name from handshake
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_name: Option<String>,
+    /// Whether we have the peer's public key (handshake complete)
+    pub handshake_complete: bool,
+}
+
+impl PeerInfo {
+    /// Build PeerInfo from a libp2p peer, enriching with handshake data from the store.
+    fn from_peer(
+        p: &nodalync_net::PeerId,
+        network: &dyn Network,
+        ops: Option<&crate::protocol::ProtocolState>,
+    ) -> Self {
+        let nodalync_id = network.nodalync_peer_id(p).map(|id| id.to_string());
+
+        // Try to look up stored peer info from handshake
+        let stored = nodalync_id.as_ref().and_then(|_| {
+            let nid = network.nodalync_peer_id(p)?;
+            ops.and_then(|s| {
+                use nodalync_store::PeerStore;
+                s.ops.state().peers.get(&nid).ok().flatten()
+            })
+        });
+
+        let handshake_complete = stored.as_ref().map_or(false, |s| s.public_key.0 != [0u8; 32]);
+
+        PeerInfo {
+            libp2p_id: p.to_string(),
+            nodalync_id,
+            protocol_version: None, // Not stored in PeerInfo struct yet
+            content_count: None,    // Not stored in PeerInfo struct yet
+            node_name: None,        // Not stored in PeerInfo struct yet
+            handshake_complete,
+        }
+    }
 }
 
 /// Result of dialing a peer.
@@ -70,13 +112,7 @@ pub async fn get_network_info(
             let peers: Vec<PeerInfo> = network
                 .connected_peers()
                 .iter()
-                .map(|p| {
-                    let nodalync_id = network.nodalync_peer_id(p).map(|id| id.to_string());
-                    PeerInfo {
-                        libp2p_id: p.to_string(),
-                        nodalync_id,
-                    }
-                })
+                .map(|p| PeerInfo::from_peer(p, network.as_ref(), Some(state)))
                 .collect();
 
             let peer_count = peers.len();
@@ -205,6 +241,10 @@ pub async fn start_network_configured(
             PeerInfo {
                 libp2p_id: p.to_string(),
                 nodalync_id,
+                protocol_version: None,
+                content_count: None,
+                node_name: None,
+                handshake_complete: false,
             }
         })
         .collect();
@@ -528,6 +568,10 @@ pub async fn auto_start_network(
             PeerInfo {
                 libp2p_id: p.to_string(),
                 nodalync_id,
+                protocol_version: None,
+                content_count: None,
+                node_name: None,
+                handshake_complete: false,
             }
         })
         .collect();

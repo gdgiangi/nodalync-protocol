@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use nodalync_net::{Network, NetworkEvent, NetworkNode};
+use nodalync_net::{Network, NetworkEvent, NetworkNode, PeerId as Libp2pPeerId};
 use nodalync_wire::MessageType;
 use tokio::sync::{watch, Mutex};
 use tracing::{debug, error, info, warn};
@@ -123,11 +123,12 @@ async fn handle_event(
         _ => None,
     };
 
-    // Log peer events
+    // Log peer events and handle handshakes
     match &event {
         NetworkEvent::PeerConnected { peer } => {
-            info!("Peer connected: {}", peer);
-            return; // No response needed
+            info!("Peer connected: {} — initiating handshake", peer);
+            initiate_handshake(network, protocol, *peer).await;
+            return;
         }
         NetworkEvent::PeerDisconnected { peer } => {
             info!("Peer disconnected: {}", peer);
@@ -177,6 +178,105 @@ async fn handle_event(
             warn!("Failed to send response for request {:?}: {}", request_id, e);
         } else {
             debug!("Sent response for request {:?}", request_id);
+        }
+    }
+}
+
+/// Initiate the protocol handshake with a newly connected peer.
+///
+/// Builds a PeerInfoPayload from our current state and sends it as
+/// a request-response message. The peer should respond with their own
+/// PeerInfoPayload, which gets processed by handle_network_event
+/// when it arrives as a PeerInfoResponse.
+///
+/// This is fire-and-forget from the event loop's perspective — the
+/// response is handled asynchronously when it arrives.
+async fn initiate_handshake(
+    network: &Arc<NetworkNode>,
+    protocol: &Arc<Mutex<Option<ProtocolState>>>,
+    peer: Libp2pPeerId,
+) {
+    // Build our PeerInfo message under the lock, then release
+    let message = {
+        let guard = protocol.lock().await;
+        match guard.as_ref() {
+            Some(state) => {
+                let payload = state.ops.build_peer_info_payload();
+                let payload_bytes = match nodalync_wire::encode_payload(&payload) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        warn!("Failed to encode PeerInfo payload: {}", e);
+                        return;
+                    }
+                };
+
+                let private_key = match state.ops.private_key() {
+                    Some(pk) => pk.clone(),
+                    None => {
+                        debug!("No private key — skipping handshake with {}", peer);
+                        return;
+                    }
+                };
+
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+
+                nodalync_wire::create_message(
+                    MessageType::PeerInfo,
+                    payload_bytes,
+                    state.ops.peer_id(),
+                    timestamp,
+                    &private_key,
+                )
+            }
+            None => {
+                debug!("Protocol not initialized — skipping handshake with {}", peer);
+                return;
+            }
+        }
+    };
+    // Mutex released here
+
+    // Send the handshake as a request-response message
+    // The peer's handler will respond with their PeerInfo
+    info!("Sending handshake to peer {}", peer);
+    match network.send(peer, message).await {
+        Ok(response) => {
+            debug!("Received handshake response from {}", peer);
+            if response.message_type == MessageType::PeerInfoResponse {
+                match nodalync_wire::decode_payload::<nodalync_wire::PeerInfoPayload>(
+                    &response.payload,
+                ) {
+                    Ok(peer_info) => {
+                        // Register the peer mapping on the network
+                        network.register_peer_mapping(peer, peer_info.peer_id);
+
+                        // Store peer info in the ops state
+                        let mut guard = protocol.lock().await;
+                        if let Some(state) = guard.as_mut() {
+                            let _ = state.ops.handle_peer_info(&peer_info);
+                        }
+                        info!(
+                            "Handshake complete with {} (nodalync: {}, version: {})",
+                            peer, peer_info.peer_id, peer_info.protocol_version
+                        );
+                    }
+                    Err(e) => {
+                        warn!("Failed to decode handshake response from {}: {}", peer, e);
+                    }
+                }
+            } else {
+                debug!(
+                    "Unexpected response type from handshake with {}: {:?}",
+                    peer, response.message_type
+                );
+            }
+        }
+        Err(e) => {
+            // Non-fatal: peer may not support handshake (older version)
+            debug!("Handshake with {} failed (may be older node): {}", peer, e);
         }
     }
 }
