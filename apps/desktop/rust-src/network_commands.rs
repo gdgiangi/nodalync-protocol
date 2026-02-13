@@ -14,6 +14,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use crate::health_monitor::{self, NetworkHealth, SharedHealth};
+use crate::invite;
 use crate::peer_store::PeerStore;
 use crate::protocol::ProtocolState;
 use crate::seed_store::{SeedNode, SeedSource, SeedStore};
@@ -894,4 +895,191 @@ pub struct NetworkDiagnostics {
     pub nat_status: String,
     pub issues: Vec<String>,
     pub suggestions: Vec<String>,
+}
+
+// ─── Connection Invite Commands ──────────────────────────────────────────────
+
+/// Invite info returned to the frontend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InviteInfo {
+    /// Compact invite string (single best address).
+    pub compact: String,
+    /// Full invite string (all addresses, metadata).
+    pub full: String,
+    /// This node's peer ID.
+    pub peer_id: String,
+    /// Listen addresses included in the invite.
+    pub addresses: Vec<String>,
+}
+
+/// Generate a connection invite that another user can paste to connect.
+///
+/// The invite encodes this node's peer ID and listen addresses.
+/// Two formats are returned:
+/// - **compact**: Short, single-address. Good for messaging.
+/// - **full**: All addresses + metadata. More robust for NAT scenarios.
+///
+/// Requires the network to be running (needs listen addresses).
+#[tauri::command]
+pub async fn generate_invite(
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
+) -> Result<InviteInfo, String> {
+    let guard = protocol.lock().await;
+    let state = guard
+        .as_ref()
+        .ok_or("Node not initialized — unlock first")?;
+
+    let network = state
+        .network
+        .as_ref()
+        .ok_or("Network not running. Start the network first.")?;
+
+    let peer_id = network.local_peer_id().to_string();
+    let listen_addrs: Vec<String> = network
+        .listen_addresses()
+        .iter()
+        .map(|a| a.to_string())
+        .collect();
+
+    if listen_addrs.is_empty() {
+        return Err("No listen addresses available. Wait for network to fully start.".to_string());
+    }
+
+    // Pick the best address for compact invite:
+    // Prefer public IP > private IP > localhost
+    let best_addr = pick_best_address(&listen_addrs);
+
+    let compact = invite::generate_compact_invite(&peer_id, &best_addr);
+    let full = invite::generate_full_invite(
+        &peer_id,
+        listen_addrs.clone(),
+        None, // Could read node name from identity
+    )?;
+
+    Ok(InviteInfo {
+        compact,
+        full,
+        peer_id,
+        addresses: listen_addrs,
+    })
+}
+
+/// Accept a connection invite from another user.
+///
+/// Parses the invite string, adds the peer to known peers, and
+/// attempts to dial them immediately if the network is running.
+///
+/// Returns the parsed invite data + connection result.
+#[tauri::command]
+pub async fn accept_invite(
+    invite_string: String,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
+) -> Result<AcceptInviteResult, String> {
+    let data = invite::parse_invite(&invite_string)?;
+
+    // Add to known peers
+    {
+        let guard = protocol.lock().await;
+        let state = guard
+            .as_ref()
+            .ok_or("Node not initialized — unlock first")?;
+
+        let mut store = PeerStore::load(&state.data_dir);
+        store.record_peer(&data.pid, data.addrs.clone(), None, true);
+        store
+            .save(&state.data_dir)
+            .map_err(|e| format!("Failed to save peer: {}", e))?;
+    }
+
+    // Try to connect immediately if network is running
+    let connected = {
+        let guard = protocol.lock().await;
+        let state = guard.as_ref().ok_or("Node not initialized")?;
+
+        if let Some(network) = &state.network {
+            let mut connected = false;
+            for addr_str in &data.addrs {
+                if let Ok(addr) = addr_str.parse::<nodalync_net::Multiaddr>() {
+                    match network.dial(addr).await {
+                        Ok(_) => {
+                            info!("Connected to invited peer {} via {}", data.pid, addr_str);
+                            connected = true;
+                            break;
+                        }
+                        Err(e) => {
+                            warn!("Failed to dial {} via {}: {}", data.pid, addr_str, e);
+                        }
+                    }
+                }
+            }
+            connected
+        } else {
+            false // Network not running — peer saved for next start
+        }
+    };
+
+    Ok(AcceptInviteResult {
+        peer_id: data.pid,
+        name: data.name,
+        addresses: data.addrs,
+        connected,
+        saved: true,
+    })
+}
+
+/// Result of accepting a connection invite.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AcceptInviteResult {
+    /// Peer ID from the invite.
+    pub peer_id: String,
+    /// Node name from the invite (if provided).
+    pub name: Option<String>,
+    /// Addresses from the invite.
+    pub addresses: Vec<String>,
+    /// Whether we successfully connected right now.
+    pub connected: bool,
+    /// Whether the peer was saved for future reconnection.
+    pub saved: bool,
+}
+
+/// Pick the best listen address for a compact invite.
+///
+/// Priority: public IP > private IP > localhost.
+/// Avoids including localhost addresses which are useless to external users.
+fn pick_best_address(addresses: &[String]) -> String {
+    // Classify addresses
+    let mut public = Vec::new();
+    let mut private = Vec::new();
+    let mut other = Vec::new();
+
+    for addr in addresses {
+        if addr.contains("/ip4/127.") || addr.contains("/ip6/::1") {
+            // Skip localhost
+            continue;
+        } else if addr.contains("/ip4/10.")
+            || addr.contains("/ip4/172.")
+            || addr.contains("/ip4/192.168.")
+        {
+            private.push(addr.as_str());
+        } else if addr.contains("/ip4/") || addr.contains("/ip6/") || addr.contains("/dns") {
+            public.push(addr.as_str());
+        } else {
+            other.push(addr.as_str());
+        }
+    }
+
+    // Return best available
+    if let Some(addr) = public.first() {
+        addr.to_string()
+    } else if let Some(addr) = private.first() {
+        addr.to_string()
+    } else if let Some(addr) = other.first() {
+        addr.to_string()
+    } else {
+        // Fallback: use first address even if localhost
+        addresses
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "/ip4/0.0.0.0/tcp/0".to_string())
+    }
 }
