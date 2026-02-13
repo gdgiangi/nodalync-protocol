@@ -19,7 +19,7 @@ use crate::protocol::ProtocolState;
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Parse a hex string into a Hash.
-fn parse_hash(hex: &str) -> Result<Hash, String> {
+pub fn parse_hash(hex: &str) -> Result<Hash, String> {
     let hex = hex.trim();
     if hex.len() != 64 {
         return Err(format!("Invalid hash length: expected 64 hex chars, got {}", hex.len()));

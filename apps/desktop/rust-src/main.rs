@@ -72,6 +72,8 @@ fn main() {
             search_entities,
             get_graph_stats,
             get_context,
+            // L1 Extraction pipeline (bridges L0 → L1 → L2)
+            extract_mentions,
             // Protocol commands (Phase 2 — publish flow)
             check_identity,
             init_node,
