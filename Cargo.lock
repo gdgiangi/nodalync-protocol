@@ -3201,6 +3201,7 @@ name = "nodalync-ops"
 version = "0.7.1"
 dependencies = [
  "async-trait",
+ "futures",
  "nodalync-crypto",
  "nodalync-econ",
  "nodalync-net",
