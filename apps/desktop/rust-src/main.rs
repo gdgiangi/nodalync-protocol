@@ -8,12 +8,14 @@ use tauri::Manager;
 use tracing::info;
 
 mod discovery_commands;
+mod fee_commands;
 mod graph_commands;
 mod network_commands;
 mod protocol;
 mod publish_commands;
 
 use discovery_commands::*;
+use fee_commands::*;
 use graph_commands::*;
 use network_commands::*;
 use publish_commands::*;
@@ -98,6 +100,11 @@ fn main() {
             get_network_info,
             start_network_configured,
             dial_peer,
+            // Fee commands (D2 — application-level fee)
+            get_fee_config,
+            set_fee_rate,
+            get_transaction_history,
+            get_fee_quote,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -15,6 +15,7 @@ use tauri::State;
 use tokio::sync::Mutex;
 use tracing::info;
 
+use crate::fee_commands::{self, FeeConfig, TransactionStatus};
 use crate::protocol::ProtocolState;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -82,7 +83,10 @@ pub struct QueryResult {
     pub content_text: Option<String>,
     pub content_size: u64,
     pub price_paid: u64,
+    pub app_fee: u64,
+    pub total_cost: u64,
     pub receipt_id: String,
+    pub transaction_id: Option<String>,
 }
 
 /// Version info for the frontend.
@@ -215,7 +219,14 @@ pub async fn query_content(
         .map(|p| (p * 100_000_000.0) as u64)
         .unwrap_or(0);
 
-    info!("Querying content: hash={}, payment={}", hash, amount);
+    // Load fee config and calculate app fee
+    let fee_config = FeeConfig::load(&state.data_dir);
+    let (app_fee, _total) = fee_commands::calculate_app_fee(amount, fee_config.rate);
+
+    info!(
+        "Querying content: hash={}, content_cost={}, app_fee={}, total={}",
+        hash, amount, app_fee, amount + app_fee
+    );
 
     let response = state
         .ops
@@ -226,6 +237,25 @@ pub async fn query_content(
     // Try to decode content as UTF-8 text
     let content_text = String::from_utf8(response.content.clone()).ok();
 
+    // Record the transaction with fee breakdown
+    let tx_status = if amount == 0 {
+        TransactionStatus::Free
+    } else {
+        TransactionStatus::Pending
+    };
+
+    let tx_record = fee_commands::record_transaction(
+        &state.data_dir,
+        &hash,
+        &response.manifest.metadata.title,
+        response.receipt.amount,
+        app_fee,
+        &response.manifest.owner.to_string(),
+        tx_status,
+    );
+
+    let transaction_id = tx_record.ok().map(|r| r.id);
+
     Ok(QueryResult {
         hash: response.manifest.hash.to_string(),
         title: response.manifest.metadata.title.clone(),
@@ -233,7 +263,10 @@ pub async fn query_content(
         content_text,
         content_size: response.content.len() as u64,
         price_paid: response.receipt.amount,
+        app_fee,
+        total_cost: response.receipt.amount + app_fee,
         receipt_id: response.receipt.payment_id.to_string(),
+        transaction_id,
     })
 }
 
