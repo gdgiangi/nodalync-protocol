@@ -6,6 +6,7 @@
 //! - Request-Response: Point-to-point messaging
 //! - GossipSub: Broadcast messaging
 //! - Identify: Peer identification
+//! - mDNS: Local network peer discovery (optional)
 
 use crate::codec::{NodalyncCodec, NodalyncRequest, NodalyncResponse, PROTOCOL_NAME};
 use crate::config::NetworkConfig;
@@ -13,7 +14,7 @@ use libp2p::{
     gossipsub::{self, MessageId},
     identify,
     kad::{self, store::MemoryStore, Mode},
-    ping,
+    mdns, ping,
     request_response::{self, ProtocolSupport},
     swarm::NetworkBehaviour,
     PeerId,
@@ -29,6 +30,7 @@ use std::time::Duration;
 /// - `gossipsub`: Pub-sub for broadcast messages
 /// - `identify`: Peer identification and capability exchange
 /// - `ping`: Keep-alive pings to maintain connections
+/// - `mdns`: Local network peer discovery (optional, enabled via config)
 #[derive(NetworkBehaviour)]
 #[behaviour(to_swarm = "NodalyncBehaviourEvent")]
 pub struct NodalyncBehaviour {
@@ -46,6 +48,9 @@ pub struct NodalyncBehaviour {
 
     /// Ping for connection keep-alive.
     pub ping: ping::Behaviour,
+
+    /// mDNS for local network peer discovery.
+    pub mdns: libp2p::swarm::behaviour::toggle::Toggle<mdns::tokio::Behaviour>,
 }
 
 /// Events emitted by NodalyncBehaviour.
@@ -65,6 +70,9 @@ pub enum NodalyncBehaviourEvent {
 
     /// Ping event.
     Ping(ping::Event),
+
+    /// mDNS event.
+    Mdns(mdns::Event),
 }
 
 impl From<kad::Event> for NodalyncBehaviourEvent {
@@ -94,6 +102,12 @@ impl From<identify::Event> for NodalyncBehaviourEvent {
 impl From<ping::Event> for NodalyncBehaviourEvent {
     fn from(event: ping::Event) -> Self {
         NodalyncBehaviourEvent::Ping(event)
+    }
+}
+
+impl From<mdns::Event> for NodalyncBehaviourEvent {
+    fn from(event: mdns::Event) -> Self {
+        NodalyncBehaviourEvent::Mdns(event)
     }
 }
 
@@ -136,12 +150,16 @@ impl NodalyncBehaviour {
         // Configure Ping - keeps connections alive
         let ping = ping::Behaviour::new(ping::Config::new().with_interval(Duration::from_secs(15)));
 
+        // Configure mDNS (optional)
+        let mdns = build_mdns(local_peer_id, config.enable_mdns);
+
         Self {
             kademlia,
             request_response,
             gossipsub,
             identify,
             ping,
+            mdns,
         }
     }
 
@@ -184,13 +202,43 @@ impl NodalyncBehaviour {
         // Configure Ping - keeps connections alive
         let ping = ping::Behaviour::new(ping::Config::new().with_interval(Duration::from_secs(15)));
 
+        // Configure mDNS (optional)
+        let mdns = build_mdns(local_peer_id, config.enable_mdns);
+
         Self {
             kademlia,
             request_response,
             gossipsub,
             identify,
             ping,
+            mdns,
         }
+    }
+}
+
+/// Build mDNS behaviour (toggled on/off based on config).
+///
+/// When enabled, mDNS discovers peers on the local network automatically.
+/// This is especially useful for desktop app users who want zero-config
+/// peer discovery on their LAN.
+fn build_mdns(
+    local_peer_id: PeerId,
+    enable: bool,
+) -> libp2p::swarm::behaviour::toggle::Toggle<mdns::tokio::Behaviour> {
+    if enable {
+        match mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id) {
+            Ok(behaviour) => {
+                tracing::info!("mDNS enabled for local peer discovery");
+                libp2p::swarm::behaviour::toggle::Toggle::from(Some(behaviour))
+            }
+            Err(e) => {
+                tracing::warn!("Failed to initialize mDNS, continuing without it: {}", e);
+                libp2p::swarm::behaviour::toggle::Toggle::from(None)
+            }
+        }
+    } else {
+        tracing::debug!("mDNS disabled");
+        libp2p::swarm::behaviour::toggle::Toggle::from(None)
     }
 }
 
@@ -245,40 +293,53 @@ mod tests {
 
     #[test]
     fn test_with_keypair_uses_provided_keypair_for_gossipsub() {
-        // Regression test: with_keypair() must use the provided keypair for GossipSub,
-        // not generate a random one (which was the bug).
         let keypair = libp2p::identity::Keypair::generate_ed25519();
         let peer_id = keypair.public().to_peer_id();
         let config = NetworkConfig::default();
 
-        // This should succeed — previously it generated a random keypair internally
         let behaviour = NodalyncBehaviour::with_keypair(peer_id, &keypair, &config);
 
-        // Verify the behaviour was created successfully with the provided keypair
         assert!(behaviour.gossipsub.topics().next().is_none());
     }
 
     #[test]
     fn test_build_gossipsub_with_keypair_uses_provided_key() {
-        // Regression test: verify build_gossipsub_with_keypair creates a valid
-        // gossipsub behaviour using the provided keypair (not a random one).
         let keypair = libp2p::identity::Keypair::generate_ed25519();
         let gossipsub = build_gossipsub_with_keypair(&keypair);
 
-        // Verify behaviour was created successfully
         assert!(gossipsub.topics().next().is_none());
     }
 
     #[test]
     fn test_new_creates_consistent_gossipsub_and_identify() {
-        // Regression test: new() should generate one keypair and use it
-        // for both GossipSub and Identify (not separate random keypairs).
         let peer_id = PeerId::random();
         let config = NetworkConfig::default();
 
-        // Should compile and run without errors — previously new() used
-        // build_gossipsub() which generated a random keypair separate from identify
         let behaviour = NodalyncBehaviour::new(peer_id, &config);
+        assert!(behaviour.gossipsub.topics().next().is_none());
+    }
+
+    #[test]
+    fn test_mdns_disabled_by_default() {
+        let peer_id = PeerId::random();
+        let config = NetworkConfig::default();
+
+        let behaviour = NodalyncBehaviour::new(peer_id, &config);
+        // mDNS should be disabled (Toggle wrapping None)
+        assert!(!config.enable_mdns);
+        // Behaviour should still be created successfully
+        assert!(behaviour.gossipsub.topics().next().is_none());
+    }
+
+    #[test]
+    fn test_mdns_enabled_creates_behaviour() {
+        let peer_id = PeerId::random();
+        let config = NetworkConfig::default().with_mdns(true);
+
+        let behaviour = NodalyncBehaviour::new(peer_id, &config);
+        assert!(config.enable_mdns);
+        // Behaviour should be created successfully (mDNS may or may not init
+        // depending on OS support, but the Toggle handles graceful fallback)
         assert!(behaviour.gossipsub.topics().next().is_none());
     }
 }
