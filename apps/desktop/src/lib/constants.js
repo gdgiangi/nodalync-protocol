@@ -31,52 +31,6 @@ export function getEntityColor(type) {
   return TYPE_COLORS[type] || DEFAULT_COLOR;
 }
 
-// ═══ Edge / Relationship Colors ═══
-// Subtle palette for relationship edges — keyed by predicate category
-const EDGE_COLORS = {
-  worksFor: "#74c0fc",
-  workedFor: "#74c0fc",
-  locatedIn: "#dda0dd",
-  basedIn: "#dda0dd",
-  createdBy: "#e599f7",
-  authorOf: "#e599f7",
-  partOf: "#69db7c",
-  memberOf: "#69db7c",
-  relatedTo: "#868e96",
-  mentions: "#868e96",
-  discusses: "#868e96",
-  before: "#ab47bc",
-  after: "#ab47bc",
-  during: "#ab47bc",
-  causes: "#ff8787",
-  enables: "#a9e34b",
-  prevents: "#ff7043",
-  isA: "#66d9e8",
-  instanceOf: "#66d9e8",
-  hasProperty: "#ffd43b",
-  hasAttribute: "#ffd43b",
-  uses: "#20c997",
-  usedBy: "#20c997",
-  fundedBy: "#ffa94d",
-  investedIn: "#ffa94d",
-  acquiredBy: "#f783ac",
-};
-
-const DEFAULT_EDGE_COLOR = "rgba(255, 255, 255, 0.15)";
-
-export function getEdgeColor(predicate) {
-  const color = EDGE_COLORS[predicate];
-  if (!color) return DEFAULT_EDGE_COLOR;
-  // Return at reduced opacity for subtlety
-  return color + "66"; // ~40% opacity hex suffix
-}
-
-export function getEdgeHighlightColor(predicate) {
-  const color = EDGE_COLORS[predicate];
-  if (!color) return "rgba(255, 255, 255, 0.5)";
-  return color + "cc"; // ~80% opacity hex suffix
-}
-
 // ═══ Relationship Predicates ═══
 // Human-readable labels for the fixed ontology predicates
 export const PREDICATE_LABELS = {
@@ -128,17 +82,51 @@ export const CONTENT_TYPES = [
 // ═══ Visibility Options ═══
 export const VISIBILITY_OPTIONS = ["private", "unlisted", "shared"];
 
+// ═══ Relationship Category Colors ═══
+// Edges are tinted by semantic category for visual distinction
+export const EDGE_CATEGORY_COLORS = {
+  structural: "rgba(116, 192, 252, 0.35)",   // blue  — partOf, memberOf, instanceOf, isA
+  causal:     "rgba(255, 135, 135, 0.35)",    // red   — causes, enables, prevents
+  temporal:   "rgba(171, 71, 188, 0.35)",     // purple — before, after, during
+  spatial:    "rgba(221, 160, 221, 0.35)",    // pink  — locatedIn, basedIn
+  action:     "rgba(74, 222, 128, 0.35)",     // green — createdBy, authorOf, uses, usedBy
+  financial:  "rgba(255, 169, 77, 0.35)",     // orange — fundedBy, investedIn, acquiredBy
+  reference:  "rgba(255, 255, 255, 0.18)",    // white dim — mentions, discusses, relatedTo
+};
+
+const PREDICATE_TO_CATEGORY = {
+  partOf: "structural", memberOf: "structural", instanceOf: "structural", isA: "structural",
+  causes: "causal", enables: "causal", prevents: "causal",
+  before: "temporal", after: "temporal", during: "temporal",
+  locatedIn: "spatial", basedIn: "spatial",
+  createdBy: "action", authorOf: "action", uses: "action", usedBy: "action",
+  worksFor: "action", workedFor: "action",
+  fundedBy: "financial", investedIn: "financial", acquiredBy: "financial",
+  mentions: "reference", discusses: "reference", relatedTo: "reference",
+};
+
+export function getEdgeColor(predicate) {
+  const cat = PREDICATE_TO_CATEGORY[predicate] || "reference";
+  return EDGE_CATEGORY_COLORS[cat];
+}
+
+export function getEdgeHighlightColor(predicate) {
+  const cat = PREDICATE_TO_CATEGORY[predicate] || "reference";
+  // Brighten the category color for hover
+  return EDGE_CATEGORY_COLORS[cat].replace(/[\d.]+\)$/, "0.7)");
+}
+
 // ═══ Graph Visualization Config ═══
 export const GRAPH_CONFIG = {
   BG_COLOR: "#06060a",
-  LINK_COLOR: "rgba(255, 255, 255, 0.06)",
-  LINK_HOVER_COLOR: "rgba(255, 255, 255, 0.12)",
-  LINK_DIM_COLOR: "rgba(255, 255, 255, 0.03)",
+  LINK_COLOR: "rgba(255, 255, 255, 0.18)",
+  LINK_HOVER_COLOR: "rgba(255, 255, 255, 0.45)",
+  LINK_DIM_COLOR: "rgba(255, 255, 255, 0.06)",
   LABEL_COLOR: "rgba(255, 255, 255, 0.45)",
   LABEL_DIM_COLOR: "rgba(255, 255, 255, 0.2)",
   MIN_NODE_RADIUS: 4,
   MAX_NODE_RADIUS: 20,
-  MIN_LINK_WIDTH: 0.5,
+  MIN_LINK_WIDTH: 1,
   MAX_LINK_WIDTH: 3,
   LINK_LABEL_THRESHOLD: 80, // hide link labels above this edge count
 };
