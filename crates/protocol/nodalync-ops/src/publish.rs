@@ -169,6 +169,78 @@ where
         Ok(())
     }
 
+    /// Re-announce all Shared content to the network.
+    ///
+    /// Called after network start to ensure previously published content
+    /// is discoverable by peers. Without this, a node restart makes all
+    /// content invisible until the next explicit publish.
+    ///
+    /// Returns the number of items successfully re-announced.
+    pub async fn reannounce_all_content(&mut self) -> OpsResult<u32> {
+        let network = match self.network().cloned() {
+            Some(n) => n,
+            None => return Ok(0), // No network, nothing to announce
+        };
+
+        // List all Shared content we own
+        let filter = nodalync_store::ManifestFilter::new()
+            .with_visibility(Visibility::Shared);
+        let manifests = self.state.manifests.list(filter)?;
+
+        let my_peer_id = self.peer_id();
+        let publisher_peer_id = Some(network.local_peer_id().to_string());
+        let listen_addrs = network.listen_addresses();
+
+        let mut announced = 0u32;
+
+        for manifest in &manifests {
+            // Only re-announce our own content
+            if manifest.owner != my_peer_id {
+                continue;
+            }
+
+            // Extract L1 summary (best-effort — use empty if extraction fails)
+            let l1_summary = self
+                .extract_l1_summary(&manifest.hash)
+                .unwrap_or_else(|_| nodalync_types::L1Summary::empty(manifest.hash));
+
+            let payload = Self::create_announce_payload(
+                manifest,
+                l1_summary,
+                listen_addrs.clone(),
+                publisher_peer_id.clone(),
+            );
+
+            // DHT announce — best-effort
+            if let Err(e) = network.dht_announce(manifest.hash, payload.clone()).await {
+                tracing::debug!(
+                    hash = %manifest.hash,
+                    error = %e,
+                    "DHT re-announce failed (continuing)"
+                );
+            }
+
+            // GossipSub broadcast — best-effort
+            if let Err(e) = network.broadcast_announce(payload).await {
+                tracing::debug!(
+                    hash = %manifest.hash,
+                    error = %e,
+                    "GossipSub re-announce failed (continuing)"
+                );
+            }
+
+            announced += 1;
+        }
+
+        tracing::info!(
+            count = announced,
+            total = manifests.len(),
+            "Re-announced content to network"
+        );
+
+        Ok(announced)
+    }
+
     /// Set visibility level for content.
     pub fn set_content_visibility(&mut self, hash: &Hash, visibility: Visibility) -> OpsResult<()> {
         // Load manifest
@@ -438,5 +510,38 @@ mod tests {
         // Try to publish (should fail)
         let result = ops.publish_content(&hash, Visibility::Shared, 100).await;
         assert!(matches!(result, Err(OpsError::AccessDenied)));
+    }
+
+    #[tokio::test]
+    async fn test_reannounce_no_network_returns_zero() {
+        let (mut ops, _temp) = create_test_ops();
+
+        // Create and publish content (locally — no network)
+        let content = b"Content for reannounce test";
+        let meta = Metadata::new("Reannounce Test", content.len() as u64);
+        let hash = ops.create_content(content, meta).unwrap();
+
+        // Publish locally (no network → skip announce, but manifest is Shared)
+        ops.publish_content(&hash, Visibility::Shared, 0)
+            .await
+            .unwrap();
+
+        // Reannounce without network should return 0
+        let count = ops.reannounce_all_content().await.unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_reannounce_skips_private_content() {
+        let (mut ops, _temp) = create_test_ops();
+
+        // Create content but don't publish (stays Private)
+        let content = b"Private content";
+        let meta = Metadata::new("Private", content.len() as u64);
+        let _hash = ops.create_content(content, meta).unwrap();
+
+        // Reannounce should find nothing to announce
+        let count = ops.reannounce_all_content().await.unwrap();
+        assert_eq!(count, 0);
     }
 }
