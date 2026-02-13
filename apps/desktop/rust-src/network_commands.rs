@@ -12,6 +12,7 @@ use tauri::State;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
+use crate::health_monitor::{self, NetworkHealth, SharedHealth};
 use crate::peer_store::PeerStore;
 use crate::protocol::ProtocolState;
 
@@ -407,6 +408,8 @@ pub async fn auto_start_network(
     listen_port: Option<u16>,
     protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
     event_loop: State<'_, Mutex<Option<crate::event_loop::EventLoopHandle>>>,
+    health_monitor: State<'_, Mutex<Option<health_monitor::HealthMonitorHandle>>>,
+    shared_health: State<'_, SharedHealth>,
 ) -> Result<NetworkInfo, String> {
     // Check node is initialized and network isn't already running
     let data_dir = {
@@ -516,10 +519,23 @@ pub async fn auto_start_network(
     // Spawn the network event loop for inbound request handling
     // Without this, the node can send but never respond to peer requests.
     let protocol_arc = Arc::clone(&*protocol);
-    let handle = crate::event_loop::spawn_event_loop(node, protocol_arc);
+    let handle = crate::event_loop::spawn_event_loop(node.clone(), protocol_arc);
     {
         let mut el_guard = event_loop.lock().await;
         *el_guard = Some(handle);
+    }
+
+    // Spawn the background health monitor (30s health checks + auto-reconnect)
+    {
+        let protocol_arc = Arc::clone(&*protocol);
+        let health_clone = Arc::clone(&*shared_health);
+        let hm_handle = health_monitor::spawn_health_monitor(
+            node.clone(),
+            protocol_arc,
+            health_clone,
+        );
+        let mut hm_guard = health_monitor.lock().await;
+        *hm_guard = Some(hm_handle);
     }
 
     // Re-announce all Shared content so peers can discover us
@@ -584,4 +600,70 @@ pub struct KnownPeerInfo {
     pub last_seen: String,
     pub connection_count: u32,
     pub manual: bool,
+}
+
+// ─── NAT Status Command ─────────────────────────────────────────────────────
+
+/// NAT status information returned to the frontend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NatStatusInfo {
+    /// "unknown", "public", or "private"
+    pub status: String,
+    /// True if NAT traversal (relay/UPnP/DCUtR) is enabled
+    pub nat_traversal_enabled: bool,
+    /// Number of relay reservations active
+    pub relay_reservations: usize,
+}
+
+/// Get the current NAT status as detected by AutoNAT.
+///
+/// This tells the frontend whether the node is:
+/// - **public**: directly reachable from the internet
+/// - **private**: behind NAT, uses relay/hole-punching
+/// - **unknown**: probing in progress
+///
+/// Use this for the network status display in the graph view.
+#[tauri::command]
+pub async fn get_nat_status(
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
+) -> Result<NatStatusInfo, String> {
+    let guard = protocol.lock().await;
+    let state = guard
+        .as_ref()
+        .ok_or("Node not initialized — unlock first")?;
+
+    match &state.network {
+        Some(network) => {
+            let status = network.nat_status();
+            Ok(NatStatusInfo {
+                status: status.to_string(),
+                nat_traversal_enabled: true,
+                relay_reservations: 0, // TODO: track active reservations
+            })
+        }
+        None => Ok(NatStatusInfo {
+            status: "unknown".to_string(),
+            nat_traversal_enabled: false,
+            relay_reservations: 0,
+        }),
+    }
+}
+
+// ─── Network Health Command ──────────────────────────────────────────────────
+
+/// Get the current network health status.
+///
+/// Returns a snapshot from the background health monitor, including:
+/// - Connection count and known peers
+/// - Uptime, reconnect stats
+/// - Health classification ("healthy", "degraded", "disconnected", "offline")
+///
+/// Hephaestus: poll this from the frontend every 10-30s for the network
+/// status indicator. It's cheap — just reads a pre-computed snapshot.
+#[tauri::command]
+pub async fn get_network_health(
+    shared_health: State<'_, SharedHealth>,
+) -> Result<NetworkHealth, String> {
+    let health = shared_health.lock().await;
+    Ok(health.clone())
 }

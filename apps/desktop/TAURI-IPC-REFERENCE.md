@@ -321,6 +321,53 @@ Re-announce all published (Shared) content to the network.
 - **Returns:** `number` — count of items re-announced
 - **Use case:** After network start, or when peers may have lost track of our content. Called automatically by `auto_start_network`, but can be triggered manually.
 
+### `get_nat_status`
+Get the current NAT traversal status as detected by AutoNAT.
+- **Args:** none
+- **Returns:**
+  ```typescript
+  {
+    status: "unknown" | "public" | "private",
+    nat_traversal_enabled: boolean,
+    relay_reservations: number
+  }
+  ```
+- **`status`** meanings:
+  - `"public"` — node is directly reachable from the internet (no NAT or UPnP succeeded)
+  - `"private"` — node is behind NAT, using relay/hole-punching for inbound connections
+  - `"unknown"` — AutoNAT probing in progress (normal on startup, resolves within ~30s)
+- **Use case:** Show NAT status in the network view. If `"private"`, the node can still communicate but may have slower initial connections via relay before DCUtR hole-punching upgrades them to direct.
+
+### `get_network_health`
+Get a snapshot of network health from the background health monitor.
+- **Args:** none
+- **Returns:**
+  ```typescript
+  {
+    active: boolean,
+    connected_peers: number,
+    known_peers: number,           // Peers in persistent store
+    uptime_secs: number,           // Since network start
+    reconnect_attempts: number,    // Total reconnection attempts
+    reconnect_successes: number,   // Successful reconnections
+    last_check: string | null,     // ISO-8601 timestamp of last health check
+    last_peer_save: string | null, // ISO-8601 timestamp of last peer save
+    status: "healthy" | "degraded" | "connecting" | "disconnected" | "offline",
+    message: string                // Human-readable status
+  }
+  ```
+- **`status`** meanings:
+  - `"healthy"` — 3+ peers connected, network is well-connected
+  - `"degraded"` — 1-2 peers or no listen addresses
+  - `"connecting"` — 0 peers, uptime < 60s (still bootstrapping)
+  - `"disconnected"` — 0 peers, uptime > 60s (auto-reconnect in progress)
+  - `"offline"` — network not started
+- **Poll interval:** 10-30s from frontend. This reads a pre-computed snapshot — very cheap.
+- **Background behavior:** The health monitor runs every 30s:
+  - If connected peers drop below threshold, it tries reconnecting to known peers
+  - Known peers are auto-saved to disk every 5 minutes
+  - On network stop, all connected peers are saved before shutdown
+
 ---
 
 ## Peer Persistence Commands
@@ -357,7 +404,7 @@ Add a peer manually to the known peers store.
 ## Notes for Frontend
 
 1. **Startup flow:** `check_identity` → if false: show onboarding → `init_node(password, name)`; if true: show password → `unlock_node`
-2. **After unlock:** `get_identity` for profile display, then `auto_start_network()` (recommended) or `start_network_configured()`
+2. **After unlock:** `get_identity` for profile display, then `auto_start_network` (recommended — loads known peers + mDNS + stable identity + spawns health monitor)
 3. **Stable PeerId:** The network now derives its libp2p PeerId from the node's Nodalync identity. PeerId persists across restarts. Display it in the profile as the node's network address.
 4. **Publish flow:** `publish_file`/`publish_text` → `extract_mentions(hash)` to populate L2 graph
 5. **Query flow:** `get_fee_quote(price)` to show breakdown → `query_content(hash, amount)` — fee is auto-recorded
@@ -367,4 +414,5 @@ Add a peer manually to the known peers store.
 9. **Price values:** Frontend sends NDL (e.g. 0.001), backend converts to tinybars internally
 10. **Hash format:** Always 64-char lowercase hex strings
 11. **Error handling:** All commands return `Result<T, String>` — errors are human-readable strings
-12. **Network auto-start:** `auto_start_network` is the recommended way — it loads saved peers, enables mDNS, uses stable identity, spawns event loop, and re-announces content. One call does everything.
+12. **NAT traversal:** Enabled by default (AutoNAT + UPnP + Relay + DCUtR). Use `get_nat_status` to display connectivity status. Most desktop users are behind NAT — the protocol automatically handles relay fallback and hole-punching.
+13. **Network health:** Poll `get_network_health` every 10-30s for the network status indicator. The background health monitor (spawned by `auto_start_network`) handles auto-reconnect, peer saves, and health classification. `stop_network` automatically saves peers and shuts down the monitor.
