@@ -293,7 +293,7 @@ fn parse_bootstrap_node(
 /// Can also be called periodically by the frontend.
 #[tauri::command]
 pub async fn save_known_peers(
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<usize, String> {
     let guard = protocol.lock().await;
     let state = guard
@@ -330,7 +330,7 @@ pub async fn save_known_peers(
 /// Get the list of known peers from the persistent store.
 #[tauri::command]
 pub async fn get_known_peers(
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<Vec<KnownPeerInfo>, String> {
     let guard = protocol.lock().await;
     let state = guard
@@ -363,7 +363,7 @@ pub async fn get_known_peers(
 pub async fn add_known_peer(
     peer_id: String,
     address: String,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<(), String> {
     let guard = protocol.lock().await;
     let state = guard
@@ -392,13 +392,15 @@ pub async fn add_known_peer(
 /// 1. Loads known peers from disk as bootstrap nodes
 /// 2. Enables mDNS for LAN discovery
 /// 3. Starts the P2P network
-/// 4. Returns network info
+/// 4. Spawns the event loop for inbound request handling
+/// 5. Returns network info
 ///
 /// Hephaestus should call this after unlock for seamless networking.
 #[tauri::command]
 pub async fn auto_start_network(
     listen_port: Option<u16>,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
+    event_loop: State<'_, Mutex<Option<crate::event_loop::EventLoopHandle>>>,
 ) -> Result<NetworkInfo, String> {
     // Check node is initialized and network isn't already running
     let data_dir = {
@@ -489,11 +491,20 @@ pub async fn auto_start_network(
             .as_mut()
             .ok_or("Node not initialized — unlock first")?;
         state.ops.set_network(node.clone());
-        state.network = Some(node);
+        state.network = Some(node.clone());
+    }
+
+    // Spawn the network event loop for inbound request handling
+    // Without this, the node can send but never respond to peer requests.
+    let protocol_arc = Arc::clone(&*protocol);
+    let handle = crate::event_loop::spawn_event_loop(node, protocol_arc);
+    {
+        let mut el_guard = event_loop.lock().await;
+        *el_guard = Some(handle);
     }
 
     info!(
-        "Network auto-started: {} listen addresses, {} initial peers, mDNS enabled",
+        "Network auto-started: {} listen addresses, {} initial peers, mDNS enabled, event loop active",
         listen_addrs.len(),
         peer_count
     );
