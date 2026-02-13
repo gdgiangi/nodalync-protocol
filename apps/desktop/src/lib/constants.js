@@ -31,6 +31,52 @@ export function getEntityColor(type) {
   return TYPE_COLORS[type] || DEFAULT_COLOR;
 }
 
+// ═══ Edge / Relationship Colors ═══
+// Subtle palette for relationship edges — keyed by predicate category
+const EDGE_COLORS = {
+  worksFor: "#74c0fc",
+  workedFor: "#74c0fc",
+  locatedIn: "#dda0dd",
+  basedIn: "#dda0dd",
+  createdBy: "#e599f7",
+  authorOf: "#e599f7",
+  partOf: "#69db7c",
+  memberOf: "#69db7c",
+  relatedTo: "#868e96",
+  mentions: "#868e96",
+  discusses: "#868e96",
+  before: "#ab47bc",
+  after: "#ab47bc",
+  during: "#ab47bc",
+  causes: "#ff8787",
+  enables: "#a9e34b",
+  prevents: "#ff7043",
+  isA: "#66d9e8",
+  instanceOf: "#66d9e8",
+  hasProperty: "#ffd43b",
+  hasAttribute: "#ffd43b",
+  uses: "#20c997",
+  usedBy: "#20c997",
+  fundedBy: "#ffa94d",
+  investedIn: "#ffa94d",
+  acquiredBy: "#f783ac",
+};
+
+const DEFAULT_EDGE_COLOR = "rgba(255, 255, 255, 0.15)";
+
+export function getEdgeColor(predicate) {
+  const color = EDGE_COLORS[predicate];
+  if (!color) return DEFAULT_EDGE_COLOR;
+  // Return at reduced opacity for subtlety
+  return color + "66"; // ~40% opacity hex suffix
+}
+
+export function getEdgeHighlightColor(predicate) {
+  const color = EDGE_COLORS[predicate];
+  if (!color) return "rgba(255, 255, 255, 0.5)";
+  return color + "cc"; // ~80% opacity hex suffix
+}
+
 // ═══ Relationship Predicates ═══
 // Human-readable labels for the fixed ontology predicates
 export const PREDICATE_LABELS = {
@@ -126,6 +172,8 @@ export const GRAPH_CONFIG = {
   LABEL_DIM_COLOR: "rgba(255, 255, 255, 0.2)",
   MIN_NODE_RADIUS: 4,
   MAX_NODE_RADIUS: 20,
+  MIN_LINK_WIDTH: 0.5,
+  MAX_LINK_WIDTH: 3,
   LINK_LABEL_THRESHOLD: 80, // hide link labels above this edge count
   MIN_LINK_WIDTH: 1,
   MAX_LINK_WIDTH: 3,

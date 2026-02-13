@@ -48,7 +48,7 @@ tokio = { version = "1.36", features = ["full"] }
 futures = "0.3"
 
 # Networking
-libp2p = { version = "0.54", features = ["tcp", "noise", "yamux", "dns", "kad", "gossipsub", "request-response", "identify", "ping", "mdns", "macros", "tokio"] }
+libp2p = { version = "0.54", features = ["tcp", "noise", "yamux", "dns", "kad", "gossipsub", "request-response", "identify", "ping", "mdns", "macros", "tokio", "relay", "autonat", "dcutr", "upnp"] }
 
 # CLI
 clap = { version = "4.5", features = ["derive", "env"] }

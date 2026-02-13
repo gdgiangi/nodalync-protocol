@@ -13,7 +13,7 @@ use nodalync_types::{Metadata, Visibility};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::protocol::ProtocolState;
 
@@ -150,7 +150,7 @@ pub async fn unlock_node(
     Ok(info)
 }
 
-/// Get current identity info (no password required — node must be unlocked).
+/// Get current identity info (no password required - node must be unlocked).
 ///
 /// Returns the node's name, public key, peer ID, and creation date.
 /// Hephaestus uses this for the dashboard and profile display.
@@ -159,7 +159,7 @@ pub async fn get_identity(
     protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<IdentityInfo, String> {
     let guard = protocol.lock().await;
-    let state = guard.as_ref().ok_or("Node not initialized — unlock first")?;
+    let state = guard.as_ref().ok_or("Node not initialized - unlock first")?;
 
     Ok(IdentityInfo {
         name: state.profile.as_ref().map(|p| p.name.clone()),
@@ -186,7 +186,7 @@ pub async fn publish_file(
     protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<PublishResult, String> {
     let mut guard = protocol.lock().await;
-    let state = guard.as_mut().ok_or("Node not initialized — unlock first")?;
+    let state = guard.as_mut().ok_or("Node not initialized - unlock first")?;
 
     let path = PathBuf::from(&file_path);
     if !path.exists() {
@@ -297,7 +297,7 @@ pub async fn publish_text(
     protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<PublishResult, String> {
     let mut guard = protocol.lock().await;
-    let state = guard.as_mut().ok_or("Node not initialized — unlock first")?;
+    let state = guard.as_mut().ok_or("Node not initialized - unlock first")?;
 
     if text.is_empty() {
         return Err("Cannot publish empty text.".into());
@@ -362,7 +362,7 @@ pub async fn list_content(
     protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<Vec<ContentItem>, String> {
     let guard = protocol.lock().await;
-    let state = guard.as_ref().ok_or("Node not initialized — unlock first")?;
+    let state = guard.as_ref().ok_or("Node not initialized - unlock first")?;
 
     let filter = nodalync_store::ManifestFilter::new();
     let manifests = state.ops.state().manifests.list(filter)
@@ -392,7 +392,7 @@ pub async fn get_content_details(
     protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<ContentItem, String> {
     let guard = protocol.lock().await;
-    let state = guard.as_ref().ok_or("Node not initialized — unlock first")?;
+    let state = guard.as_ref().ok_or("Node not initialized - unlock first")?;
 
     let hash_parsed = parse_hash(&hash)?;
 
@@ -419,7 +419,7 @@ pub async fn delete_content(
     protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<(), String> {
     let mut guard = protocol.lock().await;
-    let state = guard.as_mut().ok_or("Node not initialized — unlock first")?;
+    let state = guard.as_mut().ok_or("Node not initialized - unlock first")?;
 
     let hash_parsed = parse_hash(&hash)?;
 
@@ -440,7 +440,7 @@ pub async fn delete_content(
 
 /// Get current node status.
 ///
-/// Works whether or not the node is initialized — returns partial info.
+/// Works whether or not the node is initialized - returns partial info.
 #[tauri::command]
 pub async fn get_node_status(
     protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
@@ -497,7 +497,7 @@ pub async fn start_network(
     {
         let guard = protocol.lock().await;
         if guard.is_none() {
-            return Err("Node not initialized — unlock first".into());
+            return Err("Node not initialized - unlock first".into());
         }
     }
 
@@ -511,7 +511,7 @@ pub async fn start_network(
     // Store the network in protocol state
     {
         let mut guard = protocol.lock().await;
-        let state = guard.as_mut().ok_or("Node not initialized — unlock first")?;
+        let state = guard.as_mut().ok_or("Node not initialized - unlock first")?;
         state.ops.set_network(node.clone());
         state.network = Some(node.clone());
     }
@@ -535,20 +535,51 @@ pub async fn start_network(
 pub async fn stop_network(
     protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
     event_loop: State<'_, Mutex<Option<crate::event_loop::EventLoopHandle>>>,
+    health_monitor: State<'_, Mutex<Option<crate::health_monitor::HealthMonitorHandle>>>,
 ) -> Result<(), String> {
-    // Stop the event loop first
-    let handle = {
+    // Stop the health monitor first
+    let hm_handle = {
+        let mut hm_guard = health_monitor.lock().await;
+        hm_guard.take()
+    };
+    if let Some(handle) = hm_handle {
+        handle.shutdown().await;
+        info!("Health monitor stopped");
+    }
+
+    // Stop the event loop
+    let el_handle = {
         let mut el_guard = event_loop.lock().await;
         el_guard.take()
     };
-    if let Some(handle) = handle {
+    if let Some(handle) = el_handle {
         handle.shutdown().await;
         info!("Network event loop stopped");
     }
 
+    // Save known peers before stopping
+    {
+        let guard = protocol.lock().await;
+        if let Some(state) = guard.as_ref() {
+            if let Some(network) = &state.network {
+                let mut store = crate::peer_store::PeerStore::load(&state.data_dir);
+                for peer in network.connected_peers() {
+                    let peer_str = peer.to_string();
+                    let nodalync_id = network.nodalync_peer_id(&peer).map(|id| id.to_string());
+                    store.record_peer(&peer_str, vec![], nodalync_id, false);
+                }
+                if let Err(e) = store.save(&state.data_dir) {
+                    warn!("Failed to save peers on stop: {}", e);
+                } else {
+                    info!("Saved {} known peers on network stop", store.peers.len());
+                }
+            }
+        }
+    }
+
     // Now stop the network in protocol state
     let mut guard = protocol.lock().await;
-    let state = guard.as_mut().ok_or("Node not initialized — unlock first")?;
+    let state = guard.as_mut().ok_or("Node not initialized - unlock first")?;
     state.stop_network();
     Ok(())
 }
@@ -559,7 +590,7 @@ pub async fn get_peers(
     protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<Vec<String>, String> {
     let guard = protocol.lock().await;
-    let state = guard.as_ref().ok_or("Node not initialized — unlock first")?;
+    let state = guard.as_ref().ok_or("Node not initialized - unlock first")?;
 
     let peers = state.network
         .as_ref()
