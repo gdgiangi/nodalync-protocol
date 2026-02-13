@@ -36,8 +36,10 @@ use crate::tools::{
     QueryKnowledgeInput, QueryKnowledgeOutput, SearchNetworkInput, SearchNetworkOutput,
     SearchResultInfo, SetVisibilityInput, SetVisibilityOutput, SourceInfo, StatusOutput,
     SynthesizeContentInput, SynthesizeContentOutput, UpdateContentInput, UpdateContentOutput,
-    VersionEntry,
+    VersionEntry, X402PaymentRequiredOutput, X402PaymentRequirement, X402StatusOutput,
 };
+
+use nodalync_x402::{PaymentGate, X402Config};
 
 /// Create a standardized error response for MCP tools.
 ///
@@ -73,6 +75,10 @@ pub struct McpServerConfig {
     pub bootstrap_nodes: Vec<String>,
     /// Optional Hedera configuration for on-chain settlement.
     pub hedera: Option<HederaConfig>,
+    /// Optional x402 payment protocol configuration.
+    /// When enabled, paid content queries return 402 Payment Required responses
+    /// that x402-compatible clients can fulfill via the Blocky402 facilitator.
+    pub x402: Option<X402Config>,
 }
 
 /// Configuration for Hedera settlement integration.
@@ -107,6 +113,7 @@ impl Default for McpServerConfig {
                 .map(|s| s.to_string())
                 .collect(),
             hedera: None,
+            x402: None,
         }
     }
 }
@@ -134,6 +141,8 @@ pub struct NodalyncMcpServer {
     hedera_config: Option<HederaConfig>,
     /// Session-scoped cache for query results (content is immutable by hash).
     query_cache: Arc<Mutex<HashMap<nodalync_crypto::Hash, String>>>,
+    /// x402 payment gate for HTTP 402 payment flow.
+    x402_gate: Arc<PaymentGate>,
 }
 
 #[tool_router]
@@ -365,11 +374,27 @@ impl NodalyncMcpServer {
         // Create budget tracker
         let budget = BudgetTracker::with_auto_approve(config.budget_hbar, config.auto_approve_hbar);
 
+        // Initialize x402 payment gate
+        let x402_gate = if let Some(ref x402_config) = config.x402 {
+            info!(
+                account_id = %x402_config.account_id,
+                network = %x402_config.network,
+                app_fee_percent = x402_config.app_fee_percent,
+                "x402 payment gate enabled"
+            );
+            Arc::new(PaymentGate::new(x402_config.clone()).map_err(|e| {
+                std::io::Error::other(format!("Failed to initialize x402 gate: {}", e))
+            })?)
+        } else {
+            Arc::new(PaymentGate::disabled())
+        };
+
         info!(
             budget_hbar = config.budget_hbar,
             auto_approve_hbar = config.auto_approve_hbar,
             network_enabled = config.enable_network,
             hedera_enabled = config.hedera.is_some(),
+            x402_enabled = config.x402.is_some(),
             "MCP server initialized"
         );
 
@@ -381,6 +406,7 @@ impl NodalyncMcpServer {
             settlement,
             hedera_config: config.hedera.clone(),
             query_cache: Arc::new(Mutex::new(HashMap::new())),
+            x402_gate,
         })
     }
 
@@ -542,6 +568,149 @@ impl NodalyncMcpServer {
 
         let price = preview.manifest.economics.price;
         let price_hbar = tinybars_to_hbar(price);
+
+        // === x402 PAYMENT FLOW ===
+        // When x402 is enabled and content has a price, handle the x402 payment protocol:
+        // 1. If no payment provided: return 402 Payment Required with payment requirements
+        // 2. If payment provided: validate via facilitator, settle, then deliver content
+        if price > 0 && self.x402_gate.is_enabled() {
+            if let Some(ref payment_header) = input.x402_payment {
+                // Client provided x402 payment — validate and settle
+                info!(
+                    hash = %hash_to_string(&hash),
+                    "Processing x402 payment for content query"
+                );
+
+                let content_hash_str = hash_to_string(&hash);
+                match self.x402_gate.process_payment(payment_header, &content_hash_str, price).await {
+                    Ok(payment_response) => {
+                        // Payment succeeded — deliver the content
+                        info!(
+                            hash = %content_hash_str,
+                            tx_hash = ?payment_response.tx_hash,
+                            "x402 payment verified and settled"
+                        );
+
+                        // Execute the query (no budget deduction needed — paid via x402)
+                        let response = match ops.query_content(&hash, price, None).await {
+                            Ok(r) => r,
+                            Err(e) => {
+                                return Ok(tool_error(&NodalyncMcpError::Ops(e)));
+                            }
+                        };
+
+                        let content_str = String::from_utf8_lossy(&response.content).to_string();
+                        let sources: Vec<String> = response
+                            .manifest
+                            .provenance
+                            .root_l0l1
+                            .iter()
+                            .map(|e| hash_to_string(&e.hash))
+                            .collect();
+
+                        let mut provenance: Vec<String> = sources.clone();
+                        for h in &response.manifest.provenance.derived_from {
+                            let h_str = hash_to_string(h);
+                            if !provenance.contains(&h_str) {
+                                provenance.push(h_str);
+                            }
+                        }
+
+                        // Build x402 payment details for the response
+                        let x402_payment_details = PaymentDetails {
+                            channel_opened: false,
+                            channel_id: None,
+                            channel_tx_id: None,
+                            deposit_tx_id: None,
+                            deposit_amount_hbar: None,
+                            provider_peer_id: preview.provider_peer_id.clone(),
+                            payment_receipt_id: payment_response.tx_hash.clone(),
+                            hedera_account_balance_hbar: None,
+                        };
+
+                        let output = QueryKnowledgeOutput {
+                            content: content_str,
+                            hash: hash_to_string(&response.manifest.hash),
+                            sources,
+                            provenance,
+                            cost_hbar: price_hbar,
+                            remaining_budget_hbar: self.budget.remaining_hbar(),
+                            payment: Some(x402_payment_details),
+                        };
+
+                        let json = serde_json::to_string_pretty(&output)
+                            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+                        // Cache the result
+                        {
+                            let mut cache = self.query_cache.lock().await;
+                            if cache.len() >= MAX_CACHE_ENTRIES {
+                                if let Some(key) = cache.keys().next().cloned() {
+                                    cache.remove(&key);
+                                }
+                            }
+                            cache.insert(hash, json.clone());
+                        }
+
+                        return Ok(CallToolResult::success(vec![Content::text(json)]));
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "x402 payment validation failed");
+                        return Ok(tool_error(&NodalyncMcpError::X402PaymentFailed {
+                            reason: e.to_string(),
+                        }));
+                    }
+                }
+            } else {
+                // No payment provided — return 402 Payment Required
+                let x402_config = self.x402_gate.config();
+                let total_tinybars = price + (price * x402_config.app_fee_percent as u64 / 100);
+                let total_hbar = tinybars_to_hbar(total_tinybars);
+
+                let content_hash_str = hash_to_string(&hash);
+                let title = preview.manifest.metadata.title.clone();
+                let description = preview.l1_summary.summary.clone();
+
+                let output = X402PaymentRequiredOutput {
+                    status: "payment_required".to_string(),
+                    x402_version: 1,
+                    content_hash: content_hash_str.clone(),
+                    title,
+                    description,
+                    price_hbar,
+                    total_required_hbar: total_hbar,
+                    app_fee_percent: x402_config.app_fee_percent,
+                    accepts: vec![X402PaymentRequirement {
+                        scheme: "exact".to_string(),
+                        network: x402_config.network.clone(),
+                        amount: total_tinybars.to_string(),
+                        asset: x402_config.asset.clone(),
+                        pay_to: x402_config.account_id.clone(),
+                        max_timeout_seconds: x402_config.max_timeout_seconds,
+                    }],
+                    instruction: format!(
+                        "Content requires payment. Retry query_knowledge with hash '{}' and \
+                         x402_payment field containing a base64-encoded x402 payment header.",
+                        content_hash_str
+                    ),
+                };
+
+                info!(
+                    hash = %content_hash_str,
+                    price_hbar = price_hbar,
+                    total_hbar = total_hbar,
+                    "Returning x402 payment required"
+                );
+
+                let json = serde_json::to_string_pretty(&output)
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+                // Return as a non-error result (the client needs to read and act on this)
+                return Ok(CallToolResult::success(vec![Content::text(json)]));
+            }
+        }
+
+        // === NATIVE PAYMENT CHANNEL FLOW (when x402 is disabled) ===
 
         // Check per-query budget limit
         let max_budget = input
@@ -2452,6 +2621,44 @@ impl NodalyncMcpServer {
 
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
+
+    /// Get x402 payment protocol status.
+    ///
+    /// Shows whether x402 is enabled, configuration details, and transaction statistics.
+    #[tool(
+        description = "Get x402 payment protocol status. Shows whether HTTP 402 micropayments \
+                       are enabled, the settlement network, facilitator endpoint, fee configuration, \
+                       and transaction statistics. x402 enables AI agents to pay for knowledge \
+                       access via the standard HTTP 402 Payment Required flow."
+    )]
+    async fn x402_status(&self) -> Result<CallToolResult, McpError> {
+        let gate_status = self.x402_gate.status().await;
+
+        let output = X402StatusOutput {
+            enabled: gate_status.enabled,
+            network: gate_status.network.clone(),
+            facilitator_url: gate_status.facilitator_url.clone(),
+            account_id: gate_status.account_id.clone(),
+            app_fee_percent: gate_status.app_fee_percent,
+            total_transactions: gate_status.total_transactions,
+            total_volume: gate_status.total_volume,
+            total_app_fees: gate_status.total_app_fees,
+            total_volume_hbar: tinybars_to_hbar(gate_status.total_volume),
+            total_app_fees_hbar: tinybars_to_hbar(gate_status.total_app_fees),
+        };
+
+        info!(
+            enabled = output.enabled,
+            transactions = output.total_transactions,
+            volume_hbar = output.total_volume_hbar,
+            "x402 status requested"
+        );
+
+        let json = serde_json::to_string_pretty(&output)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
 }
 
 /// Knowledge resource URI prefix.
@@ -2469,9 +2676,10 @@ impl rmcp::ServerHandler for NodalyncMcpServer {
             server_info: Implementation::from_build_env(),
             instructions: Some(
                 "Nodalync MCP Server - Query decentralized knowledge with automatic payments. \
-                 Use `list_sources` to discover available content, then `query_knowledge` \
-                 to retrieve content. You can also access content directly via `knowledge://{hash}` resources. \
-                 Payments are handled automatically within your session budget."
+                 Use `search_network` or `list_sources` to discover content, then `query_knowledge` \
+                 to retrieve it. Supports two payment modes: native payment channels (automatic) \
+                 and x402 HTTP micropayments (for external agents). Check `x402_status` for \
+                 payment protocol details. Access content directly via `knowledge://{hash}` resources."
                     .into(),
             ),
         }
@@ -2848,6 +3056,7 @@ mod tests {
             enable_network: false,
             bootstrap_nodes: vec![],
             hedera: None,
+            x402: None,
         }
     }
 
@@ -3100,5 +3309,238 @@ mod tests {
             _ => panic!("Expected text"),
         };
         assert_eq!(text1, text2, "Cached result should match original");
+    }
+
+    fn test_config_with_x402(temp_dir: &TempDir) -> McpServerConfig {
+        McpServerConfig {
+            budget_hbar: 1.0,
+            auto_approve_hbar: 0.01,
+            data_dir: temp_dir.path().to_path_buf(),
+            enable_network: false,
+            bootstrap_nodes: vec![],
+            hedera: None,
+            x402: Some(X402Config::testnet("0.0.7703962", 5)),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_x402_status_disabled() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = test_config(&temp_dir);
+
+        let server = NodalyncMcpServer::new(config).await.unwrap();
+        let result = server.x402_status().await.unwrap();
+
+        assert!(!result.is_error.unwrap_or(false));
+
+        if let Some(content) = result.content.first() {
+            if let RawContent::Text(RawTextContent { text, .. }) = &content.raw {
+                let json: serde_json::Value = serde_json::from_str(text).unwrap();
+                assert_eq!(json["enabled"], false);
+                assert_eq!(json["total_transactions"], 0);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_x402_status_enabled() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = test_config_with_x402(&temp_dir);
+
+        let server = NodalyncMcpServer::new(config).await.unwrap();
+        let result = server.x402_status().await.unwrap();
+
+        assert!(!result.is_error.unwrap_or(false));
+
+        if let Some(content) = result.content.first() {
+            if let RawContent::Text(RawTextContent { text, .. }) = &content.raw {
+                let json: serde_json::Value = serde_json::from_str(text).unwrap();
+                assert_eq!(json["enabled"], true);
+                assert_eq!(json["network"], "hedera:testnet");
+                assert_eq!(json["account_id"], "0.0.7703962");
+                assert_eq!(json["app_fee_percent"], 5);
+                assert_eq!(json["total_transactions"], 0);
+                assert_eq!(json["total_volume"], 0);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_x402_payment_required_for_paid_content() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = test_config_with_x402(&temp_dir);
+
+        let server = NodalyncMcpServer::new(config).await.unwrap();
+
+        // Publish paid content (0.01 HBAR per query)
+        let input: PublishContentInput = serde_json::from_str(
+            r#"{"title": "Paid Knowledge", "content": "This is premium knowledge content", "price_hbar": 0.01}"#,
+        ).unwrap();
+        let pub_result = server.publish_content(Parameters(input)).await.unwrap();
+        assert!(!pub_result.is_error.unwrap_or(false));
+
+        // Extract hash
+        let pub_text = match &pub_result.content[0].raw {
+            RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text content"),
+        };
+        let pub_json: serde_json::Value = serde_json::from_str(&pub_text).unwrap();
+        let hash_str = pub_json["hash"].as_str().unwrap().to_string();
+
+        // Query without x402_payment — should get payment_required response
+        let query_input: QueryKnowledgeInput = serde_json::from_str(
+            &format!(r#"{{"query": "{}"}}"#, hash_str),
+        ).unwrap();
+        let result = server.query_knowledge(Parameters(query_input)).await.unwrap();
+
+        // Should NOT be an error — it's a successful response with payment requirements
+        assert!(!result.is_error.unwrap_or(false));
+
+        if let Some(content) = result.content.first() {
+            if let RawContent::Text(RawTextContent { text, .. }) = &content.raw {
+                let json: serde_json::Value = serde_json::from_str(text).unwrap();
+
+                // Verify it's a payment required response
+                assert_eq!(json["status"], "payment_required");
+                assert_eq!(json["x402_version"], 1);
+                assert_eq!(json["content_hash"], hash_str);
+                assert_eq!(json["title"], "Paid Knowledge");
+                assert_eq!(json["app_fee_percent"], 5);
+
+                // Verify accepts array
+                let accepts = json["accepts"].as_array().unwrap();
+                assert_eq!(accepts.len(), 1);
+                assert_eq!(accepts[0]["scheme"], "exact");
+                assert_eq!(accepts[0]["network"], "hedera:testnet");
+                assert_eq!(accepts[0]["pay_to"], "0.0.7703962");
+                assert_eq!(accepts[0]["asset"], "HBAR");
+
+                // Verify amount: 0.01 HBAR = 1,000,000 tinybars + 5% = 1,050,000
+                let amount: u64 = accepts[0]["amount"].as_str().unwrap().parse().unwrap();
+                assert_eq!(amount, 1_050_000);
+
+                // Verify instruction mentions retry
+                assert!(json["instruction"].as_str().unwrap().contains("x402_payment"));
+            } else {
+                panic!("Expected text content");
+            }
+        } else {
+            panic!("Expected content in result");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_x402_free_content_bypasses_x402() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = test_config_with_x402(&temp_dir);
+
+        let server = NodalyncMcpServer::new(config).await.unwrap();
+
+        // Publish FREE content
+        let input: PublishContentInput = serde_json::from_str(
+            r#"{"title": "Free Knowledge", "content": "This is free knowledge for everyone", "price_hbar": 0.0}"#,
+        ).unwrap();
+        let pub_result = server.publish_content(Parameters(input)).await.unwrap();
+        assert!(!pub_result.is_error.unwrap_or(false));
+
+        let pub_text = match &pub_result.content[0].raw {
+            RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text content"),
+        };
+        let pub_json: serde_json::Value = serde_json::from_str(&pub_text).unwrap();
+        let hash_str = pub_json["hash"].as_str().unwrap().to_string();
+
+        // Query free content — should bypass x402 and return content directly
+        let query_input: QueryKnowledgeInput = serde_json::from_str(
+            &format!(r#"{{"query": "{}"}}"#, hash_str),
+        ).unwrap();
+        let result = server.query_knowledge(Parameters(query_input)).await.unwrap();
+
+        assert!(!result.is_error.unwrap_or(false));
+
+        if let Some(content) = result.content.first() {
+            if let RawContent::Text(RawTextContent { text, .. }) = &content.raw {
+                let json: serde_json::Value = serde_json::from_str(text).unwrap();
+
+                // Should be actual content, NOT a payment_required response
+                assert!(json.get("status").is_none(), "Free content should not return payment_required");
+                assert_eq!(json["content"], "This is free knowledge for everyone");
+                assert_eq!(json["cost_hbar"], 0.0);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_x402_invalid_payment_rejected() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = test_config_with_x402(&temp_dir);
+
+        let server = NodalyncMcpServer::new(config).await.unwrap();
+
+        // Publish paid content
+        let input: PublishContentInput = serde_json::from_str(
+            r#"{"title": "Premium", "content": "Premium content", "price_hbar": 0.01}"#,
+        ).unwrap();
+        let pub_result = server.publish_content(Parameters(input)).await.unwrap();
+        let pub_text = match &pub_result.content[0].raw {
+            RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text content"),
+        };
+        let pub_json: serde_json::Value = serde_json::from_str(&pub_text).unwrap();
+        let hash_str = pub_json["hash"].as_str().unwrap().to_string();
+
+        // Query with garbage x402_payment — should fail with payment error
+        let query_input: QueryKnowledgeInput = serde_json::from_str(
+            &format!(r#"{{"query": "{}", "x402_payment": "not-valid-base64-!!!"}}"#, hash_str),
+        ).unwrap();
+        let result = server.query_knowledge(Parameters(query_input)).await.unwrap();
+
+        // Should be an error
+        assert!(result.is_error.unwrap_or(false));
+
+        if let Some(content) = result.content.first() {
+            if let RawContent::Text(RawTextContent { text, .. }) = &content.raw {
+                let json: serde_json::Value = serde_json::from_str(text).unwrap();
+                assert_eq!(json["error"], "PAYMENT_INVALID");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_x402_disabled_paid_content_uses_native_flow() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = test_config(&temp_dir); // No x402
+
+        let server = NodalyncMcpServer::new(config).await.unwrap();
+
+        // Publish paid content
+        let input: PublishContentInput = serde_json::from_str(
+            r#"{"title": "Native Paid", "content": "Content via native payment channels", "price_hbar": 0.01}"#,
+        ).unwrap();
+        let pub_result = server.publish_content(Parameters(input)).await.unwrap();
+        let pub_text = match &pub_result.content[0].raw {
+            RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text content"),
+        };
+        let pub_json: serde_json::Value = serde_json::from_str(&pub_text).unwrap();
+        let hash_str = pub_json["hash"].as_str().unwrap().to_string();
+
+        // Query paid content without x402 — should use native flow (budget check)
+        let query_input: QueryKnowledgeInput = serde_json::from_str(
+            &format!(r#"{{"query": "{}"}}"#, hash_str),
+        ).unwrap();
+        let result = server.query_knowledge(Parameters(query_input)).await.unwrap();
+
+        // Should return content (budget check passes, native payment channel flow)
+        assert!(!result.is_error.unwrap_or(false));
+
+        if let Some(content) = result.content.first() {
+            if let RawContent::Text(RawTextContent { text, .. }) = &content.raw {
+                let json: serde_json::Value = serde_json::from_str(text).unwrap();
+                // Native flow delivers content directly
+                assert_eq!(json["content"], "Content via native payment channels");
+                assert!(json.get("status").is_none(), "Should not be payment_required");
+            }
+        }
     }
 }
