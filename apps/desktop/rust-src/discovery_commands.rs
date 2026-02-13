@@ -8,6 +8,7 @@
 //! - Unpublish
 //! - Version history
 
+use std::sync::Arc;
 use nodalync_crypto::Hash;
 use nodalync_types::ContentType;
 use serde::{Deserialize, Serialize};
@@ -110,7 +111,7 @@ pub async fn search_network(
     query: String,
     content_type: Option<String>,
     limit: Option<u32>,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<Vec<SearchResult>, String> {
     let mut guard = protocol.lock().await;
     let state = guard
@@ -163,7 +164,7 @@ pub async fn search_network(
 #[tauri::command]
 pub async fn preview_content(
     hash: String,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<PreviewResult, String> {
     let mut guard = protocol.lock().await;
     let state = guard
@@ -205,7 +206,7 @@ pub async fn preview_content(
 pub async fn query_content(
     hash: String,
     payment_amount: Option<f64>,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<QueryResult, String> {
     let mut guard = protocol.lock().await;
     let state = guard
@@ -279,7 +280,7 @@ pub async fn query_content(
 #[tauri::command]
 pub async fn unpublish_content(
     hash: String,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<(), String> {
     let mut guard = protocol.lock().await;
     let state = guard
@@ -306,7 +307,7 @@ pub async fn unpublish_content(
 #[tauri::command]
 pub async fn get_content_versions(
     hash: String,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<Vec<VersionItem>, String> {
     let guard = protocol.lock().await;
     let state = guard
