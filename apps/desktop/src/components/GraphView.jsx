@@ -1,18 +1,26 @@
 import { useRef, useEffect, useCallback } from "react";
 import * as d3 from "d3";
-import { getEntityColor, GRAPH_CONFIG } from "../lib/constants";
+import { getEntityColor, getEdgeColor, getEdgeHighlightColor, GRAPH_CONFIG } from "../lib/constants";
 
-const { BG_COLOR, LINK_COLOR, LINK_HOVER_COLOR, LABEL_COLOR, LABEL_DIM_COLOR, LINK_LABEL_THRESHOLD } = GRAPH_CONFIG;
+const {
+  BG_COLOR, LINK_COLOR, LINK_HOVER_COLOR, LINK_DIM_COLOR,
+  LABEL_COLOR, LABEL_DIM_COLOR, LINK_LABEL_THRESHOLD,
+  MIN_LINK_WIDTH, MAX_LINK_WIDTH,
+} = GRAPH_CONFIG;
 
 function getRadius(node) {
-  // Scale by source_count: min 4, max 20
   const base = Math.max(4, Math.min(20, 4 + (node.source_count || 1) * 2));
   return base;
 }
 
 function getOpacity(node) {
-  // Fresher (higher source_count) nodes are more opaque
   return 0.5 + Math.min(0.5, (node.source_count || 1) * 0.05);
+}
+
+function getLinkWidth(link) {
+  // Scale by confidence: min 1px, max 3px
+  const conf = link.confidence || 0.5;
+  return Math.max(MIN_LINK_WIDTH, Math.min(MAX_LINK_WIDTH, conf * 3));
 }
 
 export default function GraphView({ data, onNodeClick, selectedEntity }) {
@@ -36,7 +44,7 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
     // Clear previous
     svg.selectAll("*").remove();
 
-    // Background gradient (subtle radial)
+    // Defs
     const defs = svg.append("defs");
 
     // Radial gradient for ambient glow in center
@@ -74,6 +82,18 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
     feMerge.append("feMergeNode").attr("in", "blur");
     feMerge.append("feMergeNode").attr("in", "SourceGraphic");
 
+    // Edge glow filter — subtle bloom on edges
+    const edgeGlow = defs.append("filter")
+      .attr("id", "edge-glow")
+      .attr("x", "-20%").attr("y", "-20%")
+      .attr("width", "140%").attr("height", "140%");
+    edgeGlow.append("feGaussianBlur")
+      .attr("stdDeviation", "2")
+      .attr("result", "blur");
+    const edgeMerge = edgeGlow.append("feMerge");
+    edgeMerge.append("feMergeNode").attr("in", "blur");
+    edgeMerge.append("feMergeNode").attr("in", "SourceGraphic");
+
     // Container for zoom
     const g = svg.append("g");
 
@@ -108,14 +128,30 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
 
     simulationRef.current = simulation;
 
-    // Links
-    const link = g
+    // ── Edge rendering ──
+    // Glow layer (behind) — gives edges a soft bloom
+    const linkGlow = g
       .append("g")
+      .attr("class", "link-glow-layer")
       .selectAll("line")
       .data(links)
       .join("line")
-      .attr("stroke", LINK_COLOR)
-      .attr("stroke-width", (d) => Math.max(0.5, (d.confidence || 0.5) * 1.5));
+      .attr("stroke", (d) => getEdgeColor(d.predicate))
+      .attr("stroke-width", (d) => getLinkWidth(d) + 2)
+      .attr("stroke-opacity", 0.3)
+      .attr("stroke-linecap", "round");
+
+    // Primary edge lines
+    const link = g
+      .append("g")
+      .attr("class", "link-layer")
+      .selectAll("line")
+      .data(links)
+      .join("line")
+      .attr("stroke", (d) => getEdgeColor(d.predicate))
+      .attr("stroke-width", (d) => getLinkWidth(d))
+      .attr("stroke-linecap", "round")
+      .attr("stroke-opacity", 1);
 
     // Link labels — only for small graphs
     let linkLabel;
@@ -164,11 +200,43 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
           .attr("stroke", getEntityColor(d.entity_type))
           .attr("stroke-opacity", 0.5)
           .attr("filter", "url(#node-glow)");
-        // Highlight connected links
-        link.attr("stroke", (l) =>
-          l.source.id === d.id || l.target.id === d.id
-            ? LINK_HOVER_COLOR
-            : LINK_COLOR
+
+        // Highlight connected edges — brighten them, dim others
+        const connectedNodeIds = new Set();
+        connectedNodeIds.add(d.id);
+
+        link
+          .attr("stroke", (l) => {
+            const connected = l.source.id === d.id || l.target.id === d.id;
+            if (connected) {
+              connectedNodeIds.add(l.source.id);
+              connectedNodeIds.add(l.target.id);
+              return getEdgeHighlightColor(l.predicate);
+            }
+            return LINK_DIM_COLOR;
+          })
+          .attr("stroke-width", (l) => {
+            const connected = l.source.id === d.id || l.target.id === d.id;
+            return connected ? getLinkWidth(l) + 1 : getLinkWidth(l) * 0.5;
+          })
+          .attr("stroke-opacity", (l) => {
+            const connected = l.source.id === d.id || l.target.id === d.id;
+            return connected ? 1 : 0.3;
+          });
+
+        // Also highlight the glow layer
+        linkGlow
+          .attr("stroke-opacity", (l) => {
+            const connected = l.source.id === d.id || l.target.id === d.id;
+            return connected ? 0.5 : 0;
+          });
+
+        // Dim unconnected nodes
+        node.attr("fill-opacity", (n) =>
+          connectedNodeIds.has(n.id) ? getOpacity(n) : getOpacity(n) * 0.3
+        );
+        label.attr("fill-opacity", (n) =>
+          connectedNodeIds.has(n.id) ? 1 : 0.2
         );
       })
       .on("mouseout", function (event, d) {
@@ -177,7 +245,19 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
           .attr("stroke", isSelected ? "#fff" : "transparent")
           .attr("stroke-opacity", isSelected ? 0.3 : 0)
           .attr("filter", isSelected ? "url(#node-glow)" : null);
-        link.attr("stroke", LINK_COLOR);
+
+        // Reset all edges to default
+        link
+          .attr("stroke", (l) => getEdgeColor(l.predicate))
+          .attr("stroke-width", (l) => getLinkWidth(l))
+          .attr("stroke-opacity", 1);
+
+        linkGlow
+          .attr("stroke-opacity", 0.3);
+
+        // Reset node opacity
+        node.attr("fill-opacity", (n) => getOpacity(n));
+        label.attr("fill-opacity", 1);
       })
       .call(drag(simulation));
 
@@ -223,6 +303,12 @@ export default function GraphView({ data, onNodeClick, selectedEntity }) {
 
     // Tick
     simulation.on("tick", () => {
+      linkGlow
+        .attr("x1", (d) => d.source.x)
+        .attr("y1", (d) => d.source.y)
+        .attr("x2", (d) => d.target.x)
+        .attr("y2", (d) => d.target.y);
+
       link
         .attr("x1", (d) => d.source.x)
         .attr("y1", (d) => d.source.y)

@@ -125,6 +125,8 @@ fn main() {
             add_known_peer,
             // Network maintenance
             reannounce_content,
+            // NAT traversal status
+            get_nat_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

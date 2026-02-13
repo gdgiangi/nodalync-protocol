@@ -5,12 +5,12 @@
 
 use crate::behaviour::{NodalyncBehaviour, NodalyncBehaviourEvent};
 use crate::codec::{NodalyncRequest, NodalyncResponse};
-use crate::config::NetworkConfig;
+use crate::config::{NatTraversal, NetworkConfig};
 use crate::error::{NetworkError, NetworkResult};
-use crate::event::NetworkEvent;
+use crate::event::{NatStatus, NetworkEvent};
 use crate::peer_id::PeerIdMapper;
 use crate::traits::Network;
-use crate::transport::build_transport;
+use crate::transport::{build_transport, build_transport_with_relay};
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -45,6 +45,7 @@ struct SwarmContext {
     connected_peers: Arc<StdRwLock<std::collections::HashSet<PeerId>>>,
     listen_addrs: Arc<StdRwLock<Vec<Multiaddr>>>,
     gossip_topic: String,
+    nat_status: Arc<StdRwLock<NatStatus>>,
 }
 
 /// Commands sent to the swarm task.
@@ -169,12 +170,20 @@ pub struct NetworkNode {
     /// GossipSub topic for announcements.
     #[allow(dead_code)]
     announce_topic: IdentTopic,
+
+    /// Current NAT status (updated by AutoNAT).
+    nat_status: Arc<StdRwLock<NatStatus>>,
 }
 
 impl NetworkNode {
     /// Create a new network node.
     ///
     /// This starts the swarm task in the background.
+    /// When NAT traversal is enabled (default), the node will automatically:
+    /// - Use UPnP to map ports on the router
+    /// - Detect NAT status via AutoNAT probes
+    /// - Use relay nodes for inbound connections if behind NAT
+    /// - Attempt DCUtR hole-punching to upgrade relayed connections
     pub async fn new(config: NetworkConfig) -> NetworkResult<Self> {
         // Generate identity
         let (private_key, public_key) = generate_identity();
@@ -186,11 +195,27 @@ impl NetworkNode {
 
         info!("Creating network node with peer ID: {}", local_peer_id);
 
-        // Build transport
-        let transport = build_transport(&keypair, config.idle_connection_timeout);
+        // Build transport + behaviour based on NAT traversal config
+        let use_relay = matches!(
+            config.nat_traversal,
+            NatTraversal::Full | NatTraversal::RelayOnly
+        );
 
-        // Build behaviour
-        let behaviour = NodalyncBehaviour::with_keypair(local_peer_id, &keypair, &config);
+        let (transport, behaviour) = if use_relay {
+            let (transport, relay_behaviour) =
+                build_transport_with_relay(&keypair, config.idle_connection_timeout);
+            let behaviour = NodalyncBehaviour::with_keypair_and_relay(
+                local_peer_id,
+                &keypair,
+                &config,
+                relay_behaviour,
+            );
+            (transport, behaviour)
+        } else {
+            let transport = build_transport(&keypair, config.idle_connection_timeout);
+            let behaviour = NodalyncBehaviour::with_keypair(local_peer_id, &keypair, &config);
+            (transport, behaviour)
+        };
 
         // Build swarm
         let swarm_config = libp2p::swarm::Config::with_tokio_executor()
@@ -222,6 +247,8 @@ impl NetworkNode {
         let connected_peers_clone = connected_peers_set.clone();
         let listen_addrs = Arc::new(StdRwLock::new(Vec::new()));
         let listen_addrs_clone = listen_addrs.clone();
+        let nat_status = Arc::new(StdRwLock::new(NatStatus::Unknown));
+        let nat_status_clone = nat_status.clone();
 
         // Subscribe to the announcement topic
         let announce_topic = IdentTopic::new(&config.gossipsub_topic);
@@ -233,6 +260,7 @@ impl NetworkNode {
             connected_peers: connected_peers_clone,
             listen_addrs: listen_addrs_clone,
             gossip_topic,
+            nat_status: nat_status_clone,
         };
         tokio::spawn(async move {
             run_swarm(swarm, command_rx, event_tx, swarm_ctx).await;
@@ -250,6 +278,7 @@ impl NetworkNode {
             pending_requests,
             config,
             announce_topic,
+            nat_status,
         })
     }
 
@@ -265,11 +294,27 @@ impl NetworkNode {
 
         info!("Creating network node with peer ID: {}", local_peer_id);
 
-        // Build transport
-        let transport = build_transport(&keypair, config.idle_connection_timeout);
+        // Build transport + behaviour based on NAT traversal config
+        let use_relay = matches!(
+            config.nat_traversal,
+            NatTraversal::Full | NatTraversal::RelayOnly
+        );
 
-        // Build behaviour
-        let behaviour = NodalyncBehaviour::with_keypair(local_peer_id, &keypair, &config);
+        let (transport, behaviour) = if use_relay {
+            let (transport, relay_behaviour) =
+                build_transport_with_relay(&keypair, config.idle_connection_timeout);
+            let behaviour = NodalyncBehaviour::with_keypair_and_relay(
+                local_peer_id,
+                &keypair,
+                &config,
+                relay_behaviour,
+            );
+            (transport, behaviour)
+        } else {
+            let transport = build_transport(&keypair, config.idle_connection_timeout);
+            let behaviour = NodalyncBehaviour::with_keypair(local_peer_id, &keypair, &config);
+            (transport, behaviour)
+        };
 
         // Build swarm
         let swarm_config = libp2p::swarm::Config::with_tokio_executor()
@@ -301,6 +346,8 @@ impl NetworkNode {
         let connected_peers_clone = connected_peers_set.clone();
         let listen_addrs = Arc::new(StdRwLock::new(Vec::new()));
         let listen_addrs_clone = listen_addrs.clone();
+        let nat_status = Arc::new(StdRwLock::new(NatStatus::Unknown));
+        let nat_status_clone = nat_status.clone();
 
         let announce_topic = IdentTopic::new(&config.gossipsub_topic);
 
@@ -311,6 +358,7 @@ impl NetworkNode {
             connected_peers: connected_peers_clone,
             listen_addrs: listen_addrs_clone,
             gossip_topic,
+            nat_status: nat_status_clone,
         };
         tokio::spawn(async move {
             run_swarm(swarm, command_rx, event_tx, swarm_ctx).await;
@@ -328,6 +376,7 @@ impl NetworkNode {
             pending_requests,
             config,
             announce_topic,
+            nat_status,
         })
     }
 
@@ -418,6 +467,14 @@ impl NetworkNode {
             .map_err(|_| NetworkError::ChannelClosed)?;
 
         rx.await.map_err(|_| NetworkError::ChannelClosed)?
+    }
+
+    /// Get the current NAT status as detected by AutoNAT.
+    pub fn nat_status(&self) -> NatStatus {
+        self.nat_status
+            .read()
+            .map(|s| s.clone())
+            .unwrap_or(NatStatus::Unknown)
     }
 
     /// Send a request with retry logic.
@@ -837,6 +894,22 @@ async fn run_swarm(
                         handle_mdns_event(mdns_event, &mut swarm, &event_tx).await;
                     }
 
+                    SwarmEvent::Behaviour(NodalyncBehaviourEvent::Autonat(autonat_event)) => {
+                        handle_autonat_event(autonat_event, &ctx.nat_status, &event_tx).await;
+                    }
+
+                    SwarmEvent::Behaviour(NodalyncBehaviourEvent::RelayClient(relay_event)) => {
+                        handle_relay_client_event(relay_event, &event_tx).await;
+                    }
+
+                    SwarmEvent::Behaviour(NodalyncBehaviourEvent::Dcutr(dcutr_event)) => {
+                        handle_dcutr_event(dcutr_event, &event_tx).await;
+                    }
+
+                    SwarmEvent::Behaviour(NodalyncBehaviourEvent::Upnp(upnp_event)) => {
+                        handle_upnp_event(upnp_event, &event_tx).await;
+                    }
+
                     SwarmEvent::ConnectionEstablished { peer_id, num_established, .. } => {
                         debug!("Connection established with {} (total: {})", peer_id, num_established);
                         // Track connected peer
@@ -1195,6 +1268,119 @@ fn handle_ping_event(event: libp2p::ping::Event) {
         }
         Err(e) => {
             debug!("Ping to {} failed: {}", event.peer, e);
+        }
+    }
+}
+
+/// Handle AutoNAT events — detect NAT status.
+async fn handle_autonat_event(
+    event: libp2p::autonat::Event,
+    nat_status: &Arc<StdRwLock<NatStatus>>,
+    event_tx: &mpsc::Sender<NetworkEvent>,
+) {
+    match event {
+        libp2p::autonat::Event::StatusChanged { old, new } => {
+            let status = match new {
+                libp2p::autonat::NatStatus::Public(_) => {
+                    info!("AutoNAT: node is publicly reachable");
+                    NatStatus::Public
+                }
+                libp2p::autonat::NatStatus::Private => {
+                    info!("AutoNAT: node is behind NAT (private)");
+                    NatStatus::Private
+                }
+                libp2p::autonat::NatStatus::Unknown => {
+                    debug!("AutoNAT: status unknown");
+                    NatStatus::Unknown
+                }
+            };
+            // Update shared state
+            if let Ok(mut s) = nat_status.write() {
+                *s = status.clone();
+            }
+            let _ = event_tx
+                .send(NetworkEvent::NatStatusChanged { status })
+                .await;
+            debug!("AutoNAT: status changed from {:?} to {:?}", old, new);
+        }
+        libp2p::autonat::Event::InboundProbe(probe) => {
+            debug!("AutoNAT: inbound probe: {:?}", probe);
+        }
+        libp2p::autonat::Event::OutboundProbe(probe) => {
+            debug!("AutoNAT: outbound probe: {:?}", probe);
+        }
+    }
+}
+
+/// Handle relay client events — track relay reservations.
+async fn handle_relay_client_event(
+    event: libp2p::relay::client::Event,
+    event_tx: &mpsc::Sender<NetworkEvent>,
+) {
+    match event {
+        libp2p::relay::client::Event::ReservationReqAccepted {
+            relay_peer_id,
+            renewal,
+            ..
+        } => {
+            if renewal {
+                debug!("Relay: reservation renewed with {}", relay_peer_id);
+            } else {
+                info!("Relay: reservation accepted by {}", relay_peer_id);
+                let _ = event_tx
+                    .send(NetworkEvent::RelayReservation {
+                        relay: relay_peer_id,
+                    })
+                    .await;
+            }
+        }
+        libp2p::relay::client::Event::OutboundCircuitEstablished { relay_peer_id, .. } => {
+            info!("Relay: outbound circuit established via {}", relay_peer_id);
+        }
+        libp2p::relay::client::Event::InboundCircuitEstablished { src_peer_id, .. } => {
+            info!("Relay: inbound circuit established from {}", src_peer_id);
+        }
+    }
+}
+
+/// Handle DCUtR events — direct connection upgrade through relay.
+async fn handle_dcutr_event(event: libp2p::dcutr::Event, event_tx: &mpsc::Sender<NetworkEvent>) {
+    // dcutr::Event is a struct with { remote_peer_id, result }
+    match event.result {
+        Ok(_connection_id) => {
+            info!("DCUtR: hole-punch succeeded with {}", event.remote_peer_id);
+            let _ = event_tx
+                .send(NetworkEvent::HolePunched {
+                    peer: event.remote_peer_id,
+                })
+                .await;
+        }
+        Err(e) => {
+            debug!(
+                "DCUtR: hole-punch failed with {}: {}",
+                event.remote_peer_id, e
+            );
+        }
+    }
+}
+
+/// Handle UPnP events — automatic port mapping.
+async fn handle_upnp_event(event: libp2p::upnp::Event, event_tx: &mpsc::Sender<NetworkEvent>) {
+    match event {
+        libp2p::upnp::Event::NewExternalAddr(addr) => {
+            info!("UPnP: mapped external address {}", addr);
+            let _ = event_tx
+                .send(NetworkEvent::UpnpMapped { address: addr })
+                .await;
+        }
+        libp2p::upnp::Event::GatewayNotFound => {
+            debug!("UPnP: no gateway found (router may not support UPnP)");
+        }
+        libp2p::upnp::Event::NonRoutableGateway => {
+            debug!("UPnP: gateway is not routable (may be double-NAT)");
+        }
+        libp2p::upnp::Event::ExpiredExternalAddr(addr) => {
+            debug!("UPnP: external address mapping expired: {}", addr);
         }
     }
 }
