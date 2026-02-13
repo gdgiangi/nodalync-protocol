@@ -170,6 +170,7 @@ impl ProtocolState {
     /// Start the P2P network layer.
     ///
     /// Configures libp2p with TCP+Noise+Yamux, Kademlia DHT, and GossipSub.
+    /// Uses the node's identity for a stable PeerId across restarts.
     pub async fn start_network(&mut self) -> Result<(), ProtocolError> {
         if self.network.is_some() {
             warn!("Network already running");
@@ -177,7 +178,13 @@ impl ProtocolState {
         }
 
         info!("Starting P2P network...");
-        let config = NetworkConfig::default();
+        let mut config = NetworkConfig::default();
+
+        // Use the node's identity for stable PeerId
+        if let Some(key) = self.ops.private_key() {
+            config = config.with_identity_secret(*key.as_bytes());
+        }
+
         let node = NetworkNode::new(config)
             .await
             .map_err(|e| ProtocolError::Network(format!("Failed to create network node: {}", e)))?;

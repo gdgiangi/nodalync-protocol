@@ -370,17 +370,49 @@ Get a snapshot of network health from the background health monitor.
 
 ---
 
+## Peer Persistence Commands
+
+### `save_known_peers`
+Save currently connected peers to disk for reconnection on restart.
+- **Args:** none
+- **Returns:** `number` — count of peers saved
+- Called automatically on network stop and app shutdown.
+
+### `get_known_peers`
+Get the list of known peers from the persistent store.
+- **Args:** none
+- **Returns:** `KnownPeerInfo[]`
+  ```typescript
+  {
+    peer_id: string,
+    addresses: string[],
+    nodalync_id: string | null,
+    last_seen: string,       // ISO-8601
+    connection_count: number,
+    manual: boolean
+  }
+  ```
+
+### `add_known_peer`
+Add a peer manually to the known peers store.
+- **Args:** `{ peer_id: string, address: string }`
+- **Returns:** `void`
+- The peer will be used as a bootstrap node on next network start.
+
+---
+
 ## Notes for Frontend
 
 1. **Startup flow:** `check_identity` → if false: show onboarding → `init_node(password, name)`; if true: show password → `unlock_node`
-2. **After unlock:** `get_identity` for profile display, then `auto_start_network` (recommended — loads known peers + mDNS + spawns health monitor)
-3. **Publish flow:** `publish_file`/`publish_text` → `extract_mentions(hash)` to populate L2 graph
-4. **Query flow:** `get_fee_quote(price)` to show breakdown → `query_content(hash, amount)` — fee is auto-recorded
-5. **Fee dashboard:** `get_fee_config` for summary, `get_transaction_history` for details, `set_fee_rate` to configure
-6. **L3 synthesis:** Select entities in graph → `create_l3_summary(title, text, ids)` → new L3 node appears with `synthesizes` edges. List all with `get_l3_summaries`.
-7. **Entity drill-down:** `get_entity_content_links(entity_id)` → shows which L0 content contributed to this entity. Combined with `get_subgraph`, this powers the full L0→L1→L2→L3 hierarchy view.
-8. **Price values:** Frontend sends NDL (e.g. 0.001), backend converts to tinybars internally
-9. **Hash format:** Always 64-char lowercase hex strings
-10. **Error handling:** All commands return `Result<T, String>` — errors are human-readable strings
-11. **NAT traversal:** Enabled by default (AutoNAT + UPnP + Relay + DCUtR). Use `get_nat_status` to display connectivity status. Most desktop users are behind NAT — the protocol automatically handles relay fallback and hole-punching.
-12. **Network health:** Poll `get_network_health` every 10-30s for the network status indicator. The background health monitor (spawned by `auto_start_network`) handles auto-reconnect, peer saves, and health classification. `stop_network` automatically saves peers and shuts down the monitor.
+2. **After unlock:** `get_identity` for profile display, then `auto_start_network` (recommended — loads known peers + mDNS + stable identity + spawns health monitor)
+3. **Stable PeerId:** The network now derives its libp2p PeerId from the node's Nodalync identity. PeerId persists across restarts. Display it in the profile as the node's network address.
+4. **Publish flow:** `publish_file`/`publish_text` → `extract_mentions(hash)` to populate L2 graph
+5. **Query flow:** `get_fee_quote(price)` to show breakdown → `query_content(hash, amount)` — fee is auto-recorded
+6. **Fee dashboard:** `get_fee_config` for summary, `get_transaction_history` for details, `set_fee_rate` to configure
+7. **L3 synthesis:** Select entities in graph → `create_l3_summary(title, text, ids)` → new L3 node appears with `synthesizes` edges. List all with `get_l3_summaries`.
+8. **Entity drill-down:** `get_entity_content_links(entity_id)` → shows which L0 content contributed to this entity. Combined with `get_subgraph`, this powers the full L0→L1→L2→L3 hierarchy view.
+9. **Price values:** Frontend sends NDL (e.g. 0.001), backend converts to tinybars internally
+10. **Hash format:** Always 64-char lowercase hex strings
+11. **Error handling:** All commands return `Result<T, String>` — errors are human-readable strings
+12. **NAT traversal:** Enabled by default (AutoNAT + UPnP + Relay + DCUtR). Use `get_nat_status` to display connectivity status. Most desktop users are behind NAT — the protocol automatically handles relay fallback and hole-punching.
+13. **Network health:** Poll `get_network_health` every 10-30s for the network status indicator. The background health monitor (spawned by `auto_start_network`) handles auto-reconnect, peer saves, and health classification. `stop_network` automatically saves peers and shuts down the monitor.
