@@ -183,8 +183,7 @@ where
         };
 
         // List all Shared content we own
-        let filter = nodalync_store::ManifestFilter::new()
-            .with_visibility(Visibility::Shared);
+        let filter = nodalync_store::ManifestFilter::new().with_visibility(Visibility::Shared);
         let manifests = self.state.manifests.list(filter)?;
 
         let my_peer_id = self.peer_id();
