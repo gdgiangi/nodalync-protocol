@@ -137,10 +137,13 @@ Preview metadata + L1 summary without retrieving full content.
 - **Returns:** `{ hash, title, content_type, size, price, visibility, owner, mention_count, primary_topics, summary, version, provider_peer_id? }`
 
 ### `query_content`
-Retrieve full content with payment.
+Retrieve full content with payment. Automatically applies app fee.
 - **Args:** `{ hash: string, payment_amount?: number }` (price in NDL, e.g. 0.001)
-- **Returns:** `{ hash, title, content_type, content_text?, content_size, price_paid, receipt_id }`
+- **Returns:** `{ hash, title, content_type, content_text?, content_size, price_paid, app_fee, total_cost, receipt_id, transaction_id? }`
 - **`content_text`** is `null` for binary content.
+- **`app_fee`** is the Studio application fee (tinybars). See `get_fee_config` to check rate.
+- **`total_cost`** = `price_paid` + `app_fee`
+- **`transaction_id`** is the UUID in the transaction log. Use with `get_transaction_history`.
 
 ### `get_content_versions`
 Get version history for a content item.
@@ -190,11 +193,90 @@ Manually connect to a peer by multiaddress.
 
 ---
 
+## Fee Commands (D2 — Application-Level Fee)
+
+### `get_fee_config`
+Get current fee configuration and summary stats.
+- **Args:** none
+- **Returns:**
+  ```typescript
+  {
+    rate_percent: number,      // e.g. 5.0 for 5%
+    rate: number,              // e.g. 0.05
+    total_collected: number,   // tinybars
+    total_collected_hbar: number, // HBAR (display-friendly)
+    transaction_count: number,
+    avg_fee_per_transaction: number, // tinybars
+    updated_at: string         // ISO-8601
+  }
+  ```
+- Works even before node unlock (reads from disk).
+
+### `set_fee_rate`
+Set the application fee rate.
+- **Args:** `{ rate_percent: number }` (e.g. 5.0 for 5%)
+- **Validation:** 0% to 50%
+- **Returns:** `FeeConfigResponse` (same as `get_fee_config`)
+
+### `get_transaction_history`
+Get transaction history with fee breakdown.
+- **Args:** `{ limit?: number, offset?: number }`
+- **Default limit:** 50, **max:** 500
+- **Returns:**
+  ```typescript
+  {
+    transactions: TransactionRecord[],
+    total_count: number,
+    total_content_cost: number,   // tinybars
+    total_app_fees: number,       // tinybars
+    total_amount: number,         // tinybars
+    total_amount_hbar: number,
+    total_app_fees_hbar: number
+  }
+  ```
+- **`TransactionRecord`:**
+  ```typescript
+  {
+    id: string,                // UUID
+    content_hash: string,
+    content_title: string,
+    content_cost: number,      // what the creator charges (tinybars)
+    app_fee: number,           // Studio's cut (tinybars)
+    total: number,             // content_cost + app_fee
+    fee_rate: number,          // rate at time of transaction
+    recipient: string,         // peer ID
+    status: "Pending"|"Settled"|"Failed"|"Free",
+    created_at: string         // ISO-8601
+  }
+  ```
+- Transactions are returned newest-first.
+
+### `get_fee_quote`
+Preview the fee breakdown before querying content.
+- **Args:** `{ content_price: number }` (tinybars)
+- **Returns:**
+  ```typescript
+  {
+    content_cost: number,
+    app_fee: number,
+    total: number,
+    fee_rate_percent: number,
+    content_cost_hbar: number,
+    app_fee_hbar: number,
+    total_hbar: number
+  }
+  ```
+- Call this before `query_content` to show the user the full cost.
+
+---
+
 ## Notes for Frontend
 
 1. **Startup flow:** `check_identity` → if false: show onboarding → `init_node(password, name)`; if true: show password → `unlock_node`
 2. **After unlock:** `get_identity` for profile display, then `start_network_configured` (or `start_network` for quick start)
 3. **Publish flow:** `publish_file`/`publish_text` → `extract_mentions(hash)` to populate L2 graph
-4. **Price values:** Frontend sends NDL (e.g. 0.001), backend converts to tinybars internally
-4. **Hash format:** Always 64-char lowercase hex strings
-5. **Error handling:** All commands return `Result<T, String>` — errors are human-readable strings
+4. **Query flow:** `get_fee_quote(price)` to show breakdown → `query_content(hash, amount)` — fee is auto-recorded
+5. **Fee dashboard:** `get_fee_config` for summary, `get_transaction_history` for details, `set_fee_rate` to configure
+6. **Price values:** Frontend sends NDL (e.g. 0.001), backend converts to tinybars internally
+7. **Hash format:** Always 64-char lowercase hex strings
+8. **Error handling:** All commands return `Result<T, String>` — errors are human-readable strings
