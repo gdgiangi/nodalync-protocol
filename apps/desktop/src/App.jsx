@@ -6,6 +6,7 @@ import StatsBar from "./components/StatsBar";
 import SearchBar from "./components/SearchBar";
 import EntityDetailPanel from "./components/EntityDetailPanel";
 import CreateContentDialog from "./components/CreateContentDialog";
+import CommandPalette from "./components/CommandPalette";
 
 function App() {
   const [graphData, setGraphData] = useState({ nodes: [], links: [] });
@@ -16,6 +17,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState("full"); // 'full' or 'subgraph'
   const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   // Load full graph on mount
   useEffect(() => {
@@ -113,21 +115,51 @@ function App() {
     }, 2000);
   }
 
+  // Command palette action handler
+  function handlePaletteAction(actionId) {
+    switch (actionId) {
+      case "action:full-graph":
+        loadFullGraph();
+        break;
+      case "action:new-content":
+        setShowCreateDialog(true);
+        break;
+      case "action:toggle-sidebar":
+        // Sidebar toggle is internal to Sidebar — emit event
+        break;
+      case "action:zoom-fit":
+        // TODO: Reset zoom on graph
+        break;
+      case "action:review-queue":
+        // TODO: Open review queue panel
+        break;
+      case "action:settings":
+        // TODO: Open settings panel
+        break;
+    }
+  }
+
   // Keyboard shortcuts
   useEffect(() => {
     function handleKeyDown(e) {
-      // Escape closes detail panel or create dialog
-      if (e.key === "Escape" && detailEntity) {
+      // Ctrl+K / Cmd+K → command palette
+      if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+        e.preventDefault();
+        setPaletteOpen((prev) => !prev);
+        return;
+      }
+      // Escape closes detail panel or create dialog (when palette is not open)
+      if (e.key === "Escape" && detailEntity && !paletteOpen) {
         setDetailEntity(null);
         e.preventDefault();
       }
       // Ctrl+N opens create dialog
-      if ((e.ctrlKey || e.metaKey) && e.key === "n" && !showCreateDialog) {
+      if ((e.ctrlKey || e.metaKey) && e.key === "n" && !showCreateDialog && !paletteOpen) {
         setShowCreateDialog(true);
         e.preventDefault();
       }
-      // / focuses search
-      if (e.key === "/" && !e.ctrlKey && !e.metaKey && !detailEntity && !showCreateDialog) {
+      // / focuses search (when palette is not open)
+      if (e.key === "/" && !e.ctrlKey && !e.metaKey && !detailEntity && !paletteOpen && !showCreateDialog) {
         const searchInput = document.querySelector('input[placeholder="Search entities..."]');
         if (searchInput && document.activeElement !== searchInput) {
           searchInput.focus();
@@ -137,7 +169,7 @@ function App() {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [detailEntity, showCreateDialog]);
+  }, [detailEntity, paletteOpen, showCreateDialog]);
 
   return (
     <div className="flex h-screen w-screen" style={{ background: 'var(--bg-deep)' }}>
@@ -183,6 +215,41 @@ function App() {
               <line x1="5" y1="12" x2="19" y2="12" />
             </svg>
             New
+          </button>
+
+          {/* Command palette trigger */}
+          <button
+            onClick={() => setPaletteOpen(true)}
+            className="flex items-center gap-2 px-2.5 py-1 rounded-md flex-shrink-0 transition-all duration-150"
+            style={{
+              background: 'rgba(255, 255, 255, 0.02)',
+              border: '1px solid var(--border-subtle)',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'var(--bg-hover)';
+              e.currentTarget.style.borderColor = 'var(--border-hover)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.02)';
+              e.currentTarget.style.borderColor = 'var(--border-subtle)';
+            }}
+            title="Command Palette (Ctrl+K)"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-ghost)' }}>
+              <path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z" />
+            </svg>
+            <div className="flex items-center gap-0.5">
+              <kbd className="mono text-[8px] px-1 py-px rounded" style={{
+                color: 'var(--text-ghost)',
+                background: 'rgba(255, 255, 255, 0.03)',
+                border: '1px solid rgba(255, 255, 255, 0.06)',
+              }}>Ctrl</kbd>
+              <kbd className="mono text-[8px] px-1 py-px rounded" style={{
+                color: 'var(--text-ghost)',
+                background: 'rgba(255, 255, 255, 0.03)',
+                border: '1px solid rgba(255, 255, 255, 0.06)',
+              }}>K</kbd>
+            </div>
           </button>
 
           {viewMode === "subgraph" && (
@@ -275,6 +342,16 @@ function App() {
         isOpen={showCreateDialog}
         onClose={() => setShowCreateDialog(false)}
         onCreated={handleContentCreated}
+      />
+
+      {/* Command Palette */}
+      <CommandPalette
+        isOpen={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        onAction={handlePaletteAction}
+        onEntitySelect={(entityId) => {
+          handleEntitySelect(entityId);
+        }}
       />
     </div>
   );
