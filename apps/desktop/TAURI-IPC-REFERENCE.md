@@ -123,6 +123,46 @@ Unpublish content (sets Private, removes from DHT).
 
 ---
 
+## Content Import Commands (L0 Add Without Publish)
+
+These commands store content locally as L0 without publishing to the network. Use for the "Add Knowledge" import flow.
+
+### `add_content`
+Import a file as L0 content. Stores locally, extracts L1 mentions, does NOT publish to network.
+- **Args:** `{ file_path: string, title?: string, description?: string }`
+- **`title`** defaults to the filename if not provided.
+- **Returns:**
+  ```typescript
+  {
+    hash: string,          // 64-char hex content hash
+    title: string,
+    size: number,          // bytes
+    content_type: string,  // MIME type (auto-detected from extension)
+    mentions: number | null // L1 mention count (null if extraction failed)
+  }
+  ```
+- **Supported types:** txt, md, html, json, pdf, png, jpg, csv, xml, yaml + any binary (octet-stream)
+- **Errors:** file not found, empty file, duplicate hash
+- **Flow:** `add_content(path)` → use returned `hash` with `extract_mentions(hash)` for full graph population, or rely on the automatic L1 extraction in the response.
+
+### `add_text_content`
+Import text directly as L0 content (for pasted/typed content).
+- **Args:** `{ text: string, title: string, description?: string }`
+- **Returns:** Same `ImportResult` as `add_content`
+  ```typescript
+  {
+    hash: string,
+    title: string,
+    size: number,
+    content_type: "text/plain",
+    mentions: number | null
+  }
+  ```
+- **Errors:** empty text, duplicate hash
+- **Use case:** Quick-add notes, paste text snippets, typed knowledge entries
+
+---
+
 ## Discovery Commands
 
 ### `search_network`
