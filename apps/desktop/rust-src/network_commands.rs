@@ -566,3 +566,50 @@ pub struct KnownPeerInfo {
     pub connection_count: u32,
     pub manual: bool,
 }
+
+// ─── NAT Status Command ─────────────────────────────────────────────────────
+
+/// NAT status information returned to the frontend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NatStatusInfo {
+    /// "unknown", "public", or "private"
+    pub status: String,
+    /// True if NAT traversal (relay/UPnP/DCUtR) is enabled
+    pub nat_traversal_enabled: bool,
+    /// Number of relay reservations active
+    pub relay_reservations: usize,
+}
+
+/// Get the current NAT status as detected by AutoNAT.
+///
+/// This tells the frontend whether the node is:
+/// - **public**: directly reachable from the internet
+/// - **private**: behind NAT, uses relay/hole-punching
+/// - **unknown**: probing in progress
+///
+/// Use this for the network status display in the graph view.
+#[tauri::command]
+pub async fn get_nat_status(
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
+) -> Result<NatStatusInfo, String> {
+    let guard = protocol.lock().await;
+    let state = guard
+        .as_ref()
+        .ok_or("Node not initialized — unlock first")?;
+
+    match &state.network {
+        Some(network) => {
+            let status = network.nat_status();
+            Ok(NatStatusInfo {
+                status: status.to_string(),
+                nat_traversal_enabled: true,
+                relay_reservations: 0, // TODO: track active reservations
+            })
+        }
+        None => Ok(NatStatusInfo {
+            status: "unknown".to_string(),
+            nat_traversal_enabled: false,
+            relay_reservations: 0,
+        }),
+    }
+}
