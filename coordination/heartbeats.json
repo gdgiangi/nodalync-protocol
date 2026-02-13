@@ -1,18 +1,7 @@
 {
-  "hephaestus": {
-    "last_seen": "2026-02-13T04:34:00Z",
-    "status": "idle",
-    "current_task": null,
-    "last_completed": "heph-004",
-    "branch": "hephaestus/command-palette",
-    "note": "All 4 queue tasks complete (heph-001 through heph-004). Queue empty, awaiting new assignments."
-  },
   "proteus": {
-    "last_seen": "2026-02-13T04:40:00Z",
-    "status": "idle",
-    "current_task": null,
-    "blocker": null,
-    "last_completed": "Merged PR #15 (daedalus/fix-auto-start-network) into dev — all quality gates green (900+ tests, clippy clean, fmt clean, frontend builds). Branch deleted.",
-    "branch": "dev"
+    "lastWake": "2026-02-13T00:10:00-05:00",
+    "status": "patrol-complete",
+    "summary": "No open PRs. Quality gates all green (fmt, clippy, 756+ tests pass). Deleted 3 stale branches: daedalus/publish-flow, daedalus/studio-desktop-app, hephaestus/entity-detail-panel. dev branch healthy."
   }
 }
