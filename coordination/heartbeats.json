@@ -7,11 +7,11 @@
     "branch": "hephaestus/command-palette"
   },
   "proteus": {
-    "last_seen": "2026-02-13T00:40:00Z",
-    "status": "blocked",
-    "current_task": "quality-patrol",
-    "blocker": "DISK FULL — C: drive has 0 bytes free (930.6 GB total, 929.5 GB used). Cannot compile or run tests. Pushed cargo fmt fix to dev (fe00bba). Need disk cleanup before any further CI work.",
-    "last_completed": "cargo fmt fix pushed to dev",
+    "last_seen": "2026-02-13T04:10:00Z",
+    "status": "idle",
+    "current_task": null,
+    "blocker": null,
+    "last_completed": "Merged PR #14 (hephaestus/shared-constants-and-events) into dev — resolved conflicts, all quality gates green (900+ tests pass, clippy clean, fmt clean, frontend builds). Fixed node_modules junction issue. Disk space restored (220GB free).",
     "branch": "dev"
   }
 }
