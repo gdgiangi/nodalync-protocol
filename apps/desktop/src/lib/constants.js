@@ -31,6 +31,87 @@ export function getEntityColor(type) {
   return TYPE_COLORS[type] || DEFAULT_COLOR;
 }
 
+// ═══ Level-Aware Node Styling ═══
+// L0 (raw content): small, gray, dim
+// L1 (mentions/extractions): medium, lighter
+// L2 (entities): large, bright, colored by type
+// L3 (summaries): extra-large, glowing
+export const LEVEL_CONFIG = {
+  L0: {
+    label: "Raw Content",
+    baseRadius: 3,
+    maxRadius: 6,
+    opacity: 0.35,
+    color: "#555b66",         // muted gray
+    strokeColor: "#555b66",
+    shape: "circle",
+  },
+  L1: {
+    label: "Mentions",
+    baseRadius: 4,
+    maxRadius: 10,
+    opacity: 0.55,
+    color: "#868e96",         // lighter gray
+    strokeColor: "#a0a8b4",
+    shape: "circle",
+  },
+  L2: {
+    label: "Entities",
+    baseRadius: 6,
+    maxRadius: 20,
+    opacity: 0.85,
+    color: null,              // uses entity_type color
+    strokeColor: null,
+    shape: "circle",
+  },
+  L3: {
+    label: "Summaries",
+    baseRadius: 10,
+    maxRadius: 28,
+    opacity: 0.95,
+    color: "#c084fc",         // bright purple
+    strokeColor: "#a855f7",
+    shape: "circle",
+  },
+};
+
+export function getNodeLevel(node) {
+  // Explicit level property
+  if (node.level) return node.level;
+  // Infer from content_type if present
+  if (node.content_type) {
+    const ct = node.content_type.toUpperCase();
+    if (ct === "L0" || ct === "RAW") return "L0";
+    if (ct === "L1" || ct === "MENTION") return "L1";
+    if (ct === "L3" || ct === "SUMMARY") return "L3";
+  }
+  // Default: L2 entity
+  return "L2";
+}
+
+export function getNodeRadius(node) {
+  const level = getNodeLevel(node);
+  const config = LEVEL_CONFIG[level] || LEVEL_CONFIG.L2;
+  const sourceScale = Math.min(1, (node.source_count || 1) / 10);
+  return config.baseRadius + (config.maxRadius - config.baseRadius) * sourceScale;
+}
+
+export function getNodeColor(node) {
+  const level = getNodeLevel(node);
+  const config = LEVEL_CONFIG[level] || LEVEL_CONFIG.L2;
+  // L2 uses entity_type color, others use fixed level color
+  if (config.color === null) {
+    return getEntityColor(node.entity_type);
+  }
+  return config.color;
+}
+
+export function getNodeOpacity(node) {
+  const level = getNodeLevel(node);
+  const config = LEVEL_CONFIG[level] || LEVEL_CONFIG.L2;
+  return config.opacity;
+}
+
 // ═══ Relationship Predicates ═══
 // Human-readable labels for the fixed ontology predicates
 export const PREDICATE_LABELS = {
