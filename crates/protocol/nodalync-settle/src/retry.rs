@@ -140,18 +140,27 @@ mod tests {
         // Exponential backoff with +-25% jitter
         // Base: 100ms, range: [75, 125]
         let d1 = policy.delay_for_attempt(1);
-        assert!(d1 >= Duration::from_millis(75) && d1 <= Duration::from_millis(125),
-            "Attempt 1 delay {:?} should be within +-25% of 100ms", d1);
+        assert!(
+            d1 >= Duration::from_millis(75) && d1 <= Duration::from_millis(125),
+            "Attempt 1 delay {:?} should be within +-25% of 100ms",
+            d1
+        );
 
         // Base: 200ms, range: [150, 250]
         let d2 = policy.delay_for_attempt(2);
-        assert!(d2 >= Duration::from_millis(150) && d2 <= Duration::from_millis(250),
-            "Attempt 2 delay {:?} should be within +-25% of 200ms", d2);
+        assert!(
+            d2 >= Duration::from_millis(150) && d2 <= Duration::from_millis(250),
+            "Attempt 2 delay {:?} should be within +-25% of 200ms",
+            d2
+        );
 
         // Base: 400ms, range: [300, 500]
         let d3 = policy.delay_for_attempt(3);
-        assert!(d3 >= Duration::from_millis(300) && d3 <= Duration::from_millis(500),
-            "Attempt 3 delay {:?} should be within +-25% of 400ms", d3);
+        assert!(
+            d3 >= Duration::from_millis(300) && d3 <= Duration::from_millis(500),
+            "Attempt 3 delay {:?} should be within +-25% of 400ms",
+            d3
+        );
     }
 
     #[test]
@@ -160,12 +169,18 @@ mod tests {
 
         // Should be capped at max_delay (with jitter: +-25% of 500 = [375, 625])
         let d5 = policy.delay_for_attempt(5);
-        assert!(d5 >= Duration::from_millis(375) && d5 <= Duration::from_millis(625),
-            "Attempt 5 delay {:?} should be within +-25% of 500ms cap", d5);
+        assert!(
+            d5 >= Duration::from_millis(375) && d5 <= Duration::from_millis(625),
+            "Attempt 5 delay {:?} should be within +-25% of 500ms cap",
+            d5
+        );
 
         let d10 = policy.delay_for_attempt(10);
-        assert!(d10 >= Duration::from_millis(375) && d10 <= Duration::from_millis(625),
-            "Attempt 10 delay {:?} should be within +-25% of 500ms cap", d10);
+        assert!(
+            d10 >= Duration::from_millis(375) && d10 <= Duration::from_millis(625),
+            "Attempt 10 delay {:?} should be within +-25% of 500ms cap",
+            d10
+        );
     }
 
     #[test]

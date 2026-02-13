@@ -127,12 +127,10 @@ impl NodalyncBehaviour {
         let gossipsub = build_gossipsub_with_keypair(&gossipsub_keypair);
 
         // Configure Identify
-        let identify_config = identify::Config::new(
-            "/nodalync/1.0.0".to_string(),
-            gossipsub_keypair.public(),
-        )
-        .with_interval(Duration::from_secs(60))
-        .with_push_listen_addr_updates(true);
+        let identify_config =
+            identify::Config::new("/nodalync/1.0.0".to_string(), gossipsub_keypair.public())
+                .with_interval(Duration::from_secs(60))
+                .with_push_listen_addr_updates(true);
         let identify = identify::Behaviour::new(identify_config);
 
         // Configure Ping - keeps connections alive

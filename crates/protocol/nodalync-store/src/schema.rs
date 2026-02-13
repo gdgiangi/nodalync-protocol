@@ -382,7 +382,10 @@ mod tests {
         let mode: String = conn
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(mode, "wal", "WAL mode should be enabled after initialization");
+        assert_eq!(
+            mode, "wal",
+            "WAL mode should be enabled after initialization"
+        );
     }
 
     #[test]
@@ -512,7 +515,9 @@ mod tests {
 
         // Verify duplicates exist
         let count: i32 = conn
-            .query_row("SELECT COUNT(*) FROM settlement_queue", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM settlement_queue", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(count, 2);
 
@@ -527,9 +532,14 @@ mod tests {
 
         // Verify duplicates were removed
         let count: i32 = conn
-            .query_row("SELECT COUNT(*) FROM settlement_queue", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM settlement_queue", [], |row| {
+                row.get(0)
+            })
             .unwrap();
-        assert_eq!(count, 1, "Migration should deduplicate settlement_queue rows");
+        assert_eq!(
+            count, 1,
+            "Migration should deduplicate settlement_queue rows"
+        );
 
         // Verify unique index prevents new duplicates
         let result = conn.execute(
@@ -537,7 +547,10 @@ mod tests {
              VALUES (?1, ?2, 100, ?1, 1002, 0)",
             rusqlite::params![payment_id, recipient],
         );
-        assert!(result.is_err(), "UNIQUE index should prevent duplicate payment_id+recipient");
+        assert!(
+            result.is_err(),
+            "UNIQUE index should prevent duplicate payment_id+recipient"
+        );
     }
 
     #[test]
