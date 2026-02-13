@@ -90,7 +90,10 @@ fn terminate_process(pid: u32) -> CliResult<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(CliError::user(format!("Failed to terminate process: {}", stderr)));
+        return Err(CliError::user(format!(
+            "Failed to terminate process: {}",
+            stderr
+        )));
     }
 
     Ok(())

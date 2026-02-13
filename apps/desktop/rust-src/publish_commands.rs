@@ -19,7 +19,7 @@ use crate::protocol::ProtocolState;
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Parse a hex string into a Hash.
-fn parse_hash(hex: &str) -> Result<Hash, String> {
+pub fn parse_hash(hex: &str) -> Result<Hash, String> {
     let hex = hex.trim();
     if hex.len() != 64 {
         return Err(format!("Invalid hash length: expected 64 hex chars, got {}", hex.len()));
@@ -74,8 +74,11 @@ pub struct NodeStatus {
 /// Identity info returned after init/unlock.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdentityInfo {
+    pub name: Option<String>,
     pub peer_id: String,
+    pub public_key: String,
     pub data_dir: String,
+    pub created_at: Option<String>,
 }
 
 // ─── Identity Commands ───────────────────────────────────────────────────────
@@ -90,21 +93,26 @@ pub async fn check_identity() -> Result<bool, String> {
 /// Initialize a new node identity.
 ///
 /// Creates an Ed25519 keypair encrypted with the given password.
-/// Returns the peer ID on success.
+/// Optionally stores a display name for the user profile.
+/// Returns the peer ID, public key, and profile info on success.
 #[tauri::command]
 pub async fn init_node(
     password: String,
+    name: Option<String>,
     protocol: State<'_, Mutex<Option<ProtocolState>>>,
 ) -> Result<IdentityInfo, String> {
     let data_dir = ProtocolState::default_data_dir();
     info!("Initializing new node at {}", data_dir.display());
 
-    let state = ProtocolState::init(&data_dir, &password)
+    let state = ProtocolState::init_with_name(&data_dir, &password, name)
         .map_err(|e| format!("Failed to initialize node: {}", e))?;
 
     let info = IdentityInfo {
+        name: state.profile.as_ref().map(|p| p.name.clone()),
         peer_id: state.peer_id.to_string(),
+        public_key: hex::encode(state.public_key.0),
         data_dir: state.data_dir.display().to_string(),
+        created_at: state.profile.as_ref().map(|p| p.created_at.clone()),
     };
 
     let mut guard = protocol.lock().await;
@@ -128,14 +136,37 @@ pub async fn unlock_node(
         .map_err(|e| format!("Failed to unlock node: {}", e))?;
 
     let info = IdentityInfo {
+        name: state.profile.as_ref().map(|p| p.name.clone()),
         peer_id: state.peer_id.to_string(),
+        public_key: hex::encode(state.public_key.0),
         data_dir: state.data_dir.display().to_string(),
+        created_at: state.profile.as_ref().map(|p| p.created_at.clone()),
     };
 
     let mut guard = protocol.lock().await;
     *guard = Some(state);
 
     Ok(info)
+}
+
+/// Get current identity info (no password required — node must be unlocked).
+///
+/// Returns the node's name, public key, peer ID, and creation date.
+/// Hephaestus uses this for the dashboard and profile display.
+#[tauri::command]
+pub async fn get_identity(
+    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+) -> Result<IdentityInfo, String> {
+    let guard = protocol.lock().await;
+    let state = guard.as_ref().ok_or("Node not initialized — unlock first")?;
+
+    Ok(IdentityInfo {
+        name: state.profile.as_ref().map(|p| p.name.clone()),
+        peer_id: state.peer_id.to_string(),
+        public_key: hex::encode(state.public_key.0),
+        data_dir: state.data_dir.display().to_string(),
+        created_at: state.profile.as_ref().map(|p| p.created_at.clone()),
+    })
 }
 
 // ─── Publish Commands ────────────────────────────────────────────────────────

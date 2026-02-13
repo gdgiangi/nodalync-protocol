@@ -3,9 +3,8 @@ use chrono::Utc;
 use clap::{Parser, Subcommand};
 use nodalync_graph::{
     entity_extraction::{
-        entity_from_node_path, parse_frontmatter,
-        relationships_from_frontmatter, relationships_from_wikilinks,
-        should_exclude_dir, VaultRelationship,
+        entity_from_node_path, parse_frontmatter, relationships_from_frontmatter,
+        relationships_from_wikilinks, should_exclude_dir, VaultRelationship,
     },
     Entity, L2GraphDB, Relationship,
 };
@@ -104,8 +103,7 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Init { database } => {
             println!("Initializing L2 Graph database at: {}", database.display());
-            let _db =
-                L2GraphDB::new(&database).context("Failed to initialize database")?;
+            let _db = L2GraphDB::new(&database).context("Failed to initialize database")?;
             println!("✅ Database initialized successfully");
         }
 
@@ -116,16 +114,14 @@ fn main() -> Result<()> {
         } => {
             println!("Scanning Obsidian vault: {}", vault_path.display());
             println!("Database: {}", database.display());
-            scan_vault(&vault_path, &database, force)
-                .context("Failed to scan vault")?;
+            scan_vault(&vault_path, &database, force).context("Failed to scan vault")?;
         }
 
         Commands::Query {
             database,
             query_type,
         } => {
-            let db =
-                L2GraphDB::new(&database).context("Failed to open database")?;
+            let db = L2GraphDB::new(&database).context("Failed to open database")?;
 
             match query_type {
                 QueryCommands::Subgraph {
@@ -133,12 +129,11 @@ fn main() -> Result<()> {
                     max_hops,
                     max_results,
                 } => query_subgraph(&db, &entity, max_hops, max_results)?,
-                QueryCommands::Search { query, limit } => {
-                    search_entities(&db, &query, limit)?
-                }
-                QueryCommands::Context { query, max_entities } => {
-                    get_context(&db, &query, max_entities)?
-                }
+                QueryCommands::Search { query, limit } => search_entities(&db, &query, limit)?,
+                QueryCommands::Context {
+                    query,
+                    max_entities,
+                } => get_context(&db, &query, max_entities)?,
                 QueryCommands::List { entity_type, limit } => {
                     list_entities(&db, &entity_type, limit)?
                 }
@@ -146,8 +141,7 @@ fn main() -> Result<()> {
         }
 
         Commands::Stats { database } => {
-            let db =
-                L2GraphDB::new(&database).context("Failed to open database")?;
+            let db = L2GraphDB::new(&database).context("Failed to open database")?;
             show_stats(&db)?;
         }
     }
@@ -427,7 +421,8 @@ fn store_relationship(
 /// Also strips wiki-link syntax: "[[Asset]]" → "Asset"
 fn capitalize_type(t: &str) -> String {
     // Strip wiki-link brackets if present
-    let cleaned = t.trim()
+    let cleaned = t
+        .trim()
         .trim_start_matches("[[")
         .trim_end_matches("]]")
         .trim()
@@ -441,7 +436,10 @@ fn capitalize_type(t: &str) -> String {
 }
 
 /// Build a description from role + first meaningful paragraph
-fn build_description(content: &str, fm: Option<&nodalync_graph::entity_extraction::Frontmatter>) -> Option<String> {
+fn build_description(
+    content: &str,
+    fm: Option<&nodalync_graph::entity_extraction::Frontmatter>,
+) -> Option<String> {
     let mut parts = Vec::new();
 
     if let Some(f) = fm {
@@ -627,10 +625,7 @@ fn get_context(db: &L2GraphDB, query: &str, max_entities: u32) -> Result<()> {
 
     println!("\n📊 Context Results:");
     println!("   Query: {}", context.query);
-    println!(
-        "   Relevant entities: {}",
-        context.relevant_entities.len()
-    );
+    println!("   Relevant entities: {}", context.relevant_entities.len());
     println!(
         "   Relevant relationships: {}",
         context.relevant_relationships.len()

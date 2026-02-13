@@ -102,7 +102,7 @@ impl L2GraphDB {
     pub fn register_content(&self, hash: &str, content_type: &str) -> Result<String> {
         let content_id = Uuid::new_v4().to_string();
         let now = Utc::now();
-        
+
         self.conn.execute(
             "INSERT INTO content_registry (content_id, current_hash, content_type, created_at)
              VALUES (?1, ?2, ?3, ?4)",
@@ -139,7 +139,7 @@ impl L2GraphDB {
     /// Create or update an entity
     pub fn upsert_entity(&self, entity: &Entity) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
-        
+
         // Insert or update entity
         tx.execute(
             "INSERT OR REPLACE INTO entities 
@@ -160,7 +160,10 @@ impl L2GraphDB {
         )?;
 
         // Update aliases
-        tx.execute("DELETE FROM entity_aliases WHERE entity_id = ?1", (&entity.id,))?;
+        tx.execute(
+            "DELETE FROM entity_aliases WHERE entity_id = ?1",
+            (&entity.id,),
+        )?;
         for alias in &entity.aliases {
             tx.execute(
                 "INSERT INTO entity_aliases (entity_id, alias) VALUES (?1, ?2)",
@@ -194,7 +197,7 @@ impl L2GraphDB {
         }
     }
 
-    /// Add relationship between entities. 
+    /// Add relationship between entities.
     /// Deduplicates: if same (subject, predicate, object_type, object_value) exists, skips.
     pub fn add_relationship(&self, relationship: &Relationship) -> Result<bool> {
         // Check for existing duplicate
@@ -245,7 +248,12 @@ impl L2GraphDB {
     }
 
     /// Get subgraph around an entity
-    pub fn get_subgraph(&self, entity_id: &str, max_hops: u32, max_results: u32) -> Result<SubgraphResult> {
+    pub fn get_subgraph(
+        &self,
+        entity_id: &str,
+        max_hops: u32,
+        max_results: u32,
+    ) -> Result<SubgraphResult> {
         subgraph::get_subgraph(&self.conn, entity_id, max_hops, max_results)
     }
 
@@ -271,7 +279,11 @@ impl L2GraphDB {
                     continue;
                 }
                 let other_id = if rel.subject_id == entity.id {
-                    if rel.object_type == "entity" { &rel.object_value } else { continue; }
+                    if rel.object_type == "entity" {
+                        &rel.object_value
+                    } else {
+                        continue;
+                    }
                 } else {
                     &rel.subject_id
                 };
@@ -293,7 +305,11 @@ impl L2GraphDB {
                             if let Ok(content) = std::fs::read_to_string(path) {
                                 let body = strip_frontmatter(&content);
                                 let snippet = if body.len() > 300 {
-                                    format!("[{}] {}...", entity.canonical_label, safe_truncate(body, 300))
+                                    format!(
+                                        "[{}] {}...",
+                                        entity.canonical_label,
+                                        safe_truncate(body, 300)
+                                    )
                                 } else {
                                     format!("[{}] {}", entity.canonical_label, body)
                                 };
@@ -306,12 +322,28 @@ impl L2GraphDB {
         }
 
         // Compute confidence: ratio of query words that matched at least one entity label
-        let words: Vec<&str> = keywords.split_whitespace().filter(|w| w.len() >= 2).collect();
-        let matched_words = words.iter().filter(|w| {
-            entities.iter().any(|e| e.canonical_label.to_lowercase().contains(*w)
-                || e.description.as_deref().unwrap_or("").to_lowercase().contains(*w))
-        }).count();
-        let confidence_score = if words.is_empty() { 0.0 } else { matched_words as f64 / words.len() as f64 };
+        let words: Vec<&str> = keywords
+            .split_whitespace()
+            .filter(|w| w.len() >= 2)
+            .collect();
+        let matched_words = words
+            .iter()
+            .filter(|w| {
+                entities.iter().any(|e| {
+                    e.canonical_label.to_lowercase().contains(*w)
+                        || e.description
+                            .as_deref()
+                            .unwrap_or("")
+                            .to_lowercase()
+                            .contains(*w)
+                })
+            })
+            .count();
+        let confidence_score = if words.is_empty() {
+            0.0
+        } else {
+            matched_words as f64 / words.len() as f64
+        };
 
         Ok(ContextResult {
             query: query.to_string(),
@@ -326,7 +358,8 @@ impl L2GraphDB {
     /// For multi-word queries, splits into individual words and matches any.
     /// Results matching more words rank higher.
     pub fn search_entities(&self, keywords: &str, limit: u32) -> Result<Vec<Entity>> {
-        let words: Vec<&str> = keywords.split_whitespace()
+        let words: Vec<&str> = keywords
+            .split_whitespace()
             .filter(|w| w.len() >= 2)
             .collect();
 
@@ -337,7 +370,7 @@ impl L2GraphDB {
         // Build dynamic WHERE clause: match ANY word in label, description, or alias
         let mut where_parts = Vec::new();
         let mut params: Vec<String> = Vec::new();
-        
+
         for (i, word) in words.iter().enumerate() {
             let idx = i + 1;
             where_parts.push(format!(
@@ -375,7 +408,8 @@ impl L2GraphDB {
         params.push(limit.to_string());
 
         let mut stmt = self.conn.prepare(&query)?;
-        let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p as &dyn rusqlite::ToSql).collect();
+        let param_refs: Vec<&dyn rusqlite::ToSql> =
+            params.iter().map(|p| p as &dyn rusqlite::ToSql).collect();
         let entity_iter = stmt.query_map(&param_refs[..], Self::entity_from_row)?;
 
         let mut entities = Vec::new();
@@ -396,12 +430,12 @@ impl L2GraphDB {
 
         let mut stmt = self.conn.prepare(query)?;
         let rel_iter = stmt.query_map([entity_id], Self::relationship_from_row)?;
-        
+
         let mut relationships = Vec::new();
         for rel_result in rel_iter {
             relationships.push(rel_result?);
         }
-        
+
         Ok(relationships)
     }
 
@@ -422,12 +456,12 @@ impl L2GraphDB {
                     .unwrap_or_else(Utc::now),
             })
         })?;
-        
+
         let mut sources = Vec::new();
         for source_result in source_iter {
             sources.push(source_result?);
         }
-        
+
         Ok(sources)
     }
 
@@ -483,10 +517,8 @@ impl L2GraphDB {
             LIMIT ?2";
 
         let mut stmt = self.conn.prepare(query)?;
-        let entity_iter = stmt.query_map(
-            rusqlite::params![entity_type, limit],
-            Self::entity_from_row,
-        )?;
+        let entity_iter =
+            stmt.query_map(rusqlite::params![entity_type, limit], Self::entity_from_row)?;
 
         let mut entities = Vec::new();
         for entity_result in entity_iter {
@@ -518,7 +550,7 @@ impl L2GraphDB {
              DELETE FROM relationships;
              DELETE FROM entities;
              DELETE FROM content_registry;
-             UPDATE id_counters SET next_value = 1;"
+             UPDATE id_counters SET next_value = 1;",
         )?;
         Ok(())
     }
@@ -535,15 +567,27 @@ impl L2GraphDB {
     /// Get database statistics
     pub fn get_stats(&self) -> Result<HashMap<String, i32>> {
         let mut stats = HashMap::new();
-        
-        stats.insert("entities".to_string(), 
-            self.conn.query_row("SELECT COUNT(*) FROM entities", [], |row| row.get(0))?);
-        
-        stats.insert("relationships".to_string(),
-            self.conn.query_row("SELECT COUNT(*) FROM relationships", [], |row| row.get(0))?);
-        
-        stats.insert("content_items".to_string(),
-            self.conn.query_row("SELECT COUNT(*) FROM content_registry WHERE deleted_at IS NULL", [], |row| row.get(0))?);
+
+        stats.insert(
+            "entities".to_string(),
+            self.conn
+                .query_row("SELECT COUNT(*) FROM entities", [], |row| row.get(0))?,
+        );
+
+        stats.insert(
+            "relationships".to_string(),
+            self.conn
+                .query_row("SELECT COUNT(*) FROM relationships", [], |row| row.get(0))?,
+        );
+
+        stats.insert(
+            "content_items".to_string(),
+            self.conn.query_row(
+                "SELECT COUNT(*) FROM content_registry WHERE deleted_at IS NULL",
+                [],
+                |row| row.get(0),
+            )?,
+        );
 
         // Type breakdown
         let mut stmt = self.conn.prepare(
