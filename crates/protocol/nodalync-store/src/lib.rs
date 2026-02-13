@@ -478,10 +478,11 @@ impl NodeState {
                     tracing::warn!(error = %e, "Failed to deserialize announcement L1 summary");
                     L1Summary::empty(hash)
                 });
-            let addresses: Vec<String> = serde_json::from_str(&addresses_json).unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "Failed to deserialize announcement addresses");
-                Vec::new()
-            });
+            let addresses: Vec<String> =
+                serde_json::from_str(&addresses_json).unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "Failed to deserialize announcement addresses");
+                    Vec::new()
+                });
 
             Ok(AnnouncePayload {
                 hash,
@@ -574,10 +575,11 @@ impl NodeState {
                     tracing::warn!(error = %e, "Failed to deserialize announcement L1 summary");
                     L1Summary::empty(hash)
                 });
-            let addresses: Vec<String> = serde_json::from_str(&addresses_json).unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "Failed to deserialize announcement addresses");
-                Vec::new()
-            });
+            let addresses: Vec<String> =
+                serde_json::from_str(&addresses_json).unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "Failed to deserialize announcement addresses");
+                    Vec::new()
+                });
 
             Ok(AnnouncePayload {
                 hash,

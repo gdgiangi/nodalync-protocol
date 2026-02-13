@@ -790,8 +790,7 @@ async fn run_swarm(
     > = HashMap::new();
 
     // Per-peer GossipSub rate limiter: 50 messages per 10 seconds
-    let mut gossip_rate_limiter =
-        GossipRateLimiter::new(50, std::time::Duration::from_secs(10));
+    let mut gossip_rate_limiter = GossipRateLimiter::new(50, std::time::Duration::from_secs(10));
 
     loop {
         tokio::select! {
