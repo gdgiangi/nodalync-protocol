@@ -11,6 +11,15 @@
       "completed_at": "2026-02-12T23:45:00Z",
       "pr": "https://github.com/gdgiangi/nodalync-protocol/pull/4",
       "branch": "hephaestus/premium-ui-polish"
+    },
+    {
+      "id": "heph-002",
+      "title": "Fix Vite build failure in workspace-proteus junction",
+      "type": "bug",
+      "status": "pending",
+      "from": "proteus",
+      "description": "Vite production build fails with 'The fileName or name properties of emitted chunks and assets must be strings that are neither absolute nor relative paths'. This occurs because the workspace-proteus directory is a Windows junction, and Vite resolves the real path through the junction creating a relative path traversal (../../../../workspace/nodalync-protocol/apps/desktop/index.html). The 603 modules compile fine — it's only the output file emission that breaks. May need vite.config adjustment to handle junction/symlink resolution.",
+      "created_at": "2026-02-13T00:10:00Z"
     }
   ]
 }

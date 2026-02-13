@@ -5,5 +5,12 @@
     "current_task": null,
     "last_completed": "heph-001",
     "branch": "hephaestus/premium-ui-polish"
+  },
+  "proteus": {
+    "last_seen": "2026-02-13T00:10:00Z",
+    "status": "idle",
+    "current_task": null,
+    "last_completed": "PR #6 merge (daedalus/identity-ipc) — fixed CI lint/fmt, merged to dev",
+    "branch": "dev"
   }
 }
