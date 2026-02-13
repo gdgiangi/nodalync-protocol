@@ -56,7 +56,7 @@ pub fn get_subgraph(
             
             // If we found a connected entity and haven't visited it yet
             if let Some(other_id) = other_entity_id {
-                if !visited.contains(&other_id) && depth + 1 <= max_hops {
+                if !visited.contains(&other_id) && depth < max_hops {
                     visited.insert(other_id.clone());
                     queue.push_back((other_id.clone(), depth + 1));
                     
@@ -111,9 +111,9 @@ fn get_entity_by_id(conn: &Connection, entity_id: &str) -> Result<Option<Entity>
             description: row.get("description")?,
             confidence: row.get("confidence")?,
             first_seen: chrono::DateTime::from_timestamp(row.get::<_, i64>("first_seen")?, 0)
-                .unwrap_or_else(|| chrono::Utc::now()),
+                .unwrap_or_else(chrono::Utc::now),
             last_updated: chrono::DateTime::from_timestamp(row.get::<_, i64>("last_updated")?, 0)
-                .unwrap_or_else(|| chrono::Utc::now()),
+                .unwrap_or_else(chrono::Utc::now),
             source_count: row.get("source_count")?,
             metadata_json: row.get("metadata_json")?,
             aliases,
@@ -144,7 +144,7 @@ fn get_entity_relationships(conn: &Connection, entity_id: &str) -> Result<Vec<Re
             object_value: row.get("object_value")?,
             confidence: row.get("confidence")?,
             extracted_at: chrono::DateTime::from_timestamp(row.get::<_, i64>("extracted_at")?, 0)
-                .unwrap_or_else(|| chrono::Utc::now()),
+                .unwrap_or_else(chrono::Utc::now),
             metadata_json: row.get("metadata_json")?,
         })
     })?;
@@ -184,7 +184,7 @@ fn get_sources_for_entities(conn: &Connection, entity_ids: &[String]) -> Result<
             content_id: row.get("content_id")?,
             l1_mention_id: row.get("l1_mention_id")?,
             added_at: chrono::DateTime::from_timestamp(row.get::<_, i64>("added_at")?, 0)
-                .unwrap_or_else(|| chrono::Utc::now()),
+                .unwrap_or_else(chrono::Utc::now),
         })
     })?;
 
@@ -314,9 +314,9 @@ pub fn get_entities_by_type(conn: &Connection, entity_type: &str, limit: u32) ->
             description: row.get("description")?,
             confidence: row.get("confidence")?,
             first_seen: chrono::DateTime::from_timestamp(row.get::<_, i64>("first_seen")?, 0)
-                .unwrap_or_else(|| chrono::Utc::now()),
+                .unwrap_or_else(chrono::Utc::now),
             last_updated: chrono::DateTime::from_timestamp(row.get::<_, i64>("last_updated")?, 0)
-                .unwrap_or_else(|| chrono::Utc::now()),
+                .unwrap_or_else(chrono::Utc::now),
             source_count: row.get("source_count")?,
             metadata_json: row.get("metadata_json")?,
             aliases,
