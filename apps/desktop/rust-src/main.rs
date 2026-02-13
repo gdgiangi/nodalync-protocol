@@ -123,6 +123,8 @@ fn main() {
             save_known_peers,
             get_known_peers,
             add_known_peer,
+            // Network maintenance
+            reannounce_content,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

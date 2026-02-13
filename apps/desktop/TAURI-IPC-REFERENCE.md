@@ -313,6 +313,16 @@ Get L0 content items linked to a specific entity.
 
 ---
 
+## Network Maintenance Commands
+
+### `reannounce_content`
+Re-announce all published (Shared) content to the network.
+- **Args:** none
+- **Returns:** `number` — count of items re-announced
+- **Use case:** After network start, or when peers may have lost track of our content. Called automatically by `auto_start_network`, but can be triggered manually.
+
+---
+
 ## Notes for Frontend
 
 1. **Startup flow:** `check_identity` → if false: show onboarding → `init_node(password, name)`; if true: show password → `unlock_node`

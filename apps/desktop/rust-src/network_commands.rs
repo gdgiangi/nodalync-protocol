@@ -503,6 +503,22 @@ pub async fn auto_start_network(
         *el_guard = Some(handle);
     }
 
+    // Re-announce all Shared content so peers can discover us
+    {
+        let mut guard = protocol.lock().await;
+        if let Some(state) = guard.as_mut() {
+            match state.ops.reannounce_all_content().await {
+                Ok(count) if count > 0 => {
+                    info!("Re-announced {} content items to network", count);
+                }
+                Ok(_) => {} // No content to re-announce
+                Err(e) => {
+                    warn!("Content re-announcement failed (network still active): {}", e);
+                }
+            }
+        }
+    }
+
     info!(
         "Network auto-started: {} listen addresses, {} initial peers, mDNS enabled, event loop active",
         listen_addrs.len(),
@@ -515,6 +531,29 @@ pub async fn auto_start_network(
         connected_peers: peers,
         peer_count,
     })
+}
+
+/// Re-announce all published content to the network.
+///
+/// Use after network start or when peers may have lost track of our content.
+/// Returns the number of content items re-announced.
+#[tauri::command]
+pub async fn reannounce_content(
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
+) -> Result<u32, String> {
+    let mut guard = protocol.lock().await;
+    let state = guard
+        .as_mut()
+        .ok_or("Node not initialized — unlock first")?;
+
+    let count = state
+        .ops
+        .reannounce_all_content()
+        .await
+        .map_err(|e| format!("Re-announcement failed: {}", e))?;
+
+    info!("Manually re-announced {} content items", count);
+    Ok(count)
 }
 
 /// Known peer info returned to the frontend.
