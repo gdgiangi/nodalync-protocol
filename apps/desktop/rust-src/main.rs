@@ -12,6 +12,7 @@ mod event_loop;
 mod fee_commands;
 mod graph_commands;
 mod network_commands;
+mod peer_store;
 mod protocol;
 mod publish_commands;
 
@@ -113,6 +114,11 @@ fn main() {
             set_fee_rate,
             get_transaction_history,
             get_fee_quote,
+            // Peer persistence commands
+            auto_start_network,
+            save_known_peers,
+            get_known_peers,
+            add_known_peer,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
