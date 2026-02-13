@@ -401,18 +401,126 @@ Add a peer manually to the known peers store.
 
 ---
 
+## Channel Management Commands
+
+Payment channels are required for querying paid content from peers. Without a channel, paid queries fail with `ChannelRequired`.
+
+### `open_channel`
+Open a payment channel with a peer.
+- **Args:** `{ peer_id: string, deposit_hbar: number }`
+- **`peer_id`** accepts libp2p format (`12D3KooW...`) or Nodalync format (`ndl1...` or hex)
+- **`deposit_hbar`** minimum 1.0 HBAR
+- **Returns:**
+  ```typescript
+  {
+    channel: ChannelInfo,
+    nodalync_peer_id: string  // Resolved Nodalync peer ID
+  }
+  ```
+- **`ChannelInfo`:**
+  ```typescript
+  {
+    channel_id: string,
+    peer_id: string,              // Nodalync peer ID (ndl1...)
+    libp2p_peer_id: string | null,
+    state: string,                // "Opening" | "Open" | "Closing" | "Closed" | "Disputed"
+    my_balance: number,           // tinybars
+    their_balance: number,        // tinybars
+    my_balance_hbar: number,      // HBAR (display-friendly)
+    their_balance_hbar: number,   // HBAR (display-friendly)
+    nonce: number,
+    pending_payments: number,
+    has_pending_close: boolean,
+    has_pending_dispute: boolean,
+    funding_tx_id: string | null, // On-chain transaction ID
+    last_update: number           // Unix timestamp ms
+  }
+  ```
+
+### `close_channel`
+Cooperatively close a payment channel.
+- **Args:** `{ peer_id: string }` (Nodalync peer ID)
+- **Returns:**
+  ```typescript
+  {
+    status: "closed" | "closed_offchain" | "peer_unresponsive" | "on_chain_failed",
+    channel_id: string,
+    my_final_balance: number,
+    their_final_balance: number,
+    transaction_id: string | null,
+    message: string | null
+  }
+  ```
+- If `status` is `"peer_unresponsive"`, show the `message` (suggests dispute flow).
+
+### `list_channels`
+List all payment channels.
+- **Args:** none
+- **Returns:**
+  ```typescript
+  {
+    channels: ChannelInfo[],
+    total: number,
+    open_count: number,
+    total_deposited: number,       // tinybars
+    total_deposited_hbar: number   // HBAR
+  }
+  ```
+
+### `get_channel`
+Get details for a specific channel.
+- **Args:** `{ peer_id: string }` (Nodalync peer ID)
+- **Returns:** `ChannelInfo | null`
+
+### `check_channel`
+Check if an open channel exists with a peer. Accepts both libp2p and Nodalync peer IDs.
+- **Args:** `{ peer_id: string }`
+- **Returns:** `ChannelInfo | null` (null if no open channel)
+- **Use case:** Before querying paid content, check if a channel exists. If null, prompt user to open one.
+
+### `auto_open_and_query`
+**Recommended for D3.** Auto-opens a channel if needed, then queries content. One-click paid content retrieval.
+- **Args:** `{ hash: string, payment_amount?: number, deposit_hbar?: number }`
+  - `hash`: 64-char hex content hash
+  - `payment_amount`: price in NDL (e.g. 0.001), default 0
+  - `deposit_hbar`: channel deposit if one needs to be opened, default 100.0 HBAR
+- **Returns:**
+  ```typescript
+  {
+    hash: string,
+    title: string,
+    content_type: string,
+    content_text: string | null,
+    content_size: number,
+    price_paid: number,        // tinybars
+    app_fee: number,           // tinybars
+    total_cost: number,        // tinybars
+    receipt_id: string,
+    transaction_id: string | null,
+    channel_opened: boolean,   // true if a new channel was opened
+    channel_id: string | null  // channel ID if newly opened
+  }
+  ```
+- **Flow:** Tries query → if ChannelRequired → opens channel with provider → retries query
+- App fee is auto-recorded.
+
+---
+
 ## Notes for Frontend
 
 1. **Startup flow:** `check_identity` → if false: show onboarding → `init_node(password, name)`; if true: show password → `unlock_node`
 2. **After unlock:** `get_identity` for profile display, then `auto_start_network` (recommended — loads known peers + mDNS + stable identity + spawns health monitor)
 3. **Stable PeerId:** The network now derives its libp2p PeerId from the node's Nodalync identity. PeerId persists across restarts. Display it in the profile as the node's network address.
 4. **Publish flow:** `publish_file`/`publish_text` → `extract_mentions(hash)` to populate L2 graph
-5. **Query flow:** `get_fee_quote(price)` to show breakdown → `query_content(hash, amount)` — fee is auto-recorded
-6. **Fee dashboard:** `get_fee_config` for summary, `get_transaction_history` for details, `set_fee_rate` to configure
-7. **L3 synthesis:** Select entities in graph → `create_l3_summary(title, text, ids)` → new L3 node appears with `synthesizes` edges. List all with `get_l3_summaries`.
-8. **Entity drill-down:** `get_entity_content_links(entity_id)` → shows which L0 content contributed to this entity. Combined with `get_subgraph`, this powers the full L0→L1→L2→L3 hierarchy view.
-9. **Price values:** Frontend sends NDL (e.g. 0.001), backend converts to tinybars internally
-10. **Hash format:** Always 64-char lowercase hex strings
-11. **Error handling:** All commands return `Result<T, String>` — errors are human-readable strings
-12. **NAT traversal:** Enabled by default (AutoNAT + UPnP + Relay + DCUtR). Use `get_nat_status` to display connectivity status. Most desktop users are behind NAT — the protocol automatically handles relay fallback and hole-punching.
-13. **Network health:** Poll `get_network_health` every 10-30s for the network status indicator. The background health monitor (spawned by `auto_start_network`) handles auto-reconnect, peer saves, and health classification. `stop_network` automatically saves peers and shuts down the monitor.
+5. **Query flow (simple):** Use `auto_open_and_query(hash, price)` — handles channel management automatically.
+6. **Query flow (manual):** `get_fee_quote(price)` → `check_channel(provider_peer_id)` → if null: `open_channel(provider_peer_id, deposit)` → `query_content(hash, amount)` — fee is auto-recorded
+7. **Fee dashboard:** `get_fee_config` for summary, `get_transaction_history` for details, `set_fee_rate` to configure
+8. **Channel management:** `list_channels` for overview, `get_channel(peer_id)` for details, `close_channel(peer_id)` when done with a peer
+9. **L3 synthesis:** Select entities in graph → `create_l3_summary(title, text, ids)` → new L3 node appears with `synthesizes` edges. List all with `get_l3_summaries`.
+10. **Entity drill-down:** `get_entity_content_links(entity_id)` → shows which L0 content contributed to this entity. Combined with `get_subgraph`, this powers the full L0→L1→L2→L3 hierarchy view.
+11. **Price values:** Frontend sends NDL (e.g. 0.001), backend converts to tinybars internally
+12. **Hash format:** Always 64-char lowercase hex strings
+13. **Error handling:** All commands return `Result<T, String>` — errors are human-readable strings
+14. **NAT traversal:** Enabled by default (AutoNAT + UPnP + Relay + DCUtR). Use `get_nat_status` to display connectivity status. Most desktop users are behind NAT — the protocol automatically handles relay fallback and hole-punching.
+15. **Network health:** Poll `get_network_health` every 10-30s for the network status indicator. The background health monitor (spawned by `auto_start_network`) handles auto-reconnect, peer saves, and health classification. `stop_network` automatically saves peers and shuts down the monitor.
+16. **Peer handshake:** When a peer connects, the event loop automatically exchanges PeerInfo messages (protocol version, public key, capabilities). After handshake completes, `PeerInfo.handshake_complete` becomes `true` and message signature verification is enabled for that peer. No frontend action needed — this is fully automatic.

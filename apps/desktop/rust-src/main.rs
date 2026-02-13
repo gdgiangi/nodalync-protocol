@@ -7,6 +7,7 @@ use tokio::sync::Mutex as TokioMutex;
 use tauri::Manager;
 use tracing::info;
 
+mod channel_commands;
 mod discovery_commands;
 mod event_loop;
 mod fee_commands;
@@ -17,6 +18,7 @@ mod peer_store;
 mod protocol;
 mod publish_commands;
 
+use channel_commands::*;
 use discovery_commands::*;
 use fee_commands::*;
 use graph_commands::*;
@@ -139,6 +141,13 @@ fn main() {
             get_nat_status,
             // Health monitor
             get_network_health,
+            // Channel management
+            open_channel,
+            close_channel,
+            list_channels,
+            get_channel,
+            check_channel,
+            auto_open_and_query,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
