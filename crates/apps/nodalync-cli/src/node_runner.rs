@@ -155,7 +155,7 @@ pub fn is_process_running(pid: u32) -> bool {
 #[cfg(not(unix))]
 pub fn is_process_running(pid: u32) -> bool {
     use std::process::Command;
-    
+
     // On Windows, use tasklist to check if process exists
     if let Ok(output) = Command::new("tasklist")
         .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV"])
