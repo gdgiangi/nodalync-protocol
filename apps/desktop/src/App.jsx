@@ -5,6 +5,7 @@ import Sidebar from "./components/Sidebar";
 import StatsBar from "./components/StatsBar";
 import SearchBar from "./components/SearchBar";
 import EntityDetailPanel from "./components/EntityDetailPanel";
+import { useTauriEvents } from "./hooks/useTauriEvents";
 
 function App() {
   const [graphData, setGraphData] = useState({ nodes: [], links: [] });
@@ -20,6 +21,17 @@ function App() {
     loadFullGraph();
     loadStats();
   }, []);
+
+  // Listen for backend events — auto-refresh graph when content is processed
+  useTauriEvents({
+    "graph:updated": () => {
+      loadFullGraph();
+      loadStats();
+    },
+    "l2:complete": () => {
+      loadStats();
+    },
+  });
 
   async function loadFullGraph() {
     try {
