@@ -35,10 +35,7 @@ fn test_network_config() -> NetworkConfig {
 }
 
 /// Create a DefaultNodeOperations with a network attached.
-fn create_ops_with_network(
-    temp_dir: &TempDir,
-    network: Arc<NetworkNode>,
-) -> DefaultNodeOperations {
+fn create_ops_with_network(temp_dir: &TempDir, network: Arc<NetworkNode>) -> DefaultNodeOperations {
     let config = NodeStateConfig::new(temp_dir.path());
     let state = NodeState::open(config).expect("Failed to open node state");
 
@@ -218,7 +215,10 @@ async fn test_e2e_search_returns_results() {
     );
 
     let first = &search_result.results[0];
-    assert_eq!(first.hash, hash, "Result hash should match published content");
+    assert_eq!(
+        first.hash, hash,
+        "Result hash should match published content"
+    );
     assert_eq!(first.title, "Knowledge Graph Research");
     assert_eq!(first.price, 100);
 
@@ -336,9 +336,18 @@ async fn test_e2e_search_then_query() {
 
     // Publish multiple content items
     let items = vec![
-        ("Hedera Hashgraph Consensus", b"Hedera uses hashgraph for fast, fair consensus." as &[u8]),
-        ("MCP Protocol Design", b"Model Context Protocol enables AI-knowledge integration."),
-        ("Nodalync Settlement", b"Settlement layer uses Hedera for micropayment channels."),
+        (
+            "Hedera Hashgraph Consensus",
+            b"Hedera uses hashgraph for fast, fair consensus." as &[u8],
+        ),
+        (
+            "MCP Protocol Design",
+            b"Model Context Protocol enables AI-knowledge integration.",
+        ),
+        (
+            "Nodalync Settlement",
+            b"Settlement layer uses Hedera for micropayment channels.",
+        ),
     ];
 
     let mut hashes = Vec::new();
@@ -442,7 +451,10 @@ async fn test_e2e_search_then_query() {
         String::from_utf8_lossy(&query_result.content),
         "Hedera uses hashgraph for fast, fair consensus."
     );
-    assert_eq!(query_result.manifest.metadata.title, "Hedera Hashgraph Consensus");
+    assert_eq!(
+        query_result.manifest.metadata.title,
+        "Hedera Hashgraph Consensus"
+    );
 
     // Clean up
     responder.abort();
@@ -536,7 +548,9 @@ async fn test_e2e_preview_returns_metadata() {
 
     let content_bytes = b"Preview test content with enough text for meaningful extraction.";
     let metadata = Metadata::new("Preview Test", content_bytes.len() as u64);
-    let hash = ops_a.create_content(content_bytes, metadata).expect("Create");
+    let hash = ops_a
+        .create_content(content_bytes, metadata)
+        .expect("Create");
     ops_a
         .publish_content(&hash, Visibility::Shared, 250)
         .await
