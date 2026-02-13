@@ -1,5 +1,8 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use nodalync_crypto::{generate_identity, sign, verify, PrivateKey, PublicKey, Signature, peer_id_from_public_key, peer_id_to_string};
+use nodalync_crypto::{
+    generate_identity, peer_id_from_public_key, peer_id_to_string, sign, verify, PrivateKey,
+    PublicKey, Signature,
+};
 
 fn bench_identity_generation(c: &mut Criterion) {
     c.bench_function("identity_generation", |b| {
@@ -13,7 +16,7 @@ fn bench_identity_generation(c: &mut Criterion) {
 fn bench_signing(c: &mut Criterion) {
     let (private_key, _) = generate_identity();
     let message = b"Hello, world! This is a test message for signing benchmarks.";
-    
+
     c.bench_function("message_signing", |b| {
         b.iter(|| {
             let signature = sign(&private_key, black_box(message));
@@ -26,10 +29,14 @@ fn bench_signature_verification(c: &mut Criterion) {
     let (private_key, public_key) = generate_identity();
     let message = b"Hello, world! This is a test message for verification benchmarks.";
     let signature = sign(&private_key, message);
-    
+
     c.bench_function("signature_verification", |b| {
         b.iter(|| {
-            let result = verify(black_box(&public_key), black_box(message), black_box(&signature));
+            let result = verify(
+                black_box(&public_key),
+                black_box(message),
+                black_box(&signature),
+            );
             black_box(result);
         });
     });
@@ -38,7 +45,7 @@ fn bench_signature_verification(c: &mut Criterion) {
 fn bench_signing_throughput(c: &mut Criterion) {
     let (private_key, _) = generate_identity();
     let mut group = c.benchmark_group("signing_throughput");
-    
+
     for size in [64, 256, 1024, 4096, 16384].iter() {
         let message = vec![0u8; *size];
         group.throughput(Throughput::Bytes(*size as u64));
@@ -55,15 +62,19 @@ fn bench_signing_throughput(c: &mut Criterion) {
 fn bench_verification_throughput(c: &mut Criterion) {
     let (private_key, public_key) = generate_identity();
     let mut group = c.benchmark_group("verification_throughput");
-    
+
     for size in [64, 256, 1024, 4096, 16384].iter() {
         let message = vec![0u8; *size];
         let signature = sign(&private_key, &message);
-        
+
         group.throughput(Throughput::Bytes(*size as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
             b.iter(|| {
-                let result = verify(black_box(&public_key), black_box(&message), black_box(&signature));
+                let result = verify(
+                    black_box(&public_key),
+                    black_box(&message),
+                    black_box(&signature),
+                );
                 black_box(result);
             });
         });
@@ -74,14 +85,14 @@ fn bench_verification_throughput(c: &mut Criterion) {
 fn bench_public_key_serialization(c: &mut Criterion) {
     let (_, public_key) = generate_identity();
     let peer_id = peer_id_from_public_key(&public_key);
-    
+
     c.bench_function("peer_id_to_string", |b| {
         b.iter(|| {
             let string = peer_id_to_string(black_box(&peer_id));
             black_box(string);
         });
     });
-    
+
     let peer_id_string = peer_id_to_string(&peer_id);
     c.bench_function("peer_id_from_string", |b| {
         b.iter(|| {
