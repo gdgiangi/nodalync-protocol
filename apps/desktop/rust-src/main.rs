@@ -13,6 +13,7 @@ mod event_loop;
 mod fee_commands;
 mod graph_commands;
 mod health_monitor;
+mod invite;
 mod network_commands;
 mod peer_store;
 mod protocol;
@@ -157,6 +158,12 @@ fn main() {
             get_channel,
             check_channel,
             auto_open_and_query,
+            // Content import (L0 add without network publish)
+            add_content,
+            add_text_content,
+            // Connection invites
+            generate_invite,
+            accept_invite,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

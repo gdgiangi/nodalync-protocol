@@ -106,8 +106,11 @@ pub enum MessageType {
     /// Pong response to ping
     Pong = 0x0701,
 
-    /// Peer information exchange
+    /// Peer information exchange (request)
     PeerInfo = 0x0710,
+
+    /// Peer information exchange (response)
+    PeerInfoResponse = 0x0711,
 }
 
 impl MessageType {
@@ -145,6 +148,7 @@ impl MessageType {
             0x0700 => Ok(MessageType::Ping),
             0x0701 => Ok(MessageType::Pong),
             0x0710 => Ok(MessageType::PeerInfo),
+            0x0711 => Ok(MessageType::PeerInfoResponse),
             _ => Err(DecodeError::InvalidMessageType(value)),
         }
     }
@@ -206,6 +210,7 @@ impl MessageType {
                 | MessageType::VersionRequest
                 | MessageType::ChannelOpen
                 | MessageType::Ping
+                | MessageType::PeerInfo
         )
     }
 }
@@ -235,6 +240,7 @@ impl std::fmt::Display for MessageType {
             MessageType::Ping => write!(f, "PING"),
             MessageType::Pong => write!(f, "PONG"),
             MessageType::PeerInfo => write!(f, "PEER_INFO"),
+            MessageType::PeerInfoResponse => write!(f, "PEER_INFO_RESPONSE"),
         }
     }
 }
@@ -342,6 +348,7 @@ mod tests {
         assert_eq!(MessageType::Ping as u16, 0x0700);
         assert_eq!(MessageType::Pong as u16, 0x0701);
         assert_eq!(MessageType::PeerInfo as u16, 0x0710);
+        assert_eq!(MessageType::PeerInfoResponse as u16, 0x0711);
     }
 
     #[test]
@@ -383,6 +390,7 @@ mod tests {
 
         assert!(MessageType::Ping.is_peer());
         assert!(MessageType::PeerInfo.is_peer());
+        assert!(MessageType::PeerInfoResponse.is_peer());
     }
 
     #[test]
@@ -393,8 +401,10 @@ mod tests {
         assert!(MessageType::VersionRequest.expects_response());
         assert!(MessageType::ChannelOpen.expects_response());
         assert!(MessageType::Ping.expects_response());
+        assert!(MessageType::PeerInfo.expects_response());
 
         assert!(!MessageType::SearchResponse.expects_response());
+        assert!(!MessageType::PeerInfoResponse.expects_response());
         assert!(!MessageType::Announce.expects_response());
         assert!(!MessageType::Pong.expects_response());
     }
@@ -449,6 +459,7 @@ mod tests {
             (0x0700, MessageType::Ping),
             (0x0701, MessageType::Pong),
             (0x0710, MessageType::PeerInfo),
+            (0x0711, MessageType::PeerInfoResponse),
         ];
         for (value, expected) in all_types {
             let parsed = MessageType::from_u16(value).unwrap();

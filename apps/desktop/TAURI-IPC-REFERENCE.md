@@ -123,6 +123,46 @@ Unpublish content (sets Private, removes from DHT).
 
 ---
 
+## Content Import Commands (L0 Add Without Publish)
+
+These commands store content locally as L0 without publishing to the network. Use for the "Add Knowledge" import flow.
+
+### `add_content`
+Import a file as L0 content. Stores locally, extracts L1 mentions, does NOT publish to network.
+- **Args:** `{ file_path: string, title?: string, description?: string }`
+- **`title`** defaults to the filename if not provided.
+- **Returns:**
+  ```typescript
+  {
+    hash: string,          // 64-char hex content hash
+    title: string,
+    size: number,          // bytes
+    content_type: string,  // MIME type (auto-detected from extension)
+    mentions: number | null // L1 mention count (null if extraction failed)
+  }
+  ```
+- **Supported types:** txt, md, html, json, pdf, png, jpg, csv, xml, yaml + any binary (octet-stream)
+- **Errors:** file not found, empty file, duplicate hash
+- **Flow:** `add_content(path)` → use returned `hash` with `extract_mentions(hash)` for full graph population, or rely on the automatic L1 extraction in the response.
+
+### `add_text_content`
+Import text directly as L0 content (for pasted/typed content).
+- **Args:** `{ text: string, title: string, description?: string }`
+- **Returns:** Same `ImportResult` as `add_content`
+  ```typescript
+  {
+    hash: string,
+    title: string,
+    size: number,
+    content_type: "text/plain",
+    mentions: number | null
+  }
+  ```
+- **Errors:** empty text, duplicate hash
+- **Use case:** Quick-add notes, paste text snippets, typed knowledge entries
+
+---
+
 ## Discovery Commands
 
 ### `search_network`
@@ -184,7 +224,8 @@ Get list of connected peer IDs (simple).
 Get detailed network info including listen addresses.
 - **Args:** none
 - **Returns:** `{ active, listen_addresses: string[], connected_peers: PeerInfo[], peer_count }`
-- **PeerInfo:** `{ libp2p_id, nodalync_id? }`
+- **PeerInfo:** `{ libp2p_id, nodalync_id?, protocol_version?, content_count?, node_name?, handshake_complete }`
+- **Note:** `handshake_complete` is `true` once the peer has exchanged identity info. Until then, signature verification is unavailable for that peer.
 
 ### `dial_peer`
 Manually connect to a peer by multiaddress.
@@ -558,33 +599,39 @@ Check if an open channel exists with a peer. Accepts both libp2p and Nodalync pe
 
 ---
 
-## Resource Management Commands
+## Connection Invite Commands
 
-### `get_resource_stats`
-Get network resource management configuration and current usage.
+### `generate_invite`
+Generate a shareable invite string for other users to connect to this node.
 - **Args:** none
+- **Requires:** Network must be running (needs listen addresses).
 - **Returns:**
   ```typescript
   {
-    active: boolean,                     // Whether network is running
-    max_established_connections: number,  // Total connection limit (default: 100)
-    max_established_per_peer: number,     // Per-peer connection limit (default: 2)
-    max_pending_incoming: number,         // Pending inbound connection limit (default: 64)
-    max_pending_outgoing: number,         // Pending outbound connection limit (default: 64)
-    request_rate_limit: number,           // Max inbound requests per peer per window (default: 30)
-    request_rate_window_secs: number,     // Rate window duration in seconds (default: 60)
-    max_concurrent_inbound_requests: number, // Max concurrent inbound requests (default: 128)
-    max_message_size_bytes: number,       // Max message size in bytes (default: 10MB)
-    connected_peers: number,              // Current connected peer count
-    connection_utilization_pct: number    // Connection utilization as percentage (0-100)
+    compact: string,      // Short format: "nodalync://connect/PeerId@/ip4/.../tcp/9000"
+    full: string,         // Full format: "nodalync://connect/<base64>" (all addresses + metadata)
+    peer_id: string,      // This node's PeerId
+    addresses: string[]   // Listen addresses included
   }
   ```
-- **Use case:** Display in the network settings/dashboard to show protection status.
-  When `connection_utilization_pct` exceeds 80%, consider showing a warning.
-- **Protection features:**
-  - **Connection limits:** Prevents resource exhaustion from too many peers
-  - **Per-peer rate limiting:** Inbound requests from a single peer are capped (30/min default). Excess requests are silently dropped.
-  - **GossipSub rate limiting:** 50 messages per 10s per peer, preventing broadcast floods
+- **compact** is best for messaging/sharing (single best address).
+- **full** is more robust (multiple addresses, handles NAT better).
+
+### `accept_invite`
+Accept an invite string from another user. Saves the peer and tries to connect.
+- **Args:** `{ invite_string: string }`
+- **Accepts:** Both compact and full invite formats. Prefix optional.
+- **Returns:**
+  ```typescript
+  {
+    peer_id: string,         // PeerId from the invite
+    name: string | null,     // Node name (if included in full invite)
+    addresses: string[],     // Addresses from the invite
+    connected: boolean,      // Whether connection succeeded immediately
+    saved: boolean           // Whether peer was saved for future reconnection
+  }
+  ```
+- If network isn't running, peer is saved and will be used as bootstrap on next `auto_start_network`.
 
 ---
 
@@ -593,19 +640,20 @@ Get network resource management configuration and current usage.
 1. **Startup flow:** `check_identity` → if false: show onboarding → `init_node(password, name)`; if true: show password → `unlock_node`
 2. **After unlock:** `get_identity` for profile display, then `auto_start_network` (recommended — loads seeds + known peers + mDNS + stable identity + spawns health monitor)
 3. **Stable PeerId:** The network now derives its libp2p PeerId from the node's Nodalync identity. PeerId persists across restarts. Display it in the profile as the node's network address.
-4. **Publish flow:** `publish_file`/`publish_text` → `extract_mentions(hash)` to populate L2 graph
-5. **Query flow (simple):** Use `auto_open_and_query(hash, price)` — handles channel management automatically.
-6. **Query flow (manual):** `get_fee_quote(price)` → `check_channel(provider_peer_id)` → if null: `open_channel(provider_peer_id, deposit)` → `query_content(hash, amount)` — fee is auto-recorded
-7. **Fee dashboard:** `get_fee_config` for summary, `get_transaction_history` for details, `set_fee_rate` to configure
-8. **Channel management:** `list_channels` for overview, `get_channel(peer_id)` for details, `close_channel(peer_id)` when done with a peer
-9. **L3 synthesis:** Select entities in graph → `create_l3_summary(title, text, ids)` → new L3 node appears with `synthesizes` edges. List all with `get_l3_summaries`.
-10. **Entity drill-down:** `get_entity_content_links(entity_id)` → shows which L0 content contributed to this entity. Combined with `get_subgraph`, this powers the full L0→L1→L2→L3 hierarchy view.
-11. **Price values:** Frontend sends NDL (e.g. 0.001), backend converts to tinybars internally
-12. **Hash format:** Always 64-char lowercase hex strings
-13. **Error handling:** All commands return `Result<T, String>` — errors are human-readable strings
-14. **NAT traversal:** Enabled by default (AutoNAT + UPnP + Relay + DCUtR). Use `get_nat_status` to display connectivity status. Most desktop users are behind NAT — the protocol automatically handles relay fallback and hole-punching.
-15. **Network health:** Poll `get_network_health` every 10-30s for the network status indicator. The background health monitor (spawned by `auto_start_network`) handles auto-reconnect, peer saves, and health classification. `stop_network` automatically saves peers and shuts down the monitor.
-16. **Peer handshake:** When a peer connects, the event loop automatically exchanges PeerInfo messages (protocol version, public key, capabilities). After handshake completes, `PeerInfo.handshake_complete` becomes `true` and message signature verification is enabled for that peer. No frontend action needed — this is fully automatic.
-17. **Seed nodes:** `auto_start_network` loads seeds first (highest priority), then known peers, then mDNS. For first-run users with no known peers, seeds are the only way to discover the network. Use `get_seed_nodes` to display seed config, `add_seed_node` to let users add custom seeds.
-18. **Network diagnostics:** If `get_network_health` shows "disconnected", call `diagnose_network` for actionable suggestions. Display `issues` + `suggestions` in a troubleshooting panel.
-19. **Resource protection:** The node enforces connection limits (100 total, 2 per peer) and per-peer request rate limiting (30 req/min). Use `get_resource_stats` for the network dashboard. These protect against resource exhaustion and query flooding — critical for D3 users on desktop machines.
+4. **Import flow (local add):** `add_content(file_path)` or `add_text_content(text, title)` → stores L0 + auto-extracts L1 mentions. Content stays local, not published.
+5. **Publish flow:** `publish_file`/`publish_text` → `extract_mentions(hash)` to populate L2 graph → content is announced to network
+6. **Query flow (simple):** Use `auto_open_and_query(hash, price)` — handles channel management automatically.
+7. **Query flow (manual):** `get_fee_quote(price)` → `check_channel(provider_peer_id)` → if null: `open_channel(provider_peer_id, deposit)` → `query_content(hash, amount)` — fee is auto-recorded
+8. **Fee dashboard:** `get_fee_config` for summary, `get_transaction_history` for details, `set_fee_rate` to configure
+9. **Channel management:** `list_channels` for overview, `get_channel(peer_id)` for details, `close_channel(peer_id)` when done with a peer
+10. **L3 synthesis:** Select entities in graph → `create_l3_summary(title, text, ids)` → new L3 node appears with `synthesizes` edges. List all with `get_l3_summaries`.
+11. **Entity drill-down:** `get_entity_content_links(entity_id)` → shows which L0 content contributed to this entity. Combined with `get_subgraph`, this powers the full L0→L1→L2→L3 hierarchy view.
+12. **Price values:** Frontend sends NDL (e.g. 0.001), backend converts to tinybars internally
+13. **Hash format:** Always 64-char lowercase hex strings
+14. **Error handling:** All commands return `Result<T, String>` — errors are human-readable strings
+15. **NAT traversal:** Enabled by default (AutoNAT + UPnP + Relay + DCUtR). Use `get_nat_status` to display connectivity status. Most desktop users are behind NAT — the protocol automatically handles relay fallback and hole-punching.
+16. **Network health:** Poll `get_network_health` every 10-30s for the network status indicator. The background health monitor (spawned by `auto_start_network`) handles auto-reconnect, peer saves, and health classification. `stop_network` automatically saves peers and shuts down the monitor.
+17. **Peer handshake:** When a peer connects, the event loop automatically exchanges PeerInfo messages (protocol version, public key, capabilities). After handshake completes, `PeerInfo.handshake_complete` becomes `true` and message signature verification is enabled for that peer. No frontend action needed — this is fully automatic.
+18. **Seed nodes:** `auto_start_network` loads seeds first (highest priority), then known peers, then mDNS. For first-run users with no known peers, seeds are the only way to discover the network. Use `get_seed_nodes` to display seed config, `add_seed_node` to let users add custom seeds.
+19. **Network diagnostics:** If `get_network_health` shows "disconnected", call `diagnose_network` for actionable suggestions. Display `issues` + `suggestions` in a troubleshooting panel.
+20. **Connection invites:** For D3 onboarding, the "Share" flow is: `generate_invite` → copy compact string → share via messaging. Receiving user: paste string → `accept_invite`. Show "Connected!" or "Saved — will connect on next network start."
