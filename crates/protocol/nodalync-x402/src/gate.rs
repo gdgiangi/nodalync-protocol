@@ -17,8 +17,7 @@ use tracing::{debug, info};
 use crate::error::{X402Error, X402Result};
 use crate::facilitator::FacilitatorClient;
 use crate::types::{
-    PaymentPayload, PaymentRequired, PaymentResponse, ProvenanceReceipt,
-    SettleResponse, X402Config,
+    PaymentPayload, PaymentRequired, PaymentResponse, ProvenanceReceipt, SettleResponse, X402Config,
 };
 
 /// Transaction record for audit and reporting.
@@ -148,15 +147,11 @@ impl PaymentGate {
             return Err(X402Error::NotConfigured);
         }
 
-        let facilitator = self
-            .facilitator
-            .as_ref()
-            .ok_or(X402Error::NotConfigured)?;
+        let facilitator = self.facilitator.as_ref().ok_or(X402Error::NotConfigured)?;
 
         // Step 1: Decode the payment payload
-        let payload = PaymentPayload::from_header(payment_header).map_err(|e| {
-            X402Error::MalformedPayload { reason: e }
-        })?;
+        let payload = PaymentPayload::from_header(payment_header)
+            .map_err(|e| X402Error::MalformedPayload { reason: e })?;
 
         // Step 2: Local validation
         self.validate_payload(&payload, required_amount)?;
@@ -209,13 +204,9 @@ impl PaymentGate {
         self.mark_nonce_used(&payload.payload.nonce).await;
 
         // Step 7: Calculate fee split
-        let total_amount: u64 = payload
-            .payload
-            .amount
-            .parse()
-            .unwrap_or(required_amount);
-        let app_fee =
-            total_amount * self.config.app_fee_percent as u64 / (100 + self.config.app_fee_percent as u64);
+        let total_amount: u64 = payload.payload.amount.parse().unwrap_or(required_amount);
+        let app_fee = total_amount * self.config.app_fee_percent as u64
+            / (100 + self.config.app_fee_percent as u64);
         let creator_payment = total_amount - app_fee;
 
         // Step 8: Record transaction
@@ -256,11 +247,7 @@ impl PaymentGate {
     }
 
     /// Validate a payment payload locally before sending to the facilitator.
-    fn validate_payload(
-        &self,
-        payload: &PaymentPayload,
-        required_amount: u64,
-    ) -> X402Result<()> {
+    fn validate_payload(&self, payload: &PaymentPayload, required_amount: u64) -> X402Result<()> {
         // Check scheme
         if payload.scheme != "exact" {
             return Err(X402Error::UnsupportedScheme {
@@ -276,11 +263,14 @@ impl PaymentGate {
         }
 
         // Check amount
-        let amount: u64 = payload.payload.amount.parse().map_err(|_| {
-            X402Error::MalformedPayload {
-                reason: format!("invalid amount: {}", payload.payload.amount),
-            }
-        })?;
+        let amount: u64 =
+            payload
+                .payload
+                .amount
+                .parse()
+                .map_err(|_| X402Error::MalformedPayload {
+                    reason: format!("invalid amount: {}", payload.payload.amount),
+                })?;
 
         // Total required = content price + app fee
         let total_required =
@@ -295,22 +285,12 @@ impl PaymentGate {
         // Check timing
         let now = current_timestamp();
 
-        let valid_after: u64 = payload
-            .payload
-            .valid_after
-            .parse()
-            .unwrap_or(0);
+        let valid_after: u64 = payload.payload.valid_after.parse().unwrap_or(0);
         if now < valid_after {
-            return Err(X402Error::PaymentNotYetValid {
-                valid_after,
-            });
+            return Err(X402Error::PaymentNotYetValid { valid_after });
         }
 
-        let valid_before: u64 = payload
-            .payload
-            .valid_before
-            .parse()
-            .unwrap_or(u64::MAX);
+        let valid_before: u64 = payload.payload.valid_before.parse().unwrap_or(u64::MAX);
         if now > valid_before {
             return Err(X402Error::PaymentExpired {
                 expired_at: valid_before,
@@ -451,12 +431,7 @@ mod tests {
         let gate = PaymentGate::new(config).unwrap();
 
         let pr = gate
-            .payment_required(
-                "nodalync://query/abc",
-                "abc123",
-                "Test knowledge",
-                100,
-            )
+            .payment_required("nodalync://query/abc", "abc123", "Test knowledge", 100)
             .unwrap();
 
         assert_eq!(pr.x402_version, 1);
@@ -569,10 +544,7 @@ mod tests {
         };
 
         let result = gate.validate_payload(&payload, 100);
-        assert!(matches!(
-            result,
-            Err(X402Error::InsufficientPayment { .. })
-        ));
+        assert!(matches!(result, Err(X402Error::InsufficientPayment { .. })));
     }
 
     #[test]

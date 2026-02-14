@@ -582,7 +582,11 @@ impl NodalyncMcpServer {
                 );
 
                 let content_hash_str = hash_to_string(&hash);
-                match self.x402_gate.process_payment(payment_header, &content_hash_str, price).await {
+                match self
+                    .x402_gate
+                    .process_payment(payment_header, &content_hash_str, price)
+                    .await
+                {
                     Ok(payment_response) => {
                         // Payment succeeded — deliver the content
                         info!(
@@ -3388,10 +3392,12 @@ mod tests {
         let hash_str = pub_json["hash"].as_str().unwrap().to_string();
 
         // Query without x402_payment — should get payment_required response
-        let query_input: QueryKnowledgeInput = serde_json::from_str(
-            &format!(r#"{{"query": "{}"}}"#, hash_str),
-        ).unwrap();
-        let result = server.query_knowledge(Parameters(query_input)).await.unwrap();
+        let query_input: QueryKnowledgeInput =
+            serde_json::from_str(&format!(r#"{{"query": "{}"}}"#, hash_str)).unwrap();
+        let result = server
+            .query_knowledge(Parameters(query_input))
+            .await
+            .unwrap();
 
         // Should NOT be an error — it's a successful response with payment requirements
         assert!(!result.is_error.unwrap_or(false));
@@ -3420,7 +3426,10 @@ mod tests {
                 assert_eq!(amount, 1_050_000);
 
                 // Verify instruction mentions retry
-                assert!(json["instruction"].as_str().unwrap().contains("x402_payment"));
+                assert!(json["instruction"]
+                    .as_str()
+                    .unwrap()
+                    .contains("x402_payment"));
             } else {
                 panic!("Expected text content");
             }
@@ -3451,10 +3460,12 @@ mod tests {
         let hash_str = pub_json["hash"].as_str().unwrap().to_string();
 
         // Query free content — should bypass x402 and return content directly
-        let query_input: QueryKnowledgeInput = serde_json::from_str(
-            &format!(r#"{{"query": "{}"}}"#, hash_str),
-        ).unwrap();
-        let result = server.query_knowledge(Parameters(query_input)).await.unwrap();
+        let query_input: QueryKnowledgeInput =
+            serde_json::from_str(&format!(r#"{{"query": "{}"}}"#, hash_str)).unwrap();
+        let result = server
+            .query_knowledge(Parameters(query_input))
+            .await
+            .unwrap();
 
         assert!(!result.is_error.unwrap_or(false));
 
@@ -3463,7 +3474,10 @@ mod tests {
                 let json: serde_json::Value = serde_json::from_str(text).unwrap();
 
                 // Should be actual content, NOT a payment_required response
-                assert!(json.get("status").is_none(), "Free content should not return payment_required");
+                assert!(
+                    json.get("status").is_none(),
+                    "Free content should not return payment_required"
+                );
                 assert_eq!(json["content"], "This is free knowledge for everyone");
                 assert_eq!(json["cost_hbar"], 0.0);
             }
@@ -3480,7 +3494,8 @@ mod tests {
         // Publish paid content
         let input: PublishContentInput = serde_json::from_str(
             r#"{"title": "Premium", "content": "Premium content", "price_hbar": 0.01}"#,
-        ).unwrap();
+        )
+        .unwrap();
         let pub_result = server.publish_content(Parameters(input)).await.unwrap();
         let pub_text = match &pub_result.content[0].raw {
             RawContent::Text(t) => t.text.clone(),
@@ -3490,10 +3505,15 @@ mod tests {
         let hash_str = pub_json["hash"].as_str().unwrap().to_string();
 
         // Query with garbage x402_payment — should fail with payment error
-        let query_input: QueryKnowledgeInput = serde_json::from_str(
-            &format!(r#"{{"query": "{}", "x402_payment": "not-valid-base64-!!!"}}"#, hash_str),
-        ).unwrap();
-        let result = server.query_knowledge(Parameters(query_input)).await.unwrap();
+        let query_input: QueryKnowledgeInput = serde_json::from_str(&format!(
+            r#"{{"query": "{}", "x402_payment": "not-valid-base64-!!!"}}"#,
+            hash_str
+        ))
+        .unwrap();
+        let result = server
+            .query_knowledge(Parameters(query_input))
+            .await
+            .unwrap();
 
         // Should be an error
         assert!(result.is_error.unwrap_or(false));
@@ -3526,10 +3546,12 @@ mod tests {
         let hash_str = pub_json["hash"].as_str().unwrap().to_string();
 
         // Query paid content without x402 — should use native flow (budget check)
-        let query_input: QueryKnowledgeInput = serde_json::from_str(
-            &format!(r#"{{"query": "{}"}}"#, hash_str),
-        ).unwrap();
-        let result = server.query_knowledge(Parameters(query_input)).await.unwrap();
+        let query_input: QueryKnowledgeInput =
+            serde_json::from_str(&format!(r#"{{"query": "{}"}}"#, hash_str)).unwrap();
+        let result = server
+            .query_knowledge(Parameters(query_input))
+            .await
+            .unwrap();
 
         // Should return content (budget check passes, native payment channel flow)
         assert!(!result.is_error.unwrap_or(false));
@@ -3539,7 +3561,10 @@ mod tests {
                 let json: serde_json::Value = serde_json::from_str(text).unwrap();
                 // Native flow delivers content directly
                 assert_eq!(json["content"], "Content via native payment channels");
-                assert!(json.get("status").is_none(), "Should not be payment_required");
+                assert!(
+                    json.get("status").is_none(),
+                    "Should not be payment_required"
+                );
             }
         }
     }
