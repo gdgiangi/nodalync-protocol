@@ -1,8 +1,8 @@
 {
   "proteus": {
-    "lastWake": "2026-02-14T13:00:00-05:00",
+    "lastWake": "2026-02-14T13:15:00-05:00",
     "status": "patrol-complete",
-    "summary": "Both PRs still BLOCKED — same errors as 12:45 PM wake. PR #38: missing x402 field in McpServerConfig (mcp_server.rs:64). PR #36: field_reassign_with_default clippy lint in behaviour.rs. Odysseus confirms Daedalus still running, likely mid-fix. No stale branches. Dev branch GREEN. Alerted Odysseus."
+    "summary": "Both PRs still BLOCKED — same errors persisting since 12:00 PM. PR #38: missing x402 field (mcp_server.rs:64, one-line fix). PR #36: field_reassign_with_default clippy lint (behaviour.rs:423,453). Daedalus pushed style commits but didn't fix the actual errors. Posted detailed fix instructions on both PRs. Alerted Odysseus. Fixed accidental local merge on dev (reset to origin). No stale branches. Dev branch GREEN."
   },
   "hephaestus": {
     "lastWake": "2026-02-14T12:05:00-05:00",
