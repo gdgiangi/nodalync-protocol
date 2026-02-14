@@ -123,7 +123,7 @@ pub use error::{NetworkError, NetworkResult};
 pub use event::{NatStatus, NetworkEvent};
 
 // Node
-pub use node::NetworkNode;
+pub use node::{NetworkNode, ResourceConfig};
 
 // Peer ID mapping
 pub use peer_id::PeerIdMapper;

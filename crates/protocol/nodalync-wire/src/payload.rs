@@ -69,6 +69,17 @@ pub struct SearchPayload {
     pub limit: u32,
     /// Offset for pagination
     pub offset: u32,
+    /// Maximum number of hops this search may be forwarded (0 = local only).
+    /// When a node receives a search with `max_hops > hop_count`, it forwards
+    /// the query to its own peers with `hop_count + 1`.
+    #[serde(default)]
+    pub max_hops: u8,
+    /// Current hop count — incremented on each forwarding step.
+    #[serde(default)]
+    pub hop_count: u8,
+    /// Peer IDs that have already seen this search (loop prevention).
+    #[serde(default)]
+    pub visited_peers: Vec<String>,
 }
 
 /// Filters for search queries.
@@ -755,6 +766,9 @@ mod tests {
             filters: None,
             limit: 10,
             offset: 0,
+            max_hops: 0,
+            hop_count: 0,
+            visited_peers: vec![],
         };
         let mut buf = Vec::new();
         ciborium::into_writer(&payload, &mut buf).unwrap();
@@ -776,6 +790,26 @@ mod tests {
             }),
             limit: 20,
             offset: 5,
+            max_hops: 0,
+            hop_count: 0,
+            visited_peers: vec![],
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: SearchPayload = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_search_payload_multi_hop_cbor_roundtrip() {
+        let payload = SearchPayload {
+            query: "distributed systems".to_string(),
+            filters: None,
+            limit: 10,
+            offset: 0,
+            max_hops: 2,
+            hop_count: 1,
+            visited_peers: vec!["12D3KooWPeer1".to_string(), "12D3KooWPeer2".to_string()],
         };
         let mut buf = Vec::new();
         ciborium::into_writer(&payload, &mut buf).unwrap();

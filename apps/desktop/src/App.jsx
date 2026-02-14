@@ -10,6 +10,7 @@ import CreateContentDialog from "./components/CreateContentDialog";
 import CommandPalette from "./components/CommandPalette";
 import GraphLegend from "./components/GraphLegend";
 import BalanceDashboard from "./components/BalanceDashboard";
+import KnowledgeImport from "./components/KnowledgeImport";
 
 function App() {
   const [graphData, setGraphData] = useState({ nodes: [], links: [] });
@@ -145,6 +146,14 @@ function App() {
     }, 2000);
   }
 
+  // Handle knowledge import completion — refresh graph
+  function handleImportComplete() {
+    setTimeout(() => {
+      loadFullGraph();
+      loadStats();
+    }, 1000);
+  }
+
   // Command palette action handler
   function handlePaletteAction(actionId) {
     switch (actionId) {
@@ -153,6 +162,9 @@ function App() {
         break;
       case "action:new-content":
         setShowCreateDialog(true);
+        break;
+      case "action:import-files":
+        window.__knowledgeImport?.openFilePicker?.();
         break;
       case "action:toggle-sidebar":
         // Sidebar toggle is internal to Sidebar — emit event
@@ -236,6 +248,33 @@ function App() {
           </h1>
 
           <SearchBar onSearch={handleSearch} />
+
+          {/* Import files button */}
+          <button
+            onClick={() => window.__knowledgeImport?.openFilePicker?.()}
+            className="btn text-[10px] flex-shrink-0"
+            style={{
+              borderColor: "rgba(74, 222, 128, 0.2)",
+              background: "rgba(74, 222, 128, 0.05)",
+              color: "var(--green)",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "rgba(74, 222, 128, 0.1)";
+              e.currentTarget.style.borderColor = "rgba(74, 222, 128, 0.35)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "rgba(74, 222, 128, 0.05)";
+              e.currentTarget.style.borderColor = "rgba(74, 222, 128, 0.2)";
+            }}
+            title="Import files into knowledge graph"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+            Import
+          </button>
 
           {/* Create content button */}
           <button
@@ -423,6 +462,9 @@ function App() {
         isOpen={showBalance}
         onClose={() => setShowBalance(false)}
       />
+
+      {/* Knowledge Import — drag-drop overlay + queue panel */}
+      <KnowledgeImport onImportComplete={handleImportComplete} />
     </div>
   );
 }

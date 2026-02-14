@@ -110,6 +110,47 @@ pub struct NetworkConfig {
     ///
     /// Default: 3. More reservations = better reachability but more overhead.
     pub max_relay_reservations: usize,
+
+    // ─── Resource Management ────────────────────────────────────────────
+    /// Maximum total established connections (inbound + outbound).
+    ///
+    /// Default: 100. Prevents resource exhaustion on desktop machines.
+    pub max_established_connections: u32,
+
+    /// Maximum established connections per peer.
+    ///
+    /// Default: 2. Prevents a single peer from consuming too many connections.
+    pub max_established_per_peer: u32,
+
+    /// Maximum pending incoming connections (not yet established).
+    ///
+    /// Default: 64. Limits SYN-flood style attacks.
+    pub max_pending_incoming: u32,
+
+    /// Maximum pending outgoing connections.
+    ///
+    /// Default: 64. Prevents excessive outbound connection attempts.
+    pub max_pending_outgoing: u32,
+
+    /// Maximum inbound request-response requests per peer per window.
+    ///
+    /// Default: 30. Prevents query floods from a single peer.
+    pub request_rate_limit: u32,
+
+    /// Window duration for request rate limiting.
+    ///
+    /// Default: 60 seconds.
+    pub request_rate_window: Duration,
+
+    /// Maximum concurrent inbound requests being processed.
+    ///
+    /// Default: 128. Prevents memory exhaustion from large payloads.
+    pub max_concurrent_inbound_requests: usize,
+
+    /// Maximum message size in bytes for request-response.
+    ///
+    /// Default: 10 MB (10_485_760 bytes). Prevents oversized payloads.
+    pub max_message_size: usize,
 }
 
 impl Default for NetworkConfig {
@@ -131,6 +172,15 @@ impl Default for NetworkConfig {
             nat_traversal: NatTraversal::Full,
             relay_nodes: Vec::new(),
             max_relay_reservations: 3,
+            // Resource management defaults
+            max_established_connections: 100,
+            max_established_per_peer: 2,
+            max_pending_incoming: 64,
+            max_pending_outgoing: 64,
+            request_rate_limit: 30,
+            request_rate_window: Duration::from_secs(60),
+            max_concurrent_inbound_requests: 128,
+            max_message_size: 10 * 1024 * 1024, // 10 MB
         }
     }
 }
@@ -215,6 +265,49 @@ impl NetworkConfig {
         self.max_relay_reservations = max;
         self
     }
+
+    /// Set maximum total established connections.
+    pub fn with_max_established_connections(mut self, max: u32) -> Self {
+        self.max_established_connections = max;
+        self
+    }
+
+    /// Set maximum established connections per peer.
+    pub fn with_max_established_per_peer(mut self, max: u32) -> Self {
+        self.max_established_per_peer = max;
+        self
+    }
+
+    /// Set maximum pending incoming connections.
+    pub fn with_max_pending_incoming(mut self, max: u32) -> Self {
+        self.max_pending_incoming = max;
+        self
+    }
+
+    /// Set maximum pending outgoing connections.
+    pub fn with_max_pending_outgoing(mut self, max: u32) -> Self {
+        self.max_pending_outgoing = max;
+        self
+    }
+
+    /// Set request rate limit (max requests per peer per window).
+    pub fn with_request_rate_limit(mut self, limit: u32, window: Duration) -> Self {
+        self.request_rate_limit = limit;
+        self.request_rate_window = window;
+        self
+    }
+
+    /// Set maximum concurrent inbound requests.
+    pub fn with_max_concurrent_inbound_requests(mut self, max: usize) -> Self {
+        self.max_concurrent_inbound_requests = max;
+        self
+    }
+
+    /// Set maximum message size in bytes.
+    pub fn with_max_message_size(mut self, max: usize) -> Self {
+        self.max_message_size = max;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -235,6 +328,15 @@ mod tests {
         assert!(config.relay_nodes.is_empty());
         assert_eq!(config.max_relay_reservations, 3);
         assert_eq!(config.idle_connection_timeout, Duration::from_secs(60));
+        // Resource management defaults
+        assert_eq!(config.max_established_connections, 100);
+        assert_eq!(config.max_established_per_peer, 2);
+        assert_eq!(config.max_pending_incoming, 64);
+        assert_eq!(config.max_pending_outgoing, 64);
+        assert_eq!(config.request_rate_limit, 30);
+        assert_eq!(config.request_rate_window, Duration::from_secs(60));
+        assert_eq!(config.max_concurrent_inbound_requests, 128);
+        assert_eq!(config.max_message_size, 10 * 1024 * 1024);
     }
 
     #[test]
@@ -301,6 +403,16 @@ mod tests {
         assert_eq!(config.nat_traversal, NatTraversal::Full);
         assert!(config.relay_nodes.is_empty());
         assert_eq!(config.max_relay_reservations, 3);
+
+        // Resource management defaults
+        assert_eq!(config.max_established_connections, 100);
+        assert_eq!(config.max_established_per_peer, 2);
+        assert_eq!(config.max_pending_incoming, 64);
+        assert_eq!(config.max_pending_outgoing, 64);
+        assert_eq!(config.request_rate_limit, 30);
+        assert_eq!(config.request_rate_window, Duration::from_secs(60));
+        assert_eq!(config.max_concurrent_inbound_requests, 128);
+        assert_eq!(config.max_message_size, 10 * 1024 * 1024);
     }
 
     #[test]
@@ -388,5 +500,26 @@ mod tests {
         assert_eq!(config.relay_nodes[0].0, peer_id);
         assert_eq!(config.relay_nodes[0].1, addr);
         assert_eq!(config.max_relay_reservations, 5);
+    }
+
+    #[test]
+    fn test_resource_management_builders() {
+        let config = NetworkConfig::new()
+            .with_max_established_connections(50)
+            .with_max_established_per_peer(3)
+            .with_max_pending_incoming(32)
+            .with_max_pending_outgoing(32)
+            .with_request_rate_limit(10, Duration::from_secs(30))
+            .with_max_concurrent_inbound_requests(64)
+            .with_max_message_size(5 * 1024 * 1024);
+
+        assert_eq!(config.max_established_connections, 50);
+        assert_eq!(config.max_established_per_peer, 3);
+        assert_eq!(config.max_pending_incoming, 32);
+        assert_eq!(config.max_pending_outgoing, 32);
+        assert_eq!(config.request_rate_limit, 10);
+        assert_eq!(config.request_rate_window, Duration::from_secs(30));
+        assert_eq!(config.max_concurrent_inbound_requests, 64);
+        assert_eq!(config.max_message_size, 5 * 1024 * 1024);
     }
 }

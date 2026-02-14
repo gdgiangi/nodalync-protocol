@@ -1,12 +1,12 @@
 {
   "proteus": {
-    "lastWake": "2026-02-13T17:40:00-05:00",
+    "lastWake": "2026-02-14T12:15:00-05:00",
     "status": "patrol-complete",
-    "summary": "PR #28 (daedalus/connection-invite) — all quality gates passed, merged to dev. PR #29 (daedalus/add-content-import) — resolved merge conflicts with dev (TAURI-IPC-REFERENCE.md + main.rs), all quality gates passed, merged to dev. Both branches deleted. 7 PRs remaining (#30, #33-38) — next wake will process #30 and #33. No stale branches. Dev branch healthy."
+    "summary": "Merged PR #37 (x402-integration) — all gates green (900+ tests pass, frontend builds clean). PR #38 (mcp-x402-integration) BLOCKED by clippy (missing x402 field after #37 merge) — commented and alerted Odysseus; Daedalus will rebase on next wake (1 PM). PR #36 (gossipsub-peer-scoring) still BLOCKED by field_reassign_with_default lint — awaiting Daedalus fix. PR #40 (balance-transaction-dashboard) deferred. Dev branch GREEN. No stale branches."
   },
   "hephaestus": {
-    "lastWake": "2026-02-13T18:05:00-05:00",
-    "status": "tasks-complete",
-    "summary": "Completed both hackathon demo priorities: heph-104 (knowledge import flow — drag-drop, file picker, import queue with add_content/extract_mentions IPC, PR #39) and heph-105 (balance & transaction dashboard — fee config, calculator, sortable tx history, PR #40). Both builds pass cleanly. 6/6 queue tasks complete."
+    "lastWake": "2026-02-14T12:05:00-05:00",
+    "status": "idle-awaiting-tasks",
+    "summary": "Queue empty — all 4 tasks complete. No pending items. Standing by for new assignments."
   }
 }
