@@ -159,6 +159,11 @@ enum SwarmCommand {
         request_id: libp2p::request_response::InboundRequestId,
         data: Vec<u8>,
     },
+
+    /// Get GossipSub peer scores for all connected peers.
+    GetPeerScores {
+        response: oneshot::Sender<Vec<(PeerId, f64)>>,
+    },
 }
 
 /// Type alias for pending request map to reduce type complexity.
@@ -536,6 +541,23 @@ impl NetworkNode {
             .map_err(|_| NetworkError::ChannelClosed)?;
 
         rx.await.map_err(|_| NetworkError::ChannelClosed)?
+    }
+
+    /// Get GossipSub peer scores for all connected peers.
+    ///
+    /// Returns a list of `(PeerId, score)` pairs. Scores are computed by
+    /// the GossipSub peer scoring system based on message delivery, mesh
+    /// participation, and protocol compliance.
+    ///
+    /// Returns an empty vec if peer scoring is disabled or no peers are connected.
+    pub async fn peer_scores(&self) -> NetworkResult<Vec<(PeerId, f64)>> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(SwarmCommand::GetPeerScores { response: tx })
+            .await
+            .map_err(|_| NetworkError::ChannelClosed)?;
+
+        rx.await.map_err(|_| NetworkError::ChannelClosed)
     }
 
     /// Get the current NAT status as detected by AutoNAT.
@@ -1176,6 +1198,22 @@ async fn run_swarm(
                         } else {
                             warn!("No response channel found for request {:?}", request_id);
                         }
+                    }
+                    SwarmCommand::GetPeerScores { response } => {
+                        let scores: Vec<(PeerId, f64)> = ctx
+                            .connected_peers
+                            .read()
+                            .unwrap()
+                            .iter()
+                            .filter_map(|peer| {
+                                swarm
+                                    .behaviour()
+                                    .gossipsub
+                                    .peer_score(peer)
+                                    .map(|score| (*peer, score))
+                            })
+                            .collect();
+                        let _ = response.send(scores);
                     }
                 }
             }

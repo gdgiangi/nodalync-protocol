@@ -151,6 +151,15 @@ pub struct NetworkConfig {
     ///
     /// Default: 10 MB (10_485_760 bytes). Prevents oversized payloads.
     pub max_message_size: usize,
+
+    /// Whether to enable GossipSub peer scoring.
+    ///
+    /// When enabled, peers are scored based on message delivery,
+    /// mesh participation, and protocol compliance. Low-scoring
+    /// peers are pruned from the mesh and eventually graylist-blocked.
+    ///
+    /// Default: true. Disable only for testing.
+    pub enable_peer_scoring: bool,
 }
 
 impl Default for NetworkConfig {
@@ -181,6 +190,7 @@ impl Default for NetworkConfig {
             request_rate_window: Duration::from_secs(60),
             max_concurrent_inbound_requests: 128,
             max_message_size: 10 * 1024 * 1024, // 10 MB
+            enable_peer_scoring: true,
         }
     }
 }
@@ -308,6 +318,12 @@ impl NetworkConfig {
         self.max_message_size = max;
         self
     }
+
+    /// Enable or disable GossipSub peer scoring.
+    pub fn with_peer_scoring(mut self, enable: bool) -> Self {
+        self.enable_peer_scoring = enable;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -337,6 +353,7 @@ mod tests {
         assert_eq!(config.request_rate_window, Duration::from_secs(60));
         assert_eq!(config.max_concurrent_inbound_requests, 128);
         assert_eq!(config.max_message_size, 10 * 1024 * 1024);
+        assert!(config.enable_peer_scoring);
     }
 
     #[test]
