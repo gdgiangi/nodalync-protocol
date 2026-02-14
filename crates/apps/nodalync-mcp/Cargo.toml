@@ -37,6 +37,10 @@ nodalync-store.workspace = true
 nodalync-ops.workspace = true
 nodalync-net.workspace = true
 nodalync-settle.workspace = true
+nodalync-x402.workspace = true
+
+# Encoding (for x402 payment headers)
+base64 = "0.22"
 
 [features]
 default = ["hedera-sdk"]

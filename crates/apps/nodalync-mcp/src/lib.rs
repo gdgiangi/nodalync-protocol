@@ -58,5 +58,5 @@ pub use tools::{
     PreviewContentInput, PreviewContentOutput, PublishContentInput, PublishContentOutput,
     QueryKnowledgeInput, QueryKnowledgeOutput, SetVisibilityInput, SetVisibilityOutput,
     SynthesizeContentInput, SynthesizeContentOutput, UpdateContentInput, UpdateContentOutput,
-    VersionEntry,
+    VersionEntry, X402PaymentRequiredOutput, X402PaymentRequirement, X402StatusOutput,
 };

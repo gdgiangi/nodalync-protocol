@@ -68,6 +68,7 @@ pub async fn mcp_server(
         enable_network,
         bootstrap_nodes: config.network.bootstrap_nodes.clone(),
         hedera,
+        x402: None,
     };
 
     // Run the MCP server (this blocks until the server exits)
@@ -93,6 +94,7 @@ mod tests {
             enable_network: false,
             bootstrap_nodes: vec![],
             hedera: None,
+            x402: None,
         };
 
         assert_eq!(config.budget_hbar, 1.0);
@@ -113,6 +115,7 @@ mod tests {
                     .to_string(),
             ],
             hedera: None,
+            x402: None,
         };
 
         assert!(config.enable_network);
@@ -133,6 +136,7 @@ mod tests {
                 contract_id: "0.0.7729011".to_string(),
                 network: "testnet".to_string(),
             }),
+            x402: None,
         };
 
         assert!(config.hedera.is_some());

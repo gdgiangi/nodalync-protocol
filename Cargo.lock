@@ -3237,6 +3237,7 @@ dependencies = [
 name = "nodalync-mcp"
 version = "0.10.1"
 dependencies = [
+ "base64 0.22.1",
  "bs58",
  "futures",
  "nodalync-crypto",
@@ -3245,6 +3246,7 @@ dependencies = [
  "nodalync-settle",
  "nodalync-store",
  "nodalync-types",
+ "nodalync-x402",
  "rmcp",
  "serde",
  "serde_json",
