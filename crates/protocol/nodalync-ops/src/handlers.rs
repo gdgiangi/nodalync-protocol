@@ -444,6 +444,7 @@ where
     /// 1. Search local manifests matching query
     /// 2. Apply filters (content type, max price)
     /// 3. Return SearchResponsePayload with results
+    ///
     /// Handle an incoming search request.
     ///
     /// Searches local content, then optionally forwards the query to connected
