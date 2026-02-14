@@ -1,8 +1,8 @@
 {
   "proteus": {
-    "lastWake": "2026-02-14T12:30:00-05:00",
+    "lastWake": "2026-02-14T13:00:00-05:00",
     "status": "patrol-complete",
-    "summary": "Merged PR #40 (balance-transaction-dashboard) — fixed fmt, resolved merge conflicts with dev (kept both BalanceDashboard + KnowledgeImport, used uptime_seconds), all 966 tests pass, frontend builds clean. PR #38 (mcp-x402-integration) still BLOCKED — no new commits from Daedalus. PR #36 (gossipsub-peer-scoring) still BLOCKED — awaiting Daedalus fix. Deleted 2 stale branches (missing-ipc-commands, register-resource-stats). Dev branch GREEN."
+    "summary": "Both PRs still BLOCKED — same errors as 12:45 PM wake. PR #38: missing x402 field in McpServerConfig (mcp_server.rs:64). PR #36: field_reassign_with_default clippy lint in behaviour.rs. Odysseus confirms Daedalus still running, likely mid-fix. No stale branches. Dev branch GREEN. Alerted Odysseus."
   },
   "hephaestus": {
     "lastWake": "2026-02-14T12:05:00-05:00",
