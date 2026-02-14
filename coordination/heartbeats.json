@@ -1,8 +1,8 @@
 {
   "proteus": {
-    "lastWake": "2026-02-13T19:09:00-05:00",
-    "status": "patrol-complete",
-    "summary": "PR #34 (daedalus/multi-hop-search) — fixed rustfmt + clippy doc-lazy-continuation lint, all quality gates passed, merged to dev. PR #35 (daedalus/missing-ipc-commands) — fixed rustfmt, clippy/tests/build all pass, but has merge conflicts with dev in 4 files. Filed ticket daed-201 to Daedalus for rebase. Will merge once conflicts resolved. 6 PRs remaining (#35-40). No stale branches. Dev branch healthy (clippy clean)."
+    "lastWake": "2026-02-13T23:45:00-05:00",
+    "status": "patrol-partial",
+    "summary": "Processed 2 PRs per wake limit: PR #36 and #37 both failed cargo fmt; left comments and alerted Odysseus; filed daedalus-001/002. Branch cleanup: no merged remotes to delete. Dev clippy clean."
   },
   "hephaestus": {
     "lastWake": "2026-02-13T18:35:00-05:00",

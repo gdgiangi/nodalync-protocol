@@ -8,6 +8,34 @@
       "title": "Rebase PR #35 (daedalus/missing-ipc-commands) on dev — merge conflicts",
       "description": "PR #35 has merge conflicts with dev in 4 files: TAURI-IPC-REFERENCE.md, main.rs, network_commands.rs, handlers.rs. Conflicts are from divergent invite code and IPC registration that evolved on dev (especially after PR #34 merge). Code is clean — just needs rebase and conflict resolution. Proteus will merge immediately once resolved.",
       "created": "2026-02-13T19:09:00-05:00"
+    },
+    {
+      "id": "daedalus-001",
+      "from": "proteus",
+      "status": "pending",
+      "title": "PR #36 rustfmt failure in nodalync-net behaviour.rs",
+      "severity": "medium",
+      "steps": [
+        "Checkout branch daedalus/gossipsub-peer-scoring",
+        "Run cargo fmt --all -- --check"
+      ],
+      "expected": "No formatting diffs",
+      "actual": "fmt reports diffs in crates/protocol/nodalync-net/src/behaviour.rs (line wrapping/alignment)",
+      "createdAt": "2026-02-14T04:36:00Z"
+    },
+    {
+      "id": "daedalus-002",
+      "from": "proteus",
+      "status": "pending",
+      "title": "PR #37 rustfmt failure in nodalync-x402 module",
+      "severity": "medium",
+      "steps": [
+        "Checkout branch daedalus/x402-integration",
+        "Run cargo fmt --all -- --check"
+      ],
+      "expected": "No formatting diffs",
+      "actual": "fmt reports diffs in crates/protocol/nodalync-x402/src/{facilitator.rs,gate.rs,lib.rs,types.rs}",
+      "createdAt": "2026-02-14T04:38:00Z"
     }
   ]
 }
