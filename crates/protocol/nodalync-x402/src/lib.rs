@@ -106,7 +106,7 @@ pub use error::{X402Error, X402Result};
 pub use facilitator::FacilitatorClient;
 pub use gate::{PaymentGate, TransactionRecord, X402Status};
 pub use types::{
-    PaymentPayload, PaymentRequired, PaymentResponse, X402Config,
-    HEADER_PAYMENT_REQUIRED, HEADER_PAYMENT_RESPONSE, HEADER_PAYMENT_SIGNATURE,
-    NETWORK_HEDERA_MAINNET, NETWORK_HEDERA_TESTNET, SCHEME_EXACT, X402_VERSION,
+    PaymentPayload, PaymentRequired, PaymentResponse, X402Config, HEADER_PAYMENT_REQUIRED,
+    HEADER_PAYMENT_RESPONSE, HEADER_PAYMENT_SIGNATURE, NETWORK_HEDERA_MAINNET,
+    NETWORK_HEDERA_TESTNET, SCHEME_EXACT, X402_VERSION,
 };

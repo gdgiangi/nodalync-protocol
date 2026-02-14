@@ -557,20 +557,17 @@ mod tests {
     fn test_app_fee_calculation() {
         // 0% fee
         let config = X402Config::testnet("0.0.12345", 0);
-        let pr =
-            PaymentRequired::for_knowledge("url", "hash", "desc", 100, &config);
+        let pr = PaymentRequired::for_knowledge("url", "hash", "desc", 100, &config);
         assert_eq!(pr.accepts[0].amount, "100");
 
         // 5% fee
         let config = X402Config::testnet("0.0.12345", 5);
-        let pr =
-            PaymentRequired::for_knowledge("url", "hash", "desc", 100, &config);
+        let pr = PaymentRequired::for_knowledge("url", "hash", "desc", 100, &config);
         assert_eq!(pr.accepts[0].amount, "105");
 
         // 10% fee
         let config = X402Config::testnet("0.0.12345", 10);
-        let pr =
-            PaymentRequired::for_knowledge("url", "hash", "desc", 1000, &config);
+        let pr = PaymentRequired::for_knowledge("url", "hash", "desc", 1000, &config);
         assert_eq!(pr.accepts[0].amount, "1100");
     }
 

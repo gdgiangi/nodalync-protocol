@@ -13,8 +13,8 @@ use tracing::{debug, info, warn};
 
 use crate::error::{X402Error, X402Result};
 use crate::types::{
-    PaymentRequirement, SettleRequest, SettleResponse, SupportedResponse,
-    VerifyRequest, VerifyResponse, X402Config, X402_VERSION,
+    PaymentRequirement, SettleRequest, SettleResponse, SupportedResponse, VerifyRequest,
+    VerifyResponse, X402Config, X402_VERSION,
 };
 
 /// Default HTTP timeout for facilitator requests.
@@ -35,7 +35,9 @@ impl FacilitatorClient {
         let client = Client::builder()
             .timeout(DEFAULT_TIMEOUT)
             .build()
-            .map_err(|e| X402Error::FacilitatorNetwork(format!("failed to create HTTP client: {}", e)))?;
+            .map_err(|e| {
+                X402Error::FacilitatorNetwork(format!("failed to create HTTP client: {}", e))
+            })?;
 
         Ok(Self {
             client,
@@ -68,7 +70,11 @@ impl FacilitatorClient {
             X402Error::FacilitatorNetwork(format!("failed to parse supported response: {}", e))
         })?;
 
-        debug!(kinds = supported.kinds.len(), "Facilitator supports {} networks", supported.kinds.len());
+        debug!(
+            kinds = supported.kinds.len(),
+            "Facilitator supports {} networks",
+            supported.kinds.len()
+        );
         Ok(supported)
     }
 
@@ -93,12 +99,7 @@ impl FacilitatorClient {
             payment_requirements: requirements.clone(),
         };
 
-        let response = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await?;
+        let response = self.client.post(&url).json(&request).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -108,11 +109,13 @@ impl FacilitatorClient {
             });
         }
 
-        let verify_response: VerifyResponse = response.json().await.map_err(|e| {
-            X402Error::VerificationFailed {
-                reason: format!("failed to parse verify response: {}", e),
-            }
-        })?;
+        let verify_response: VerifyResponse =
+            response
+                .json()
+                .await
+                .map_err(|e| X402Error::VerificationFailed {
+                    reason: format!("failed to parse verify response: {}", e),
+                })?;
 
         if verify_response.is_valid {
             debug!(payer = ?verify_response.payer, "Payment verified successfully");
@@ -147,12 +150,7 @@ impl FacilitatorClient {
             payment_requirements: requirements.clone(),
         };
 
-        let response = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await?;
+        let response = self.client.post(&url).json(&request).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -162,11 +160,13 @@ impl FacilitatorClient {
             });
         }
 
-        let settle_response: SettleResponse = response.json().await.map_err(|e| {
-            X402Error::SettlementFailed {
-                reason: format!("failed to parse settle response: {}", e),
-            }
-        })?;
+        let settle_response: SettleResponse =
+            response
+                .json()
+                .await
+                .map_err(|e| X402Error::SettlementFailed {
+                    reason: format!("failed to parse settle response: {}", e),
+                })?;
 
         if settle_response.success {
             info!(
@@ -210,10 +210,7 @@ impl FacilitatorClient {
     /// Check if the facilitator supports a specific network.
     pub async fn supports_network(&self, network: &str) -> X402Result<bool> {
         let supported = self.get_supported().await?;
-        Ok(supported
-            .kinds
-            .iter()
-            .any(|k| k.network == network))
+        Ok(supported.kinds.iter().any(|k| k.network == network))
     }
 
     /// Get the facilitator's base URL.
