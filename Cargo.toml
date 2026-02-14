@@ -14,6 +14,7 @@ members = [
     "crates/protocol/nodalync-ops",
     "crates/protocol/nodalync-net",
     "crates/protocol/nodalync-settle",
+    "crates/protocol/nodalync-x402",
     "crates/apps/nodalync-cli",
     "crates/apps/nodalync-mcp",
 ]
@@ -88,6 +89,7 @@ nodalync-econ = { path = "crates/protocol/nodalync-econ" }
 nodalync-ops = { path = "crates/protocol/nodalync-ops" }
 nodalync-net = { path = "crates/protocol/nodalync-net" }
 nodalync-settle = { path = "crates/protocol/nodalync-settle" }
+nodalync-x402 = { path = "crates/protocol/nodalync-x402" }
 nodalync-test-utils = { path = "crates/nodalync-test-utils" }
 nodalync-mcp = { path = "crates/apps/nodalync-mcp" }
 

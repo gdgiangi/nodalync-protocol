@@ -3392,6 +3392,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "nodalync-x402"
+version = "0.4.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "hex",
+ "nodalync-crypto",
+ "nodalync-econ",
+ "nodalync-types",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "nohash-hasher"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
