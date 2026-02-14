@@ -100,6 +100,12 @@ impl PrivateKey {
     pub(crate) fn to_signing_key(&self) -> SigningKey {
         SigningKey::from_bytes(&self.0)
     }
+
+    /// Derive the corresponding public key from this private key.
+    pub fn public_key(&self) -> PublicKey {
+        let signing_key = self.to_signing_key();
+        PublicKey(signing_key.verifying_key().to_bytes())
+    }
 }
 
 impl std::fmt::Debug for PrivateKey {

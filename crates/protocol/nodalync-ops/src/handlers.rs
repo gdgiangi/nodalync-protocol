@@ -10,11 +10,11 @@ use nodalync_store::{ChannelStore, ContentStore, ManifestStore, PeerStore};
 use nodalync_types::{Channel, ChannelState, Payment, Visibility};
 use nodalync_valid::Validator;
 use nodalync_wire::{
-    decode_message, decode_payload, AnnouncePayload, ChannelAcceptPayload, ChannelCloseAckPayload,
-    ChannelClosePayload, ChannelOpenPayload, MessageType, PaymentReceipt, PreviewRequestPayload,
-    PreviewResponsePayload, QueryRequestPayload, QueryResponsePayload, SearchPayload,
-    SearchResponsePayload, SearchResult as WireSearchResult, VersionInfo, VersionRequestPayload,
-    VersionResponsePayload,
+    decode_message, decode_payload, AnnouncePayload, Capability, ChannelAcceptPayload,
+    ChannelCloseAckPayload, ChannelClosePayload, ChannelOpenPayload, MessageType, PaymentReceipt,
+    PeerInfoPayload, PreviewRequestPayload, PreviewResponsePayload, QueryRequestPayload,
+    QueryResponsePayload, SearchPayload, SearchResponsePayload, SearchResult as WireSearchResult,
+    VersionInfo, VersionRequestPayload, VersionResponsePayload,
 };
 use tracing::{debug, info, warn};
 
@@ -529,6 +529,99 @@ where
             results,
             total_count,
         })
+    }
+
+    /// Handle an incoming peer info (handshake) message.
+    ///
+    /// When a new peer connects, each side sends a PeerInfo message containing
+    /// their Nodalync identity (public key), protocol version, and capabilities.
+    /// This enables:
+    /// 1. Signature verification for all subsequent messages
+    /// 2. Protocol version negotiation
+    /// 3. Capability discovery (which features the peer supports)
+    /// 4. Peer store population for reconnection
+    ///
+    /// Note: The libp2p↔Nodalync peer ID mapping is registered by the event loop
+    /// (which has access to the Network trait). This handler focuses on persisting
+    /// the peer's identity to the store.
+    ///
+    /// Returns our own PeerInfoPayload as the response.
+    pub fn handle_peer_info(&mut self, request: &PeerInfoPayload) -> OpsResult<PeerInfoPayload> {
+        let timestamp = current_timestamp();
+
+        info!(
+            peer_id = %request.peer_id,
+            protocol_version = %request.protocol_version,
+            capabilities = ?request.capabilities,
+            content_count = request.content_count,
+            node_name = ?request.node_name,
+            "Received peer handshake"
+        );
+
+        // Store the peer's public key and info in the peer store
+        // This is critical: without the public key, we can't verify signatures
+        let peer_info = nodalync_store::PeerInfo::new(
+            request.peer_id,
+            request.public_key,
+            request.addresses.clone(),
+            timestamp,
+        );
+        if let Err(e) = self.state.peers.upsert(&peer_info) {
+            warn!(peer_id = %request.peer_id, error = %e, "Failed to store peer info");
+        } else {
+            info!(
+                peer_id = %request.peer_id,
+                "Peer registered — signature verification now enabled"
+            );
+        }
+
+        // Build our response
+        Ok(self.build_peer_info_payload())
+    }
+
+    /// Build a PeerInfoPayload for this node.
+    ///
+    /// Used both for handshake responses and for initiating handshakes
+    /// when we connect to a new peer.
+    pub fn build_peer_info_payload(&self) -> PeerInfoPayload {
+        // Get our listen addresses from the network
+        let addresses: Vec<String> = self
+            .network()
+            .map(|n| n.listen_addresses().iter().map(|a| a.to_string()).collect())
+            .unwrap_or_default();
+
+        // Determine capabilities based on what's configured
+        let mut capabilities = vec![Capability::Query, Capability::Index];
+        if self.has_settlement() {
+            capabilities.push(Capability::Settle);
+            capabilities.push(Capability::Channel);
+        } else if self.has_private_key() {
+            capabilities.push(Capability::Channel);
+        }
+
+        // Count content items
+        let content_count = {
+            let filter = nodalync_store::ManifestFilter::new();
+            self.state
+                .manifests
+                .list(filter)
+                .map(|v| v.len() as u64)
+                .unwrap_or(0)
+        };
+
+        PeerInfoPayload {
+            peer_id: self.peer_id(),
+            public_key: self
+                .private_key()
+                .map(|pk| pk.public_key())
+                .unwrap_or(nodalync_crypto::PublicKey::from_bytes([0u8; 32])),
+            protocol_version: nodalync_types::VERSION.to_string(),
+            addresses,
+            capabilities,
+            content_count,
+            uptime: 0,       // TODO: track node start time
+            node_name: None, // Set by desktop app if profile exists
+        }
     }
 
     /// Handle an incoming channel open request.
@@ -1163,6 +1256,43 @@ where
                             })?;
                         Ok(Some((MessageType::SearchResponse, response_bytes)))
                     }
+                    MessageType::PeerInfo => {
+                        let request: PeerInfoPayload =
+                            decode_payload(&message.payload).map_err(|e| {
+                                OpsError::invalid_operation(format!("decode error: {}", e))
+                            })?;
+                        debug!(
+                            "Received peer info from {}: version={}, caps={:?}",
+                            request.peer_id, request.protocol_version, request.capabilities
+                        );
+                        // Register libp2p <-> Nodalync peer mapping
+                        if let Some(network) = self.network() {
+                            network.register_peer_mapping(peer, request.peer_id);
+                        }
+                        let response = self.handle_peer_info(&request)?;
+                        let response_bytes =
+                            nodalync_wire::encode_payload(&response).map_err(|e| {
+                                OpsError::invalid_operation(format!("encoding error: {}", e))
+                            })?;
+                        Ok(Some((MessageType::PeerInfoResponse, response_bytes)))
+                    }
+                    MessageType::PeerInfoResponse => {
+                        // This is a response to our handshake — register the peer
+                        let response: PeerInfoPayload =
+                            decode_payload(&message.payload).map_err(|e| {
+                                OpsError::invalid_operation(format!("decode error: {}", e))
+                            })?;
+                        debug!(
+                            "Received peer info response from {}: version={}",
+                            response.peer_id, response.protocol_version
+                        );
+                        // Register libp2p <-> Nodalync peer mapping
+                        if let Some(network) = self.network() {
+                            network.register_peer_mapping(peer, response.peer_id);
+                        }
+                        let _ = self.handle_peer_info(&response)?;
+                        Ok(None) // No further response needed
+                    }
                     _ => {
                         debug!("Unhandled message type: {:?}", message.message_type);
                         Ok(None)
@@ -1170,13 +1300,14 @@ where
                 }
             }
             NetworkEvent::PeerConnected { peer } => {
-                // Log peer connection (could track connected peers in state)
-                let _ = peer;
+                info!(
+                    "Peer connected: {} — handshake will be initiated by event loop",
+                    peer
+                );
                 Ok(None)
             }
             NetworkEvent::PeerDisconnected { peer } => {
-                // Log peer disconnection
-                let _ = peer;
+                info!("Peer disconnected: {}", peer);
                 Ok(None)
             }
             NetworkEvent::BroadcastReceived { topic, data } => {

@@ -479,15 +479,19 @@ pub struct PongPayload {
 
 /// Payload for PEER_INFO messages.
 ///
-/// Exchanges peer information and capabilities.
+/// Exchanges peer identity, capabilities, and protocol version on connection.
+/// This is the handshake message — each side sends one when a new peer connects,
+/// enabling signature verification and capability negotiation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct PeerInfoPayload {
-    /// Peer identifier
+    /// Nodalync peer identifier (Ed25519 public key hash)
     pub peer_id: PeerId,
-    /// Peer's public key
+    /// Peer's Ed25519 public key (for signature verification)
     pub public_key: PublicKey,
-    /// Multiaddrs for this peer
+    /// Protocol version string (e.g. "0.7.1")
+    pub protocol_version: String,
+    /// Multiaddrs where this peer can be reached
     pub addresses: Vec<String>,
     /// Supported capabilities
     pub capabilities: Vec<Capability>,
@@ -495,6 +499,9 @@ pub struct PeerInfoPayload {
     pub content_count: u64,
     /// Uptime in seconds
     pub uptime: u64,
+    /// Optional display name for the node
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_name: Option<String>,
 }
 
 /// Peer capabilities.
@@ -1101,6 +1108,7 @@ mod tests {
         let payload = PeerInfoPayload {
             peer_id: PeerId([9u8; 20]),
             public_key: PublicKey::from_bytes([10u8; 32]),
+            protocol_version: "0.7.1".to_string(),
             addresses: vec![
                 "/ip4/127.0.0.1/tcp/9000".to_string(),
                 "/ip4/10.0.0.1/tcp/9000".to_string(),
@@ -1108,10 +1116,30 @@ mod tests {
             capabilities: vec![Capability::Query, Capability::Channel, Capability::Settle],
             content_count: 100,
             uptime: 86400,
+            node_name: Some("TestNode".to_string()),
         };
         let mut buf = Vec::new();
         ciborium::into_writer(&payload, &mut buf).unwrap();
         let decoded: PeerInfoPayload = ciborium::from_reader(&buf[..]).unwrap();
         assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_peer_info_payload_without_name() {
+        let payload = PeerInfoPayload {
+            peer_id: PeerId([9u8; 20]),
+            public_key: PublicKey::from_bytes([10u8; 32]),
+            protocol_version: "0.7.1".to_string(),
+            addresses: vec![],
+            capabilities: vec![Capability::Query],
+            content_count: 0,
+            uptime: 0,
+            node_name: None,
+        };
+        let mut buf = Vec::new();
+        ciborium::into_writer(&payload, &mut buf).unwrap();
+        let decoded: PeerInfoPayload = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, payload);
+        assert!(decoded.node_name.is_none());
     }
 }
