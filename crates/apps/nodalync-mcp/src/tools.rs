@@ -22,6 +22,12 @@ use serde::{Deserialize, Serialize};
 /// - Opens payment channels when needed
 /// - Auto-deposits if settlement balance is insufficient
 /// - Returns transaction confirmations in the response
+///
+/// For x402 payment flow:
+/// 1. Call without `x402_payment` — if content requires payment and x402 is enabled,
+///    returns a 402 response with payment requirements instead of content.
+/// 2. Call again with `x402_payment` containing the base64-encoded payment header —
+///    payment is verified via the facilitator and content is delivered.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct QueryKnowledgeInput {
     /// The query string (natural language or content hash).
@@ -31,6 +37,13 @@ pub struct QueryKnowledgeInput {
     /// If not specified, uses auto-approve threshold.
     #[serde(default)]
     pub budget_hbar: Option<f64>,
+
+    /// x402 payment header (base64-encoded).
+    /// When provided, the server validates the payment via the Blocky402 facilitator
+    /// and delivers content on successful settlement.
+    /// When omitted and content has a price, the server returns payment requirements.
+    #[serde(default)]
+    pub x402_payment: Option<String>,
 }
 
 /// Output from the `query_knowledge` tool.
@@ -757,6 +770,109 @@ pub struct GetEarningsOutput {
     pub total_queries: u64,
     /// Number of content items with earnings.
     pub content_count: u32,
+}
+
+// ============================================================================
+// x402 Payment Protocol Types
+// ============================================================================
+
+/// Output when content requires x402 payment.
+///
+/// Returned instead of content when:
+/// - Content has a price > 0
+/// - x402 is enabled on the server
+/// - No `x402_payment` header was provided in the request
+///
+/// The client should construct a payment using the `accepts` requirements,
+/// then retry with the `x402_payment` field populated.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct X402PaymentRequiredOutput {
+    /// Always "payment_required" — signals the client to pay.
+    pub status: String,
+
+    /// x402 protocol version.
+    pub x402_version: u32,
+
+    /// Content hash (base58 encoded) — what you're paying for.
+    pub content_hash: String,
+
+    /// Content title.
+    pub title: String,
+
+    /// Content description / preview.
+    pub description: String,
+
+    /// Base content price in HBAR (before app fee).
+    pub price_hbar: f64,
+
+    /// Total payment required in HBAR (price + app fee).
+    pub total_required_hbar: f64,
+
+    /// Application fee percentage applied on top of content price.
+    pub app_fee_percent: u8,
+
+    /// Payment requirements the client must satisfy.
+    /// Typically one entry for HBAR on Hedera testnet/mainnet.
+    pub accepts: Vec<X402PaymentRequirement>,
+
+    /// Hint: retry `query_knowledge` with this hash and the `x402_payment` field.
+    pub instruction: String,
+}
+
+/// A single accepted payment method for x402.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct X402PaymentRequirement {
+    /// Payment scheme (e.g., "exact").
+    pub scheme: String,
+
+    /// Network identifier (CAIP-2 format, e.g., "hedera:testnet").
+    pub network: String,
+
+    /// Required payment amount in smallest unit (tinybars for HBAR).
+    pub amount: String,
+
+    /// Asset identifier ("HBAR" for native Hedera).
+    pub asset: String,
+
+    /// Address to pay to (Hedera account ID).
+    pub pay_to: String,
+
+    /// Maximum time in seconds the payment is valid after creation.
+    pub max_timeout_seconds: u64,
+}
+
+/// Output from the `x402_status` tool.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct X402StatusOutput {
+    /// Whether x402 payments are enabled on this node.
+    pub enabled: bool,
+
+    /// Settlement network (e.g., "hedera:testnet").
+    pub network: String,
+
+    /// Facilitator URL (Blocky402 endpoint).
+    pub facilitator_url: String,
+
+    /// Receiving Hedera account ID.
+    pub account_id: String,
+
+    /// Application fee percentage.
+    pub app_fee_percent: u8,
+
+    /// Total x402 transactions processed.
+    pub total_transactions: usize,
+
+    /// Total payment volume in tinybars.
+    pub total_volume: u64,
+
+    /// Total application fees collected in tinybars.
+    pub total_app_fees: u64,
+
+    /// Total volume in HBAR.
+    pub total_volume_hbar: f64,
+
+    /// Total app fees in HBAR.
+    pub total_app_fees_hbar: f64,
 }
 
 // ============================================================================

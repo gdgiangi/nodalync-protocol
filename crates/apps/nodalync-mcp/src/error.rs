@@ -55,6 +55,22 @@ pub enum McpError {
     /// Internal server error.
     #[error("internal error: {0}")]
     Internal(String),
+
+    /// x402 payment required — content needs payment via x402 protocol.
+    #[error("payment required: content {content_hash} costs {price_tinybars} tinybars")]
+    X402PaymentRequired {
+        /// Content hash requiring payment.
+        content_hash: String,
+        /// Price in tinybars.
+        price_tinybars: Amount,
+    },
+
+    /// x402 payment failed — payment was provided but invalid.
+    #[error("x402 payment failed: {reason}")]
+    X402PaymentFailed {
+        /// Reason the payment failed.
+        reason: String,
+    },
 }
 
 impl McpError {
@@ -77,6 +93,8 @@ impl McpError {
             Self::ContentTooLarge { .. } => ErrorCode::InvalidManifest,
             Self::ContentAlreadyExists(_) => ErrorCode::InvalidManifest,
             Self::Internal(_) => ErrorCode::InternalError,
+            Self::X402PaymentRequired { .. } => ErrorCode::PaymentRequired,
+            Self::X402PaymentFailed { .. } => ErrorCode::PaymentInvalid,
         }
     }
 }
