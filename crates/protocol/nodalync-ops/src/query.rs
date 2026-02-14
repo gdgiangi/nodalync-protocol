@@ -826,6 +826,7 @@ where
 
         // 3. Query connected peers CONCURRENTLY via SEARCH protocol
         if let Some(network) = self.network().cloned() {
+            let local_peer_id_str = network.local_peer_id().to_string();
             let search_payload = SearchPayload {
                 query: query.to_string(),
                 filters: content_type.map(|ct| SearchFilters {
@@ -834,6 +835,11 @@ where
                 }),
                 limit,
                 offset: 0,
+                // Enable 1-hop forwarding so peers relay our search to their peers,
+                // effectively tripling network reach for content discovery.
+                max_hops: 1,
+                hop_count: 0,
+                visited_peers: vec![local_peer_id_str],
             };
 
             let peers: Vec<_> = network.connected_peers().into_iter().take(5).collect();

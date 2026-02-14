@@ -444,16 +444,27 @@ where
     /// 1. Search local manifests matching query
     /// 2. Apply filters (content type, max price)
     /// 3. Return SearchResponsePayload with results
-    pub fn handle_search_request(
+    ///
+    /// Handle an incoming search request.
+    ///
+    /// Searches local content, then optionally forwards the query to connected
+    /// peers if `hop_count < max_hops` (multi-hop search forwarding).
+    /// This extends content discovery beyond directly connected peers — a node
+    /// A↔B↔C can discover content on C even without a direct A↔C connection.
+    pub async fn handle_search_request(
         &mut self,
         _requester: &PeerId,
         request: &SearchPayload,
     ) -> OpsResult<SearchResponsePayload> {
         use nodalync_store::ManifestFilter;
         use nodalync_types::L1Summary;
+        use std::collections::HashSet;
 
         let query = request.query.to_lowercase();
         let limit = request.limit.min(100);
+
+        // Track seen hashes for dedup across local + forwarded results
+        let mut seen_hashes = HashSet::new();
 
         // Build filter for shared content only
         let mut filter = ManifestFilter::new()
@@ -480,9 +491,11 @@ where
             .unwrap_or_default();
 
         // Convert to SearchResult
-        let results: Vec<WireSearchResult> = manifests
+        let mut results: Vec<WireSearchResult> = manifests
             .iter()
             .map(|m| {
+                seen_hashes.insert(m.hash);
+
                 // Extract L1 summary if available
                 let l1_summary = self
                     .extract_l1_summary(&m.hash)
@@ -510,19 +523,87 @@ where
             .collect();
 
         // Apply max_price filter if specified
-        let results = if let Some(ref filters) = request.filters {
+        if let Some(ref filters) = request.filters {
             if let Some(max_price) = filters.max_price {
-                results
-                    .into_iter()
-                    .filter(|r| r.price <= max_price)
-                    .collect()
-            } else {
-                results
+                results.retain(|r| r.price <= max_price);
             }
-        } else {
-            results
-        };
+        }
 
+        // --- Multi-hop forwarding ---
+        // If hop_count < max_hops AND we have a network, forward to our peers.
+        // Cap at 3 hops max to prevent abuse, and limit to 3 peers for forwarding.
+        let effective_max_hops = request.max_hops.min(3);
+        if request.hop_count < effective_max_hops {
+            if let Some(network) = self.network().cloned() {
+                let our_peer_id = network.local_peer_id().to_string();
+
+                // Build visited set for loop prevention
+                let visited: HashSet<String> = request.visited_peers.iter().cloned().collect();
+
+                // Build forwarded search payload with incremented hop count
+                let mut forwarded_visited = request.visited_peers.clone();
+                forwarded_visited.push(our_peer_id.clone());
+
+                let forward_payload = SearchPayload {
+                    query: request.query.clone(),
+                    filters: request.filters.clone(),
+                    limit: request.limit,
+                    offset: request.offset,
+                    max_hops: effective_max_hops,
+                    hop_count: request.hop_count + 1,
+                    visited_peers: forwarded_visited,
+                };
+
+                // Select peers to forward to (exclude visited peers, limit to 3)
+                let forward_peers: Vec<_> = network
+                    .connected_peers()
+                    .into_iter()
+                    .filter(|p| !visited.contains(&p.to_string()))
+                    .take(3)
+                    .collect();
+
+                if !forward_peers.is_empty() {
+                    tracing::debug!(
+                        hop = request.hop_count + 1,
+                        max_hops = effective_max_hops,
+                        peer_count = forward_peers.len(),
+                        query = %request.query,
+                        "Forwarding search to peers"
+                    );
+
+                    // Forward concurrently with 3-second timeout per peer
+                    let forward_futures: Vec<_> = forward_peers
+                        .into_iter()
+                        .map(|peer| {
+                            let net = network.clone();
+                            let payload = forward_payload.clone();
+                            async move {
+                                tokio::time::timeout(
+                                    std::time::Duration::from_secs(3),
+                                    net.send_search(peer, payload),
+                                )
+                                .await
+                            }
+                        })
+                        .collect();
+
+                    let responses = futures::future::join_all(forward_futures).await;
+
+                    for result in responses {
+                        if let Ok(Ok(response)) = result {
+                            for r in response.results {
+                                if seen_hashes.insert(r.hash) {
+                                    results.push(r);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Truncate to limit
+        results.truncate(limit as usize);
         let total_count = results.len() as u64;
 
         Ok(SearchResponsePayload {
@@ -1249,7 +1330,7 @@ where
                                 OpsError::invalid_operation(format!("decode error: {}", e))
                             })?;
                         debug!("Received search request for query: {}", request.query);
-                        let response = self.handle_search_request(&nodalync_peer, &request)?;
+                        let response = self.handle_search_request(&nodalync_peer, &request).await?;
                         let response_bytes =
                             nodalync_wire::encode_payload(&response).map_err(|e| {
                                 OpsError::invalid_operation(format!("encoding error: {}", e))
@@ -1965,9 +2046,15 @@ mod tests {
             filters: None,
             limit: 10,
             offset: 0,
+            max_hops: 0,
+            hop_count: 0,
+            visited_peers: vec![],
         };
 
-        let response = ops.handle_search_request(&requester, &request).unwrap();
+        let response = ops
+            .handle_search_request(&requester, &request)
+            .await
+            .unwrap();
         assert!(
             response.total_count >= 1,
             "Should find at least one matching result"
@@ -1975,8 +2062,8 @@ mod tests {
         assert!(response.results.iter().any(|r| r.hash == hash));
     }
 
-    #[test]
-    fn test_handle_search_request_empty_results() {
+    #[tokio::test]
+    async fn test_handle_search_request_empty_results() {
         let (mut ops, _temp) = create_test_ops();
 
         // Search for content that does not exist
@@ -1986,9 +2073,15 @@ mod tests {
             filters: None,
             limit: 10,
             offset: 0,
+            max_hops: 0,
+            hop_count: 0,
+            visited_peers: vec![],
         };
 
-        let response = ops.handle_search_request(&requester, &request).unwrap();
+        let response = ops
+            .handle_search_request(&requester, &request)
+            .await
+            .unwrap();
         assert_eq!(response.total_count, 0);
         assert!(response.results.is_empty());
     }

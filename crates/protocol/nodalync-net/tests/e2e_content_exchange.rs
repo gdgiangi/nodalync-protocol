@@ -193,6 +193,9 @@ async fn test_e2e_search_returns_results() {
         filters: None,
         limit: 10,
         offset: 0,
+        max_hops: 0,
+        hop_count: 0,
+        visited_peers: vec![],
     };
 
     let search_result = timeout(
@@ -386,6 +389,9 @@ async fn test_e2e_search_then_query() {
                 filters: None,
                 limit: 10,
                 offset: 0,
+                max_hops: 0,
+                hop_count: 0,
+                visited_peers: vec![],
             },
         ),
     )
