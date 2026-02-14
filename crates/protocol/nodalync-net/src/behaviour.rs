@@ -386,9 +386,9 @@ pub fn build_gossipsub(
         .max_transmit_size(1024 * 1024) // 1MB max gossip message
         .history_length(5) // Keep 5 heartbeat windows of message history
         .history_gossip(3) // Gossip about messages from the last 3 windows
-        .mesh_n(6)         // Target 6 peers in mesh
-        .mesh_n_low(4)     // Minimum 4 peers before seeking more
-        .mesh_n_high(12)   // Maximum 12 peers before pruning
+        .mesh_n(6) // Target 6 peers in mesh
+        .mesh_n_low(4) // Minimum 4 peers before seeking more
+        .mesh_n_high(12) // Maximum 12 peers before pruning
         .build()
         .expect("valid gossipsub config");
 
@@ -462,7 +462,7 @@ fn build_peer_score_params(
         // Decays slowly — announcements are infrequent
         topic_params.first_message_deliveries_weight = 2.0;
         topic_params.first_message_deliveries_decay = 0.97; // ~23s half-life at 1s heartbeat
-        // first_message_deliveries_cap defaults to a reasonable value
+                                                            // first_message_deliveries_cap defaults to a reasonable value
 
         // Mesh message deliveries: penalise free-riders
         // After 30 seconds in the mesh, expect at least 1 message delivery per heartbeat window
@@ -555,11 +555,7 @@ mod tests {
     #[test]
     fn test_build_gossipsub_with_scoring() {
         let keypair = libp2p::identity::Keypair::generate_ed25519();
-        let gossipsub = build_gossipsub(
-            &keypair,
-            Some("/nodalync/announce/1.0.0"),
-            true,
-        );
+        let gossipsub = build_gossipsub(&keypair, Some("/nodalync/announce/1.0.0"), true);
         // Peer scoring is internal — just verify it doesn't panic
         assert!(gossipsub.topics().next().is_none());
     }
@@ -573,8 +569,7 @@ mod tests {
 
     #[test]
     fn test_peer_score_params_with_topic() {
-        let (params, thresholds) =
-            build_peer_score_params(Some("/nodalync/announce/1.0.0"));
+        let (params, thresholds) = build_peer_score_params(Some("/nodalync/announce/1.0.0"));
 
         // Verify topic-level params were set
         assert_eq!(params.topics.len(), 1);
