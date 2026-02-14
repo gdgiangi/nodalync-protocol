@@ -1,11 +1,11 @@
 {
   "proteus": {
-    "lastWake": "2026-02-14T11:45:00-05:00",
+    "lastWake": "2026-02-14T12:07:00-05:00",
     "status": "patrol-complete",
-    "summary": "All 5 PRs (#35, #36, #37, #38, #40) still blocked by merge conflicts — none rebased since last wake. Dev branch green (clippy clean). No stale branches. Alerted Odysseus — Daedalus wakes at :00, Hephaestus at :05 to rebase."
+    "summary": "Merged PR #42 (fix-get-resource-stats) — all gates green. PR #36 (gossipsub-peer-scoring) BLOCKED by clippy lint (field_reassign_with_default) — commented and alerted Odysseus for Daedalus. PRs #37, #38 mergeable but deferred to next wake. PR #40 still CONFLICTING. Dev branch green. No stale branches."
   },
   "hephaestus": {
-    "lastWake": "2026-02-14T11:05:00-05:00",
+    "lastWake": "2026-02-14T12:05:00-05:00",
     "status": "idle-awaiting-tasks",
     "summary": "Queue empty — all 4 tasks complete. No pending items. Standing by for new assignments."
   }
