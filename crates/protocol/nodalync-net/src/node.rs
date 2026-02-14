@@ -31,10 +31,10 @@ use nodalync_wire::{
     PreviewRequestPayload, PreviewResponsePayload, QueryErrorPayload, QueryRequestPayload,
     QueryResponsePayload, SearchPayload, SearchResponsePayload, SettleConfirmPayload,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
-use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 /// Resource management configuration snapshot.
@@ -938,10 +938,8 @@ async fn run_swarm(
     let mut gossip_rate_limiter = GossipRateLimiter::new(50, std::time::Duration::from_secs(10));
 
     // Per-peer request-response rate limiter (configurable)
-    let mut request_rate_limiter = PeerRateLimiter::new(
-        ctx.request_rate_limit,
-        ctx.request_rate_window,
-    );
+    let mut request_rate_limiter =
+        PeerRateLimiter::new(ctx.request_rate_limit, ctx.request_rate_window);
 
     // Rate limiter cleanup timer (every 5 minutes, purge stale entries)
     let mut cleanup_interval = tokio::time::interval(std::time::Duration::from_secs(300));
@@ -1010,7 +1008,7 @@ async fn run_swarm(
 
                     SwarmEvent::ConnectionEstablished { peer_id, num_established, connection_id, .. } => {
                         // Enforce per-peer connection limit
-                        if num_established.get() > ctx.max_established_per_peer as u32 {
+                        if num_established.get() > ctx.max_established_per_peer {
                             warn!(
                                 "Per-peer connection limit exceeded for {} ({} > {}), closing excess",
                                 peer_id, num_established, ctx.max_established_per_peer

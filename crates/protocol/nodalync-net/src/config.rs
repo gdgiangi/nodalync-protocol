@@ -112,7 +112,6 @@ pub struct NetworkConfig {
     pub max_relay_reservations: usize,
 
     // ─── Resource Management ────────────────────────────────────────────
-
     /// Maximum total established connections (inbound + outbound).
     ///
     /// Default: 100. Prevents resource exhaustion on desktop machines.
