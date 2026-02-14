@@ -61,6 +61,8 @@ where
     /// Used to prevent rapid deposits from malicious channel open spam.
     /// This is a global cooldown (not per-peer) for simplicity.
     last_auto_deposit: Option<std::time::Instant>,
+    /// Node start time for uptime tracking.
+    node_start: std::time::Instant,
 }
 
 impl<V, E> NodeOperations<V, E>
@@ -86,6 +88,7 @@ where
             settlement: None,
             private_key: None,
             last_auto_deposit: None,
+            node_start: std::time::Instant::now(),
         }
     }
 
@@ -108,6 +111,7 @@ where
             settlement: None,
             private_key: None,
             last_auto_deposit: None,
+            node_start: std::time::Instant::now(),
         }
     }
 
@@ -130,6 +134,7 @@ where
             settlement: Some(settlement),
             private_key: None,
             last_auto_deposit: None,
+            node_start: std::time::Instant::now(),
         }
     }
 
@@ -153,6 +158,7 @@ where
             settlement: Some(settlement),
             private_key: None,
             last_auto_deposit: None,
+            node_start: std::time::Instant::now(),
         }
     }
 
@@ -246,6 +252,11 @@ where
     /// Get the timestamp of the last auto-deposit.
     pub fn last_auto_deposit(&self) -> Option<std::time::Instant> {
         self.last_auto_deposit
+    }
+
+    /// Get node uptime in seconds.
+    pub fn uptime_seconds(&self) -> u64 {
+        self.node_start.elapsed().as_secs()
     }
 
     /// Check if an auto-deposit is allowed based on the cooldown.

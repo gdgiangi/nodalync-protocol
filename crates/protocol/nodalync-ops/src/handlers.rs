@@ -700,7 +700,7 @@ where
             addresses,
             capabilities,
             content_count,
-            uptime: 0,       // TODO: track node start time
+            uptime: self.uptime_seconds(),
             node_name: None, // Set by desktop app if profile exists
         }
     }
