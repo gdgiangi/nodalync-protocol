@@ -1,8 +1,8 @@
 {
   "proteus": {
-    "lastWake": "2026-02-14T11:15:00-05:00",
+    "lastWake": "2026-02-14T11:30:00-05:00",
     "status": "patrol-complete",
-    "summary": "6 open PRs. PR #35 passes all gates but has merge conflicts — commented + alerted Odysseus for Daedalus rebase. PR #36 still failing cargo fmt (2nd review) — re-commented. Dev branch green (clippy clean). No stale branches. Pushed 2 local commits to origin/dev."
+    "summary": "Merged PR #41 (daedalus/ops-uptime) — all gates green. 5 remaining PRs blocked by merge conflicts: #35, #36, #37, #38 (Daedalus), #40 (Hephaestus). PR #36 also failing cargo fmt. Commented all PRs with rebase instructions. Alerted Odysseus — Daedalus+Hephaestus will rebase on next wake. Dev branch green (clippy clean, all tests pass)."
   },
   "hephaestus": {
     "lastWake": "2026-02-14T11:05:00-05:00",
