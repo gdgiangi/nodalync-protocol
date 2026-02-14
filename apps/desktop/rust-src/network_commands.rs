@@ -7,6 +7,7 @@
 //! Includes seed node management for first-run network discovery.
 
 use nodalync_net::{Network, NetworkConfig, NetworkNode};
+use nodalync_store::ManifestStore;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;
@@ -1126,4 +1127,72 @@ fn pick_best_address(addresses: &[String]) -> String {
             .cloned()
             .unwrap_or_else(|| "/ip4/0.0.0.0/tcp/0".to_string())
     }
+}
+
+// ─── Resource Stats Command ──────────────────────────────────────────────────
+
+/// Resource usage stats returned to the frontend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceStats {
+    /// Total connected peers.
+    pub connected_peers: usize,
+    /// Current listen addresses.
+    pub listen_addresses: usize,
+    /// Total content items stored locally.
+    pub content_count: usize,
+    /// Network active.
+    pub network_active: bool,
+    /// Known peers in persistent store.
+    pub known_peers: usize,
+    /// Enabled seed nodes.
+    pub seed_nodes: usize,
+}
+
+/// Get resource usage stats for the node.
+///
+/// Provides a quick overview of the node's resource utilisation.
+/// Useful for the network view and dashboard widgets.
+#[tauri::command]
+pub async fn get_resource_stats(
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
+) -> Result<ResourceStats, String> {
+    let guard = protocol.lock().await;
+    let state = guard
+        .as_ref()
+        .ok_or("Node not initialized — unlock first")?;
+
+    let connected_peers = state
+        .network
+        .as_ref()
+        .map(|n| n.connected_peers().len())
+        .unwrap_or(0);
+
+    let listen_addresses = state
+        .network
+        .as_ref()
+        .map(|n| n.listen_addresses().len())
+        .unwrap_or(0);
+
+    let content_count = {
+        let filter = nodalync_store::ManifestFilter::new();
+        state
+            .ops
+            .state()
+            .manifests
+            .list(filter)
+            .map(|v| v.len())
+            .unwrap_or(0)
+    };
+
+    let peer_store = PeerStore::load(&state.data_dir);
+    let seed_store = SeedStore::load(&state.data_dir);
+
+    Ok(ResourceStats {
+        connected_peers,
+        listen_addresses,
+        content_count,
+        network_active: state.network.is_some(),
+        known_peers: peer_store.peers.len(),
+        seed_nodes: seed_store.enabled_count(),
+    })
 }
