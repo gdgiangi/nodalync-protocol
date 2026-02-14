@@ -422,9 +422,8 @@ impl NodeState {
             )
             .ok();
 
-        let (addresses_json, publisher_peer_id) = existing.unwrap_or_else(|| {
-            ("[]".to_string(), None)
-        });
+        let (addresses_json, publisher_peer_id) =
+            existing.unwrap_or_else(|| ("[]".to_string(), None));
 
         // Delete the old version's announcement
         let _ = conn.execute(

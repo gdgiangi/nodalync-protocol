@@ -28,9 +28,9 @@ use nodalync_crypto::{
 use nodalync_wire::{
     create_message, decode_message, decode_payload, encode_message, encode_payload,
     AnnouncePayload, AnnounceUpdatePayload, ChannelClosePayload, ChannelOpenPayload, Message,
-    MessageType,
-    PreviewRequestPayload, PreviewResponsePayload, QueryErrorPayload, QueryRequestPayload,
-    QueryResponsePayload, SearchPayload, SearchResponsePayload, SettleConfirmPayload,
+    MessageType, PreviewRequestPayload, PreviewResponsePayload, QueryErrorPayload,
+    QueryRequestPayload, QueryResponsePayload, SearchPayload, SearchResponsePayload,
+    SettleConfirmPayload,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock as StdRwLock};
@@ -755,10 +755,7 @@ impl Network for NetworkNode {
         self.broadcast(message).await
     }
 
-    async fn broadcast_announce_update(
-        &self,
-        payload: AnnounceUpdatePayload,
-    ) -> NetworkResult<()> {
+    async fn broadcast_announce_update(&self, payload: AnnounceUpdatePayload) -> NetworkResult<()> {
         let payload_bytes =
             encode_payload(&payload).map_err(|e| NetworkError::Encoding(e.to_string()))?;
         let message = self.create_signed_message(MessageType::AnnounceUpdate, payload_bytes);

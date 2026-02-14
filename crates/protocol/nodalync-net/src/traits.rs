@@ -117,10 +117,7 @@ pub trait Network: Send + Sync {
     /// Uses GossipSub to broadcast an ANNOUNCE_UPDATE message when
     /// existing content is updated to a new version. Peers that cached
     /// the original announcement will update their cache.
-    async fn broadcast_announce_update(
-        &self,
-        payload: AnnounceUpdatePayload,
-    ) -> NetworkResult<()>;
+    async fn broadcast_announce_update(&self, payload: AnnounceUpdatePayload) -> NetworkResult<()>;
 
     // =========================================================================
     // Peer Management

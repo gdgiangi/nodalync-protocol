@@ -9,9 +9,8 @@ use nodalync_crypto::{Hash, PeerId as NodalyncPeerId};
 use nodalync_net::{Network, NetworkError, NetworkEvent, NetworkResult};
 use nodalync_wire::{
     AnnouncePayload, AnnounceUpdatePayload, ChannelClosePayload, ChannelOpenPayload, Message,
-    MessageType,
-    PreviewRequestPayload, PreviewResponsePayload, QueryRequestPayload, QueryResponsePayload,
-    SearchPayload, SearchResponsePayload, SettleConfirmPayload,
+    MessageType, PreviewRequestPayload, PreviewResponsePayload, QueryRequestPayload,
+    QueryResponsePayload, SearchPayload, SearchResponsePayload, SettleConfirmPayload,
 };
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};

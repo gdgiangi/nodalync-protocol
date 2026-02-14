@@ -172,10 +172,7 @@ where
                 publisher_peer_id,
             );
             if let Err(e) = network.dht_announce(*new_hash, announce_payload).await {
-                tracing::warn!(
-                    "DHT announce for updated content failed: {}",
-                    e
-                );
+                tracing::warn!("DHT announce for updated content failed: {}", e);
             }
 
             // Remove old hash from DHT

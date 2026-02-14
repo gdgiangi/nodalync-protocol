@@ -10,12 +10,11 @@ use nodalync_store::{ChannelStore, ContentStore, ManifestStore, PeerStore};
 use nodalync_types::{Channel, ChannelState, Payment, Visibility};
 use nodalync_valid::Validator;
 use nodalync_wire::{
-    decode_message, decode_payload, AnnouncePayload, AnnounceUpdatePayload,
-    ChannelAcceptPayload, ChannelCloseAckPayload,
-    ChannelClosePayload, ChannelOpenPayload, MessageType, PaymentReceipt, PreviewRequestPayload,
-    PreviewResponsePayload, QueryRequestPayload, QueryResponsePayload, SearchPayload,
-    SearchResponsePayload, SearchResult as WireSearchResult, VersionInfo, VersionRequestPayload,
-    VersionResponsePayload,
+    decode_message, decode_payload, AnnouncePayload, AnnounceUpdatePayload, ChannelAcceptPayload,
+    ChannelCloseAckPayload, ChannelClosePayload, ChannelOpenPayload, MessageType, PaymentReceipt,
+    PreviewRequestPayload, PreviewResponsePayload, QueryRequestPayload, QueryResponsePayload,
+    SearchPayload, SearchResponsePayload, SearchResult as WireSearchResult, VersionInfo,
+    VersionRequestPayload, VersionResponsePayload,
 };
 use tracing::{debug, info, warn};
 
