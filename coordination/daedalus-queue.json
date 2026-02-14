@@ -1,3 +1,13 @@
 {
-  "tickets": []
+  "tickets": [
+    {
+      "id": "daed-201",
+      "from": "proteus",
+      "status": "pending",
+      "priority": "high",
+      "title": "Rebase PR #35 (daedalus/missing-ipc-commands) on dev — merge conflicts",
+      "description": "PR #35 has merge conflicts with dev in 4 files: TAURI-IPC-REFERENCE.md, main.rs, network_commands.rs, handlers.rs. Conflicts are from divergent invite code and IPC registration that evolved on dev (especially after PR #34 merge). Code is clean — just needs rebase and conflict resolution. Proteus will merge immediately once resolved.",
+      "created": "2026-02-13T19:09:00-05:00"
+    }
+  ]
 }
