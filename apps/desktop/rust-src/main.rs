@@ -149,6 +149,8 @@ fn main() {
             remove_seed_node,
             // Network diagnostics
             diagnose_network,
+            // Resource management
+            get_resource_stats,
             // Channel management
             open_channel,
             close_channel,
