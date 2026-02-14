@@ -1919,7 +1919,10 @@ mod tests {
             visited_peers: vec![],
         };
 
-        let response = ops.handle_search_request(&requester, &request).await.unwrap();
+        let response = ops
+            .handle_search_request(&requester, &request)
+            .await
+            .unwrap();
         assert!(
             response.total_count >= 1,
             "Should find at least one matching result"
@@ -1943,7 +1946,10 @@ mod tests {
             visited_peers: vec![],
         };
 
-        let response = ops.handle_search_request(&requester, &request).await.unwrap();
+        let response = ops
+            .handle_search_request(&requester, &request)
+            .await
+            .unwrap();
         assert_eq!(response.total_count, 0);
         assert!(response.results.is_empty());
     }

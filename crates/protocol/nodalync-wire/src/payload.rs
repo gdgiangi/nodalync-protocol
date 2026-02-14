@@ -802,10 +802,7 @@ mod tests {
             offset: 0,
             max_hops: 2,
             hop_count: 1,
-            visited_peers: vec![
-                "12D3KooWPeer1".to_string(),
-                "12D3KooWPeer2".to_string(),
-            ],
+            visited_peers: vec!["12D3KooWPeer1".to_string(), "12D3KooWPeer2".to_string()],
         };
         let mut buf = Vec::new();
         ciborium::into_writer(&payload, &mut buf).unwrap();
