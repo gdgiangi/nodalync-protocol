@@ -1,11 +1,18 @@
 import { useState } from "react";
-import { LEVEL_CONFIG, TYPE_COLORS, EDGE_CATEGORY_COLORS } from "../lib/constants";
+import { TYPE_COLORS, EDGE_CATEGORY_COLORS } from "../lib/constants";
 
 /**
- * Floating legend overlay for the graph — shows level hierarchy,
+ * Floating legend overlay for the 3D graph — shows layer hierarchy,
  * entity type colors, and relationship category meanings.
  * Collapsed by default to save space.
  */
+
+const LAYERS = [
+  { id: "L0", label: "Source Documents", color: "#3b82f6", size: 5, description: "Raw content — notes, articles, papers" },
+  { id: "L2", label: "Entities", color: "#f59e0b", size: 10, description: "People, orgs, concepts (force-directed)" },
+  { id: "L3", label: "Derived Knowledge", color: "#8b5cf6", size: 8, description: "Synthesized from L2 patterns" },
+];
+
 export default function GraphLegend() {
   const [expanded, setExpanded] = useState(false);
 
@@ -19,7 +26,7 @@ export default function GraphLegend() {
         border: "1px solid var(--border-subtle)",
         borderRadius: "var(--radius-lg)",
         overflow: "hidden",
-        maxWidth: expanded ? 260 : 120,
+        maxWidth: expanded ? 280 : 160,
         transition: "max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
       }}
     >
@@ -44,7 +51,7 @@ export default function GraphLegend() {
             color: "inherit",
           }}
         >
-          LEGEND
+          3D LAYERS
         </span>
         <svg
           width="10"
@@ -64,74 +71,99 @@ export default function GraphLegend() {
         </svg>
       </button>
 
-      {/* Collapsed: just show level dots inline */}
+      {/* Collapsed: just show layer dots */}
       {!expanded && (
-        <div className="flex items-center gap-2 px-3 pb-2">
-          {["L0", "L1", "L2", "L3"].map((level) => {
-            const cfg = LEVEL_CONFIG[level];
-            const size = level === "L0" ? 4 : level === "L1" ? 6 : level === "L2" ? 8 : 10;
-            const color = cfg.color || "var(--accent)";
-            return (
-              <div key={level} className="flex items-center gap-1">
-                <div
-                  style={{
-                    width: size,
-                    height: size,
-                    borderRadius: "50%",
-                    background: color,
-                    opacity: cfg.opacity,
-                    flexShrink: 0,
-                  }}
-                />
-                <span style={{ fontSize: 7, color: "var(--text-ghost)", letterSpacing: "0.5px" }}>
-                  {level}
-                </span>
-              </div>
-            );
-          })}
+        <div className="flex items-center gap-3 px-3 pb-2">
+          {LAYERS.map((layer) => (
+            <div key={layer.id} className="flex items-center gap-1.5">
+              <div
+                style={{
+                  width: layer.size,
+                  height: layer.size,
+                  borderRadius: "50%",
+                  background: layer.color,
+                  boxShadow: `0 0 6px ${layer.color}50`,
+                  flexShrink: 0,
+                }}
+              />
+              <span style={{ fontSize: 8, color: "var(--text-ghost)", letterSpacing: "0.5px" }}>
+                {layer.id}
+              </span>
+            </div>
+          ))}
         </div>
       )}
 
       {/* Expanded content */}
       {expanded && (
         <div className="px-3 pb-3 space-y-3">
-          {/* Level hierarchy */}
+          {/* 3D Layer hierarchy */}
           <div>
-            <SectionLabel>Hierarchy</SectionLabel>
-            <div className="space-y-1.5">
-              {["L0", "L1", "L2", "L3"].map((level) => {
-                const cfg = LEVEL_CONFIG[level];
-                const size = level === "L0" ? 5 : level === "L1" ? 7 : level === "L2" ? 10 : 13;
-                const color = cfg.color || "var(--accent)";
-                return (
-                  <div key={level} className="flex items-center gap-2.5">
+            <SectionLabel>Layer Hierarchy (3D Space)</SectionLabel>
+            <div className="space-y-2">
+              {[...LAYERS].reverse().map((layer, i) => (
+                <div key={layer.id} className="flex items-start gap-2.5">
+                  <div className="flex flex-col items-center" style={{ minWidth: 14 }}>
                     <div
                       style={{
-                        width: size,
-                        height: size,
+                        width: layer.size,
+                        height: layer.size,
                         borderRadius: "50%",
-                        background: color,
-                        opacity: cfg.opacity,
+                        background: layer.color,
+                        boxShadow: `0 0 8px ${layer.color}40`,
                         flexShrink: 0,
                       }}
                     />
-                    <div>
-                      <span style={{ fontSize: 9, color: "var(--text-secondary)", fontWeight: 500 }}>
-                        {level}
+                    {i < LAYERS.length - 1 && (
+                      <div
+                        style={{
+                          width: 1,
+                          height: 12,
+                          background: "rgba(255,255,255,0.08)",
+                          marginTop: 3,
+                        }}
+                      />
+                    )}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <span style={{ fontSize: 9, color: layer.color, fontWeight: 600 }}>
+                        {layer.id}
                       </span>
-                      <span style={{ fontSize: 9, color: "var(--text-ghost)", marginLeft: 4 }}>
-                        {cfg.label}
+                      <span style={{ fontSize: 9, color: "var(--text-secondary)" }}>
+                        {layer.label}
                       </span>
                     </div>
+                    <span style={{ fontSize: 8, color: "var(--text-ghost)", lineHeight: 1.3, display: "block", marginTop: 1 }}>
+                      {layer.description}
+                    </span>
                   </div>
-                );
-              })}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* L1 connections */}
+          <div>
+            <SectionLabel>L1 Connections</SectionLabel>
+            <div className="flex items-center gap-2">
+              <div
+                style={{
+                  width: 1,
+                  height: 16,
+                  background: "linear-gradient(to bottom, #3b82f640, #f59e0b40)",
+                  flexShrink: 0,
+                }}
+              />
+              <span style={{ fontSize: 8, color: "var(--text-ghost)" }}>
+                Vertical beams (visible on hover)
+              </span>
             </div>
           </div>
 
           {/* Entity types (L2 colors) */}
           <div>
-            <SectionLabel>Entity Types</SectionLabel>
+            <SectionLabel>Entity Types (L2)</SectionLabel>
             <div className="flex flex-wrap gap-1.5">
               {Object.entries(TYPE_COLORS).slice(0, 8).map(([type, color]) => (
                 <div key={type} className="flex items-center gap-1.5">
@@ -153,26 +185,15 @@ export default function GraphLegend() {
             </div>
           </div>
 
-          {/* Edge categories */}
+          {/* Controls hint */}
           <div>
-            <SectionLabel>Relationships</SectionLabel>
-            <div className="space-y-1">
-              {Object.entries(EDGE_CATEGORY_COLORS).map(([cat, color]) => (
-                <div key={cat} className="flex items-center gap-2">
-                  <div
-                    style={{
-                      width: 16,
-                      height: 2,
-                      borderRadius: 1,
-                      background: color.replace(/[\d.]+\)$/, "0.7)"),
-                      flexShrink: 0,
-                    }}
-                  />
-                  <span style={{ fontSize: 8, color: "var(--text-ghost)", textTransform: "capitalize" }}>
-                    {cat}
-                  </span>
-                </div>
-              ))}
+            <SectionLabel>Controls</SectionLabel>
+            <div className="space-y-0.5">
+              <ControlHint keys="Drag" action="Orbit camera" />
+              <ControlHint keys="Scroll" action="Zoom in/out" />
+              <ControlHint keys="Right-drag" action="Pan" />
+              <ControlHint keys="Click node" action="Select + focus" />
+              <ControlHint keys="Hover" action="Show connections" />
             </div>
           </div>
         </div>
@@ -193,6 +214,26 @@ function SectionLabel({ children }) {
       }}
     >
       {children}
+    </div>
+  );
+}
+
+function ControlHint({ keys, action }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span
+        className="mono text-[7px] px-1 py-px rounded"
+        style={{
+          background: "rgba(255,255,255,0.04)",
+          border: "1px solid rgba(255,255,255,0.06)",
+          color: "var(--text-ghost)",
+          minWidth: 42,
+          textAlign: "center",
+        }}
+      >
+        {keys}
+      </span>
+      <span style={{ fontSize: 8, color: "var(--text-ghost)" }}>{action}</span>
     </div>
   );
 }
