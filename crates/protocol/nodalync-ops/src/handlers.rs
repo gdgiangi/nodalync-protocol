@@ -546,10 +546,7 @@ where
     /// the peer's identity to the store.
     ///
     /// Returns our own PeerInfoPayload as the response.
-    pub fn handle_peer_info(
-        &mut self,
-        request: &PeerInfoPayload,
-    ) -> OpsResult<PeerInfoPayload> {
+    pub fn handle_peer_info(&mut self, request: &PeerInfoPayload) -> OpsResult<PeerInfoPayload> {
         let timestamp = current_timestamp();
 
         info!(
@@ -622,7 +619,7 @@ where
             addresses,
             capabilities,
             content_count,
-            uptime: 0, // TODO: track node start time
+            uptime: 0,       // TODO: track node start time
             node_name: None, // Set by desktop app if profile exists
         }
     }
@@ -1260,8 +1257,8 @@ where
                         Ok(Some((MessageType::SearchResponse, response_bytes)))
                     }
                     MessageType::PeerInfo => {
-                        let request: PeerInfoPayload = decode_payload(&message.payload)
-                            .map_err(|e| {
+                        let request: PeerInfoPayload =
+                            decode_payload(&message.payload).map_err(|e| {
                                 OpsError::invalid_operation(format!("decode error: {}", e))
                             })?;
                         debug!(
@@ -1281,8 +1278,8 @@ where
                     }
                     MessageType::PeerInfoResponse => {
                         // This is a response to our handshake — register the peer
-                        let response: PeerInfoPayload = decode_payload(&message.payload)
-                            .map_err(|e| {
+                        let response: PeerInfoPayload =
+                            decode_payload(&message.payload).map_err(|e| {
                                 OpsError::invalid_operation(format!("decode error: {}", e))
                             })?;
                         debug!(
@@ -1303,7 +1300,10 @@ where
                 }
             }
             NetworkEvent::PeerConnected { peer } => {
-                info!("Peer connected: {} — handshake will be initiated by event loop", peer);
+                info!(
+                    "Peer connected: {} — handshake will be initiated by event loop",
+                    peer
+                );
                 Ok(None)
             }
             NetworkEvent::PeerDisconnected { peer } => {
