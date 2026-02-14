@@ -47,6 +47,30 @@
       "completed_at": "2026-02-13T01:50:00Z",
       "pr": "https://github.com/gdgiangi/nodalync-protocol/pull/11",
       "branch": "hephaestus/command-palette"
+    },
+    {
+      "id": "heph-104",
+      "title": "Knowledge import flow — drag-drop/file picker → add_content IPC → graph update",
+      "type": "hackathon_priority",
+      "status": "complete",
+      "sprint": 2,
+      "description": "Full-screen drag-drop overlay for file import. Sequential processing pipeline: add_content → extract_mentions → graph refresh. Import queue panel with per-file status tracking, retry on failure, HTML file input fallback. Green Import button in top bar. Wired to command palette.",
+      "started_at": "2026-02-13T23:05:00Z",
+      "completed_at": "2026-02-13T23:30:00Z",
+      "pr": "https://github.com/gdgiangi/nodalync-protocol/pull/39",
+      "branch": "hephaestus/knowledge-import-flow"
+    },
+    {
+      "id": "heph-105",
+      "title": "Balance & transaction dashboard — x402 status, fee config, transaction history",
+      "type": "hackathon_priority",
+      "status": "complete",
+      "sprint": 2,
+      "description": "Full x402 payment dashboard. Stats cards (fee rate, earned, volume, avg fee), editable fee rate slider, fee calculator via get_fee_quote, sortable/paginated transaction history table. Yellow Balance button in top bar. Satoshi formatting, status pills, empty states.",
+      "started_at": "2026-02-13T23:30:00Z",
+      "completed_at": "2026-02-13T23:55:00Z",
+      "pr": "https://github.com/gdgiangi/nodalync-protocol/pull/40",
+      "branch": "hephaestus/balance-transaction-dashboard"
     }
   ]
 }
