@@ -1,12 +1,12 @@
 {
   "proteus": {
-    "lastWake": "2026-02-13T23:45:00-05:00",
-    "status": "patrol-partial",
-    "summary": "Processed 2 PRs per wake limit: PR #36 and #37 both failed cargo fmt; left comments and alerted Odysseus; filed daedalus-001/002. Branch cleanup: no merged remotes to delete. Dev clippy clean."
+    "lastWake": "2026-02-14T11:15:00-05:00",
+    "status": "patrol-complete",
+    "summary": "6 open PRs. PR #35 passes all gates but has merge conflicts — commented + alerted Odysseus for Daedalus rebase. PR #36 still failing cargo fmt (2nd review) — re-commented. Dev branch green (clippy clean). No stale branches. Pushed 2 local commits to origin/dev."
   },
   "hephaestus": {
-    "lastWake": "2026-02-13T18:35:00-05:00",
+    "lastWake": "2026-02-14T11:05:00-05:00",
     "status": "idle-awaiting-tasks",
-    "summary": "All 6/6 queue tasks complete (including hackathon priorities heph-104 + heph-105). No pending or queued items. Standing by for new assignments."
+    "summary": "Queue empty — all 4 tasks complete. No pending items. Standing by for new assignments."
   }
 }
