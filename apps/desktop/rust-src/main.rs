@@ -13,6 +13,7 @@ mod event_loop;
 mod fee_commands;
 mod graph_commands;
 mod health_monitor;
+mod hip991_commands;
 mod invite;
 mod network_commands;
 mod peer_store;
@@ -24,6 +25,7 @@ use channel_commands::*;
 use discovery_commands::*;
 use fee_commands::*;
 use graph_commands::*;
+use hip991_commands::*;
 use network_commands::*;
 use publish_commands::*;
 
@@ -132,6 +134,13 @@ fn main() {
             set_fee_rate,
             get_transaction_history,
             get_fee_quote,
+            // HIP-991 commands (D2 — native on-chain fee via HCS topics)
+            get_hip991_status,
+            configure_hip991,
+            create_fee_topic,
+            submit_to_topic,
+            get_topic_revenue,
+            get_topic_details,
             // Peer persistence commands
             auto_start_network,
             save_known_peers,
