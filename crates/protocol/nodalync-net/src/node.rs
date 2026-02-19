@@ -164,6 +164,14 @@ enum SwarmCommand {
     GetPeerScores {
         response: oneshot::Sender<Vec<(PeerId, f64)>>,
     },
+
+    /// Get known addresses for connected peers from the Kademlia routing table.
+    ///
+    /// Returns a map of PeerId → Vec<Multiaddr> for all connected peers.
+    /// Used by peer persistence to save usable addresses for reconnection.
+    GetPeerAddresses {
+        response: oneshot::Sender<Vec<(PeerId, Vec<Multiaddr>)>>,
+    },
 }
 
 /// Type alias for pending request map to reduce type complexity.
@@ -554,6 +562,21 @@ impl NetworkNode {
         let (tx, rx) = oneshot::channel();
         self.command_tx
             .send(SwarmCommand::GetPeerScores { response: tx })
+            .await
+            .map_err(|_| NetworkError::ChannelClosed)?;
+
+        rx.await.map_err(|_| NetworkError::ChannelClosed)
+    }
+
+    /// Get known addresses for all connected peers from the Kademlia routing table.
+    ///
+    /// Returns (PeerId, Vec<Multiaddr>) pairs. Peers with no known addresses
+    /// in the routing table are omitted. Used by peer persistence to save
+    /// usable addresses for reconnection after restart.
+    pub async fn peer_addresses(&self) -> NetworkResult<Vec<(PeerId, Vec<Multiaddr>)>> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(SwarmCommand::GetPeerAddresses { response: tx })
             .await
             .map_err(|_| NetworkError::ChannelClosed)?;
 
@@ -1214,6 +1237,32 @@ async fn run_swarm(
                             })
                             .collect();
                         let _ = response.send(scores);
+                    }
+
+                    SwarmCommand::GetPeerAddresses { response } => {
+                        let connected = ctx
+                            .connected_peers
+                            .read()
+                            .unwrap()
+                            .clone();
+                        let mut result = Vec::new();
+                        for peer in &connected {
+                            let mut addrs: Vec<Multiaddr> = Vec::new();
+                            // Collect addresses from the Kademlia routing table
+                            for bucket in swarm.behaviour_mut().kademlia.kbuckets() {
+                                for entry in bucket.iter() {
+                                    if entry.node.key.preimage() == peer {
+                                        for addr in entry.node.value.iter() {
+                                            addrs.push(addr.clone());
+                                        }
+                                    }
+                                }
+                            }
+                            if !addrs.is_empty() {
+                                result.push((*peer, addrs));
+                            }
+                        }
+                        let _ = response.send(result);
                     }
                 }
             }

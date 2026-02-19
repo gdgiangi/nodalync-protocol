@@ -3307,6 +3307,7 @@ name = "nodalync-settle"
 version = "0.7.1"
 dependencies = [
  "async-trait",
+ "chrono",
  "hiero-sdk",
  "nodalync-crypto",
  "nodalync-test-utils",

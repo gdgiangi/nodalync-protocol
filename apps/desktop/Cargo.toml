@@ -42,6 +42,7 @@ nodalync-ops = { path = "../../crates/protocol/nodalync-ops" }
 nodalync-net = { path = "../../crates/protocol/nodalync-net" }
 nodalync-wire = { path = "../../crates/protocol/nodalync-wire" }
 nodalync-econ = { path = "../../crates/protocol/nodalync-econ" }
+nodalync-settle = { path = "../../crates/protocol/nodalync-settle" }
 nodalync-x402 = { path = "../../crates/protocol/nodalync-x402" }
 
 # Platform utilities

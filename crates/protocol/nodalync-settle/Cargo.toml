@@ -16,6 +16,7 @@ serde_json = "1.0"
 tracing = "0.1"
 rand = { workspace = true }
 reqwest = { version = "0.12", features = ["json"] }
+chrono = { version = "0.4", features = ["serde"], optional = true }
 
 [dev-dependencies]
 tempfile = "3"
@@ -24,6 +25,6 @@ nodalync-test-utils = { workspace = true }
 [features]
 default = []
 # Enable real Hedera integration (requires protoc installed)
-hedera-sdk = ["hiero-sdk"]
+hedera-sdk = ["hiero-sdk", "chrono"]
 # Enable testnet integration tests
 testnet = ["hedera-sdk"]

@@ -30,6 +30,8 @@ export function GraphNode({
   isHovered,
   isConnectedToHover,
   isDimmed,
+  zoomLevel = 1.0,
+  inCluster = false,
   onClick,
   onHover,
   onUnhover,
@@ -39,22 +41,55 @@ export function GraphNode({
   const glowRef = useRef();
   const { camera, gl } = useThree();
 
-  // Determine color
+  // Unified L2 color scheme - amber/gold base with subtle entity type hints
   const color = useMemo(() => {
-    if (level === "L2" && node.entity_type) {
-      return new THREE.Color(getEntityColor(node.entity_type));
+    if (level === "L2") {
+      const baseColor = new THREE.Color("#f59e0b"); // Amber/gold base
+      if (node.entity_type) {
+        const entityColor = new THREE.Color(getEntityColor(node.entity_type));
+        // Very subtle tint - only 8% of entity color mixed in
+        baseColor.lerp(entityColor, 0.08);
+      }
+      return baseColor;
     }
     return LAYER_COLORS[level] || LAYER_COLORS.L2;
   }, [level, node.entity_type]);
 
   const hexColor = useMemo(() => {
-    if (level === "L2" && node.entity_type) {
-      return getEntityColor(node.entity_type);
+    if (level === "L2") {
+      const baseHex = "#f59e0b";
+      if (node.entity_type) {
+        // For hex, we'll use the base amber with slight adjustment
+        const entityHex = getEntityColor(node.entity_type);
+        // Simple blend - in practice this would use the Three.js color above
+        return baseHex; // Keep it simple for hex version
+      }
+      return baseHex;
     }
     return LAYER_HEX[level] || LAYER_HEX.L2;
   }, [level, node.entity_type]);
 
-  const size = NODE_SIZE[level] || 0.5;
+  // Adaptive sizing based on zoom level and cluster membership
+  const baseSize = NODE_SIZE[level] || 0.5;
+  const size = useMemo(() => {
+    let adjustedSize = baseSize;
+    
+    if (inCluster && level === "L2") {
+      // Nodes in clusters are smaller
+      adjustedSize *= 0.7;
+      
+      // Fade in with zoom - invisible when far away, visible when close
+      if (zoomLevel > 0.6) {
+        adjustedSize *= 0.3; // Very small when far
+      } else if (zoomLevel > 0.3) {
+        adjustedSize *= (1 - zoomLevel) + 0.3; // Smooth transition
+      }
+      // Full size when zoomed in (zoomLevel < 0.3)
+    }
+    
+    return adjustedSize;
+  }, [baseSize, inCluster, level, zoomLevel]);
+
   const emissiveBase = EMISSIVE_BASE[level] || 1.0;
 
   // Animate: pulse on hover, breathe gently
@@ -91,8 +126,9 @@ export function GraphNode({
         0.1
       );
 
-      // Opacity for dimming
-      const targetOpacity = isDimmed ? 0.25 : 1.0;
+      // Opacity for dimming and zoom-based visibility
+      let targetOpacity = isDimmed ? 0.25 : 1.0;
+      targetOpacity *= nodeOpacity; // Apply zoom-based visibility
       mat.opacity = THREE.MathUtils.lerp(mat.opacity, targetOpacity, 0.1);
     }
 
@@ -102,13 +138,14 @@ export function GraphNode({
       glowRef.current.scale.setScalar(glowScale);
       const glowMat = glowRef.current.material;
       if (glowMat) {
-        const targetGlowOpacity = isHovered
+        let targetGlowOpacity = isHovered
           ? 0.25
           : isSelected
           ? 0.18
           : isDimmed
           ? 0.02
           : 0.08;
+        targetGlowOpacity *= nodeOpacity; // Apply zoom-based visibility
         glowMat.opacity = THREE.MathUtils.lerp(
           glowMat.opacity,
           targetGlowOpacity,
@@ -174,8 +211,26 @@ export function GraphNode({
     [gl, onUnhover]
   );
 
+  // Zoom-based visibility for clustered nodes
+  const nodeOpacity = useMemo(() => {
+    if (!inCluster) return 1.0; // Non-clustered nodes always visible
+    
+    if (level === "L2") {
+      if (zoomLevel > 0.7) return 0.0; // Hidden when far away
+      if (zoomLevel > 0.4) return (0.7 - zoomLevel) / 0.3; // Fade in
+      return 1.0; // Fully visible when close
+    }
+    
+    return 1.0; // L0/L3 always visible
+  }, [inCluster, level, zoomLevel]);
+
   const label = node.label || node.canonical_label || "";
   const truncLabel = label.length > 20 ? label.substring(0, 17) + "…" : label;
+
+  // Don't render if completely invisible
+  if (nodeOpacity <= 0.01) {
+    return null;
+  }
 
   return (
     <group position={position}>
@@ -227,7 +282,7 @@ export function GraphNode({
       )}
 
       {/* Text label */}
-      {!isDimmed && (
+      {!isDimmed && nodeOpacity > 0.3 && (
         <Billboard follow={true} lockX={false} lockY={false} lockZ={false}>
           <Text
             position={[0, -(size + 0.6), 0]}

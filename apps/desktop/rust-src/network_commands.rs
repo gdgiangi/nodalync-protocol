@@ -358,17 +358,39 @@ pub async fn save_known_peers(
 
     let mut store = PeerStore::load(&state.data_dir);
 
-    // Record all currently connected peers
-    let peers = network.connected_peers();
-    let listen_addrs = network.listen_addresses();
+    // Get addresses for connected peers from the Kademlia routing table.
+    // This fixes a bug where peers were saved with empty address vectors,
+    // making reconnection impossible after restart.
+    let peer_addresses = network.peer_addresses().await.unwrap_or_default();
 
+    // Build a lookup map: PeerId → Vec<String>
+    let addr_map: std::collections::HashMap<String, Vec<String>> = peer_addresses
+        .into_iter()
+        .map(|(peer, addrs)| {
+            (
+                peer.to_string(),
+                addrs.iter().map(|a| a.to_string()).collect(),
+            )
+        })
+        .collect();
+
+    // Record all currently connected peers with their addresses
+    let peers = network.connected_peers();
     for peer in &peers {
         let peer_str = peer.to_string();
         let nodalync_id = network.nodalync_peer_id(peer).map(|id| id.to_string());
 
-        // We don't have per-peer addresses from the Network trait,
-        // so record with empty addresses for now (existing addresses are preserved)
-        store.record_peer(&peer_str, vec![], nodalync_id, false);
+        // Use addresses from Kademlia routing table (if available)
+        let addresses = addr_map
+            .get(&peer_str)
+            .cloned()
+            .unwrap_or_default();
+
+        if addresses.is_empty() {
+            debug!("Peer {} has no known addresses in routing table — skipping address save", peer_str);
+        }
+
+        store.record_peer(&peer_str, addresses, nodalync_id, false);
     }
 
     // Prune peers not seen in 30 days
