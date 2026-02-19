@@ -130,8 +130,8 @@ mod manager {
     use std::str::FromStr;
 
     use hiero_sdk::{
-        AccountId as HederaAccountId, Client, CustomFixedFee, Key, PrivateKey, TopicCreateTransaction,
-        TopicId, TopicInfoQuery, TopicMessageSubmitTransaction,
+        AccountId as HederaAccountId, Client, CustomFixedFee, Key, PrivateKey,
+        TopicCreateTransaction, TopicId, TopicInfoQuery, TopicMessageSubmitTransaction,
     };
 
     use super::*;
@@ -169,10 +169,9 @@ mod manager {
             let private_key = PrivateKey::from_str(key_bytes.trim())
                 .map_err(|e| SettleError::config(format!("invalid private key: {}", e)))?;
 
-            let operator_id = HederaAccountId::from_str(&config.account_id)
-                .map_err(|e| {
-                    SettleError::InvalidAccountId(format!("{}: {}", config.account_id, e))
-                })?;
+            let operator_id = HederaAccountId::from_str(&config.account_id).map_err(|e| {
+                SettleError::InvalidAccountId(format!("{}: {}", config.account_id, e))
+            })?;
 
             let client = match config.network {
                 HederaNetwork::Mainnet => Client::for_mainnet(),
@@ -211,10 +210,7 @@ mod manager {
         ///
         /// # Returns
         /// * `TopicInfo` with the created topic ID and configuration
-        pub async fn create_topic(
-            &self,
-            fee_config: &TopicFeeConfig,
-        ) -> SettleResult<TopicInfo> {
+        pub async fn create_topic(&self, fee_config: &TopicFeeConfig) -> SettleResult<TopicInfo> {
             let fee_collector = HederaAccountId::from_str(&fee_config.fee_collector_account_id)
                 .map_err(|e| {
                     SettleError::InvalidAccountId(format!(
@@ -314,8 +310,9 @@ mod manager {
             topic_id: &str,
             message: &[u8],
         ) -> SettleResult<TransactionId> {
-            let topic = TopicId::from_str(topic_id)
-                .map_err(|e| SettleError::config(format!("invalid topic ID {}: {}", topic_id, e)))?;
+            let topic = TopicId::from_str(topic_id).map_err(|e| {
+                SettleError::config(format!("invalid topic ID {}: {}", topic_id, e))
+            })?;
 
             debug!(
                 topic_id = %topic_id,
@@ -384,10 +381,7 @@ mod manager {
             })?;
 
             // Extract fee info from the Mirror Node response
-            let memo = body["memo"]
-                .as_str()
-                .unwrap_or("")
-                .to_string();
+            let memo = body["memo"].as_str().unwrap_or("").to_string();
 
             let mut fee_amount: u64 = 0;
             let mut fee_collector = String::new();
@@ -395,9 +389,7 @@ mod manager {
 
             if let Some(custom_fees) = body["custom_fees"].as_array() {
                 if let Some(first_fee) = custom_fees.first() {
-                    fee_amount = first_fee["fixed_fee"]["amount"]
-                        .as_u64()
-                        .unwrap_or(0);
+                    fee_amount = first_fee["fixed_fee"]["amount"].as_u64().unwrap_or(0);
 
                     if let Some(token) = first_fee["fixed_fee"]["denominating_token_id"].as_str() {
                         if !token.is_empty() {
@@ -411,10 +403,7 @@ mod manager {
                 }
             }
 
-            let created_at = body["created_timestamp"]
-                .as_str()
-                .unwrap_or("")
-                .to_string();
+            let created_at = body["created_timestamp"].as_str().unwrap_or("").to_string();
 
             Ok(TopicInfo {
                 topic_id: topic_id.to_string(),
@@ -477,10 +466,7 @@ mod manager {
                         .unwrap_or("")
                         .to_string();
 
-                    let payer = msg["payer_account_id"]
-                        .as_str()
-                        .unwrap_or("")
-                        .to_string();
+                    let payer = msg["payer_account_id"].as_str().unwrap_or("").to_string();
 
                     records.push(RevenueRecord {
                         transaction_id: format!("{}@{}", payer, consensus_timestamp),
@@ -573,11 +559,7 @@ impl TopicFeeManager {
     }
 
     /// Mock revenue query.
-    pub async fn get_revenue(
-        &self,
-        topic_id: &str,
-        _limit: u32,
-    ) -> SettleResult<RevenueSummary> {
+    pub async fn get_revenue(&self, topic_id: &str, _limit: u32) -> SettleResult<RevenueSummary> {
         let mut ops = self.operations.lock().unwrap();
         ops.push(format!("get_revenue(topic={})", topic_id));
 

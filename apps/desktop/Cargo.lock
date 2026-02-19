@@ -3566,9 +3566,11 @@ dependencies = [
  "nodalync-graph",
  "nodalync-net",
  "nodalync-ops",
+ "nodalync-settle",
  "nodalync-store",
  "nodalync-types",
  "nodalync-wire",
+ "nodalync-x402",
  "rand 0.8.5",
  "regex",
  "serde",
@@ -3714,6 +3716,24 @@ dependencies = [
  "serde",
  "sha2",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "nodalync-x402"
+version = "0.4.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "hex",
+ "nodalync-crypto",
+ "nodalync-econ",
+ "nodalync-types",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

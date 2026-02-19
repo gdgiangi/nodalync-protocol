@@ -128,7 +128,7 @@ export default function GraphScene({
   return (
     <div className="w-full h-full relative" style={{ background: "#0a0a0a" }}>
       <Canvas
-        camera={{ position: [0, 12, 35], fov: 60, near: 0.1, far: 500 }}
+        camera={{ position: [0, 45, 60], fov: 50, near: 0.1, far: 500 }}
         gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }}
         onCreated={({ gl }) => {
           gl.setClearColor("#0a0a0a");
@@ -187,14 +187,14 @@ export default function GraphScene({
           enablePan={true}
           enableZoom={true}
           enableRotate={true}
-          minDistance={5}
-          maxDistance={100}
-          dampingFactor={0.05}
+          minDistance={8}
+          maxDistance={150}
+          dampingFactor={0.08}
           enableDamping={true}
-          rotateSpeed={0.5}
-          zoomSpeed={0.8}
-          panSpeed={0.5}
-          target={[0, 0, 0]}
+          rotateSpeed={0.4}
+          zoomSpeed={0.6}
+          panSpeed={0.8}
+          target={[0, LAYER_Y.L2, 0]}
           makeDefault
         />
       </Canvas>
