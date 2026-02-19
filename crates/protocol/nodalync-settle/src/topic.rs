@@ -130,12 +130,13 @@ mod manager {
     use std::str::FromStr;
 
     use hiero_sdk::{
-        AccountId as HederaAccountId, Client, CustomFixedFee, Key, PrivateKey,
-        TopicCreateTransaction, TopicId, TopicInfoQuery, TopicMessageSubmitTransaction,
+        AccountId as HederaAccountId, Client, CustomFixedFee, PrivateKey,
+        TopicCreateTransaction, TopicId, TopicMessageSubmitTransaction,
     };
 
     use super::*;
     use crate::config::{HederaConfig, HederaNetwork};
+    use crate::error::SettleError;
     use crate::retry::RetryPolicy;
 
     /// Manages HCS topics with HIP-991 native fees.
@@ -151,9 +152,6 @@ mod manager {
 
         /// Operator private key (needed for signing topic creation).
         operator_key: PrivateKey,
-
-        /// Network configuration (for Mirror Node queries).
-        network: HederaNetwork,
 
         /// Mirror Node base URL.
         mirror_node_url: String,
@@ -193,7 +191,6 @@ mod manager {
                 client,
                 operator_id,
                 operator_key: private_key,
-                network: config.network,
                 mirror_node_url,
                 retry_policy: RetryPolicy::from_config(&config.retry),
             })
@@ -223,7 +220,7 @@ mod manager {
             let custom_fee = CustomFixedFee::new(
                 fee_config.fee_amount,
                 None, // None = HBAR denomination
-                Some(fee_collector.into()),
+                Some(fee_collector),
             );
 
             // The operator's public key serves as:
@@ -245,9 +242,9 @@ mod manager {
                     let mut create_tx = TopicCreateTransaction::new();
                     create_tx
                         .topic_memo(&fee_config.topic_memo)
-                        .admin_key(operator_public_key.clone())
-                        .fee_schedule_key(operator_public_key.clone())
-                        .add_fee_exempt_key(operator_public_key.clone())
+                        .admin_key(operator_public_key)
+                        .fee_schedule_key(operator_public_key)
+                        .add_fee_exempt_key(operator_public_key)
                         .add_custom_fee(custom_fee.clone())
                         .execute(&self.client)
                         .await
