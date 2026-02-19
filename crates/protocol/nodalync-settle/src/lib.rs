@@ -77,6 +77,7 @@ pub mod faucet;
 #[cfg(feature = "hedera-sdk")]
 mod hedera;
 mod retry;
+pub mod topic;
 mod traits;
 pub mod types;
 
@@ -88,6 +89,9 @@ pub use faucet::{request_testnet_hbar, FaucetConfig, FaucetResult, HederaFaucet}
 #[cfg(feature = "hedera-sdk")]
 pub use hedera::HederaSettlement;
 pub use retry::RetryPolicy;
+#[cfg(feature = "hedera-sdk")]
+pub use topic::TopicFeeManager;
+pub use topic::{RevenueSummary, TopicFeeConfig, TopicInfo};
 pub use traits::Settlement;
 
 // Re-export key types from types module

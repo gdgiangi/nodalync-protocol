@@ -13,6 +13,7 @@ export function GraphEdges({
   hoveredNode,
   hoveredConnections,
   type, // "horizontal" or "vertical"
+  intensity = "normal", // "intra-cluster", "inter-cluster", or "normal"
   tick, // force re-render on simulation tick
 }) {
   const lineRef = useRef();
@@ -59,21 +60,29 @@ export function GraphEdges({
           0.23, 0.51, 0.96, alpha
         );
       } else {
-        // L2-L2: warm white/gold
+        // L2-L2: cluster-aware intensity
+        let alpha = 0.1; // default
+        
+        if (intensity === "intra-cluster") {
+          // Within clusters: very faint, almost invisible
+          alpha = isHighlighted ? 0.3 : hoveredNode ? 0.01 : 0.02;
+        } else if (intensity === "inter-cluster") {
+          // Between clusters: slightly brighter, showing connections
+          alpha = isHighlighted ? 0.7 : hoveredNode ? 0.05 : 0.15;
+        } else {
+          // Normal intensity (fallback)
+          alpha = isHighlighted ? 0.7 : hoveredNode ? 0.03 : 0.1;
+        }
+
         if (isHighlighted) {
           cols.push(
-            0.96, 0.62, 0.04, 0.7,
-            0.96, 0.62, 0.04, 0.7
-          );
-        } else if (hoveredNode) {
-          cols.push(
-            1.0, 1.0, 1.0, 0.03,
-            1.0, 1.0, 1.0, 0.03
+            0.96, 0.62, 0.04, alpha,
+            0.96, 0.62, 0.04, alpha
           );
         } else {
           cols.push(
-            1.0, 1.0, 1.0, 0.1,
-            1.0, 1.0, 1.0, 0.1
+            1.0, 1.0, 1.0, alpha,
+            1.0, 1.0, 1.0, alpha
           );
         }
       }
