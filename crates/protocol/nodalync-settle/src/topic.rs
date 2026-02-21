@@ -130,8 +130,8 @@ mod manager {
     use std::str::FromStr;
 
     use hiero_sdk::{
-        AccountId as HederaAccountId, Client, CustomFixedFee, PrivateKey,
-        TopicCreateTransaction, TopicId, TopicMessageSubmitTransaction,
+        AccountId as HederaAccountId, Client, CustomFixedFee, PrivateKey, TopicCreateTransaction,
+        TopicId, TopicMessageSubmitTransaction,
     };
 
     use super::*;
