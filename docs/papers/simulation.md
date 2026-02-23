@@ -199,7 +199,7 @@ The baseline 50-seed run established the protocol's core dynamics. To stress-tes
 
 The central question: at what fee level does the aggregator strategy start beating the creator strategy?
 
-![Fairness Frontier](../sweep_outputs/charts/01_fairness_frontier.png)
+![Fairness Frontier](../charts/sweep/01_fairness_frontier.png)
 
 **Answer: it never does.** Across the entire 1–20% range, domain experts (A1) beat aggregators (D3) in **92–96% of simulations**:
 
@@ -211,7 +211,7 @@ The central question: at what fee level does the aggregator strategy start beati
 | 15% | 1,426 | 427 | 3.34× | 94% |
 | 20% | 1,360 | 480 | 2.83× | 92% |
 
-![Owner Share Win Rate](../sweep_outputs/charts/02_owner_share_winrate.png)
+![Owner Share Win Rate](../charts/sweep/02_owner_share_winrate.png)
 
 **Key observations:**
 
@@ -220,7 +220,7 @@ The central question: at what fee level does the aggregator strategy start beati
 - **Passive compounding is remarkably stable.** The 17× return declines only to 16.7× even at 20% owner share—a 3% reduction for a 4× increase in the fee.
 - **Sybil profitability is unaffected.** Mean sybil net P&L hovers around +257 to +306 regardless of owner share, with the 95% CI consistently spanning zero. The owner share parameter doesn't interact meaningfully with sybil dynamics.
 
-![Owner Share Macro](../sweep_outputs/charts/05_owner_share_macro.png)
+![Owner Share Macro](../charts/sweep/05_owner_share_macro.png)
 
 **Implication for protocol designers:** The 95/5 split could be relaxed significantly (even to 80/20) without disrupting the fundamental fairness guarantee. This gives the protocol room to increase synthesizer incentives if needed without sacrificing creator primacy.
 
@@ -228,7 +228,7 @@ The central question: at what fee level does the aggregator strategy start beati
 
 **Setup**: 7 exponent values (0.3 to 0.9) × 50 seeds each = 350 simulations. The dampening function is $\frac{1}{n^{e}}$, where $e$ is the exponent and $n$ is the number of nodes a single controller operates.
 
-![Dampening Sweep](../sweep_outputs/charts/03_dampening_sweep.png)
+![Dampening Sweep](../charts/sweep/03_dampening_sweep.png)
 
 This sweep reveals a clear **phase transition** in sybil economics:
 
@@ -242,7 +242,7 @@ This sweep reveals a clear **phase transition** in sybil economics:
 | 0.8 | Strong | **−167** | [−374, +39] | Unprofitable |
 | 0.9 | Very Strong | **−390** | [−526, −255] | **Definitively unprofitable** |
 
-![Dampening Boxplots](../sweep_outputs/charts/06_dampening_boxplots.png)
+![Dampening Boxplots](../charts/sweep/06_dampening_boxplots.png)
 
 **The critical threshold is between exponent 0.7 and 0.8.** At 0.8, the mean sybil profit turns negative and the CI barely touches zero. At 0.9, the **entire 95% confidence interval is below zero**—sybil attacks are a losing strategy with statistical certainty.
 
@@ -265,7 +265,7 @@ The sweet spot appears to be **exponent 0.7**: it produces a 100% A1 win rate, r
 
 **Setup**: 40,000 ticks (10× the baseline) × 50 seeds = 50 simulations. Each simulation models approximately 11 hours of compute to simulate a far longer economic window.
 
-![Long Horizon](../sweep_outputs/charts/04_long_horizon.png)
+![Long Horizon](../charts/sweep/04_long_horizon.png)
 
 | Metric | 4,000 ticks | 40,000 ticks | Change |
 |---|---|---|---|
