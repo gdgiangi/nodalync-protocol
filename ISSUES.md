@@ -19,12 +19,12 @@ This file records review findings, not GitHub issue numbers. Details, source lin
 | ADOPT-09 | P1 | Proposal ready | Run the matched-task pilot and publish quality, total cost, repeat use, and independently reconciled payout evidence before claiming adoption. |
 | ADOPT-10 | P0 | Open | Resolve adapter/contract settlement-entry encoding mismatch and demonstrate buyer-funding-to-recipient conservation against the actual deployed contract, not only mocks. |
 | ADOPT-11 | P1 | Open; CI blocked | CI reports 14 vulnerability findings against the baseline lockfile. Assess reachable features, upgrade affected dependency families, and rerun audit/integration tests; do not blanket-suppress advisories. |
-| ADOPT-12 | P2 | Fix proposed | Current stable Rust 1.98 adds Clippy failures for existing sorting closures; PR #49 preserves ordering while satisfying the lint. |
+| ADOPT-12 | P2 | Fix proposed | Current stable Rust 1.98 adds Clippy failures for existing sorting closures; PR #51 preserves ordering while satisfying the lint. |
 
 ## Reviewable changes
 
 - [Adoption review, pilot, and article — PR #45](https://github.com/gdgiangi/nodalync-protocol/pull/45)
 - [Nonzero payment authentication — draft PR #46](https://github.com/gdgiangi/nodalync-protocol/pull/46); authenticated peer-key discovery remains a prerequisite.
-- [MCP default query allowances — PR #47](https://github.com/gdgiangi/nodalync-protocol/pull/47); funding policy remains separate.
+- [MCP default query allowances — PR #52](https://github.com/gdgiangi/nodalync-protocol/pull/52); funding policy remains separate.
 - [Durable L3 references — draft PR #48](https://github.com/gdgiangi/nodalync-protocol/pull/48); schema and validator rollout need a decision.
-- [Stable Rust Clippy compatibility — PR #49](https://github.com/gdgiangi/nodalync-protocol/pull/49).
+- [Stable Rust Clippy compatibility — PR #51](https://github.com/gdgiangi/nodalync-protocol/pull/51).

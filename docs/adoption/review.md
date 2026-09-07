@@ -118,7 +118,7 @@ The next milestone should be small enough to disprove: two application teams rep
 
 ## Review artifacts and validation
 
-The [issue index](https://github.com/gdgiangi/nodalync-protocol/pull/45/files) tracks the open design questions. Companion proposals implement [payment authentication](https://github.com/gdgiangi/nodalync-protocol/pull/46), [MCP default allowances](https://github.com/gdgiangi/nodalync-protocol/pull/47), [durable L3 references](https://github.com/gdgiangi/nodalync-protocol/pull/48), and [stable-Rust lint compatibility](https://github.com/gdgiangi/nodalync-protocol/pull/49). Payment authentication and L3 references remain drafts for the integration and compatibility reasons above.
+The [issue index](https://github.com/gdgiangi/nodalync-protocol/pull/45/files) tracks the open design questions. Companion proposals implement [payment authentication](https://github.com/gdgiangi/nodalync-protocol/pull/46), [MCP default allowances](https://github.com/gdgiangi/nodalync-protocol/pull/52), [durable L3 references](https://github.com/gdgiangi/nodalync-protocol/pull/48), and [stable-Rust lint compatibility](https://github.com/gdgiangi/nodalync-protocol/pull/51). Payment authentication and L3 references remain drafts for the integration and compatibility reasons above.
 
 The reviewed baseline passed 1,136 tests. Combining the four code changes in an isolated checkout passed **1,166 tests with all features** on Rust 1.98.0, with three existing ignored examples. Workspace Clippy with all targets/features and warnings denied, formatting, and the documentation build also passed. The article's exact mock-distribution command was executed successfully. Independent reviews led to additional refund, cache-eviction, and visibility-change regressions.
 
