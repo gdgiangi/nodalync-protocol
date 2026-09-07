@@ -3246,6 +3246,7 @@ dependencies = [
  "nodalync-settle",
  "nodalync-store",
  "nodalync-types",
+ "nodalync-wire",
  "nodalync-x402",
  "rmcp",
  "serde",

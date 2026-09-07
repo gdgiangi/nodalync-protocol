@@ -30,11 +30,13 @@ use serde::{Deserialize, Serialize};
 ///    payment is verified via the facilitator and content is delivered.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct QueryKnowledgeInput {
-    /// The query string (natural language or content hash).
+    /// Content hash to retrieve. Discover hashes with list_sources or search_network.
     pub query: String,
 
-    /// Maximum budget for this query in HBAR.
-    /// If not specified, uses auto-approve threshold.
+    /// Explicit maximum query price in HBAR; still limited by the session budget.
+    /// If omitted, uses the configured auto-approve threshold. Supplying this
+    /// overrides that default allowance; the caller must already be authorized.
+    /// This does not cap automatic deposits, channel funding, or network fees.
     #[serde(default)]
     pub budget_hbar: Option<f64>,
 
