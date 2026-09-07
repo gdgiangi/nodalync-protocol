@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>Publish knowledge. AI agents query it. You get paid — forever.</strong>
+  <strong>Connect AI agents to knowledge with attribution and contributor payments.</strong>
 </p>
 
 <p align="center">
@@ -26,20 +26,22 @@
 
 ## What is Nodalync?
 
-Nodalync is an open protocol where knowledge creators earn perpetual royalties every time an AI agent queries their work. 95% of every payment flows back to original sources through cryptographic provenance chains — regardless of how many layers of synthesis stand between the query and the source.
+Nodalync is an open protocol for paid knowledge access and provenance-based contributor compensation. For participating paid queries, the implementation allocates a 5% content-owner fee and distributes the remaining pool among declared foundational sources by weight, with rounding remainder going to the owner.
 
-You publish knowledge once. As others build on it, you earn from every downstream query. The protocol monetizes *access*, not ownership — buyers query your node, they never download your data.
+Its goal is to preserve attribution and compensation as others build on knowledge. The current query path retrieves and caches content bytes. Content hashes verify byte integrity; they do not prevent copying, prove authorship, or enforce payment for uses outside the protocol.
 
 Built with Rust. Peer-to-peer over libp2p. Settlement on Hedera. AI agents connect via MCP.
 
+**Current scope:** experimental implementation with testnet settlement integration. Channel signature verification and other payment/provenance hardening remain prerequisites for real-value operation. See the [implementation and adoption review](docs/adoption/review.md), [proposed pilot](docs/adoption/pilot.md), and [article draft](docs/adoption/article.md).
+
 ## Why Nodalync?
 
-- **Perpetual royalties** — Publish once, earn from every downstream query forever
-- **95/5 revenue distribution** — 95% flows to foundational sources, not intermediaries
-- **AI-native** — MCP interface lets any AI agent query and pay automatically
-- **Local-first** — Your data stays on your node; buyers get query access, not downloads
-- **Cryptographic provenance** — Every insight links to its sources via content-addressed hashes
-- **On-chain settlement** — Payment channels on Hedera with a live testnet smart contract
+- **Downstream compensation** — Designed to carry contributor attribution into further paid derivations
+- **95/5 revenue distribution** — A root pool allocated by declared contribution weights
+- **Agent integration** — MCP tools for discovery and content-hash queries
+- **Local hosting** — Serve content from your node; recipients receive and can cache bytes
+- **Content-addressed provenance** — Link insights to declared sources using content hashes
+- **Settlement integration** — Hedera testnet support with further security work required
 - **834+ tests** — Comprehensive test coverage across 11 protocol and application crates
 
 ## How It Works

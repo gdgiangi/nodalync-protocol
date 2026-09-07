@@ -8,6 +8,12 @@
 - [Troubleshooting](./TROUBLESHOOTING.md)
 - [FAQ](./FAQ.md)
 
+# Adoption Proposal
+
+- [Implementation and Adoption Review](./adoption/review.md)
+- [Pilot Protocol](./adoption/pilot.md)
+- [Article: Give AI a Reason to Come Back to the Source](./adoption/article.md)
+
 # Protocol
 
 - [Specification](./spec.md)
