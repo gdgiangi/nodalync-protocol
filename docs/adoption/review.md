@@ -108,3 +108,11 @@ Use the [pilot protocol](pilot.md) to test this with matched tasks and a convent
 For an application, calculate contribution margin per successful task as the user payment minus source purchases, model inference, hosting, payment costs, support, and refunds. A separately disclosed service fee can fund the application while preserving the source-query split. The fee is viable only if the user values the result enough to pay the total.
 
 The next milestone should be small enough to disprove: two application teams repeatedly solve a real task using maintained evidence from independent contributors, with a complete reconciliation from authorized spend to the contributors' receipts. If that fails, change the corpus, task, or business model before increasing protocol complexity.
+
+## Review artifacts and validation
+
+The [issue index](https://github.com/gdgiangi/nodalync-protocol/pull/45/files) tracks the open design questions. Companion proposals implement [payment authentication](https://github.com/gdgiangi/nodalync-protocol/pull/46), [MCP default allowances](https://github.com/gdgiangi/nodalync-protocol/pull/47), [durable L3 references](https://github.com/gdgiangi/nodalync-protocol/pull/48), and [stable-Rust lint compatibility](https://github.com/gdgiangi/nodalync-protocol/pull/49). Payment authentication and L3 references remain drafts for the integration and compatibility reasons above.
+
+The reviewed baseline passed 1,136 tests. Combining the four code changes in an isolated checkout passed **1,166 tests with all features** on Rust 1.98.0, with three existing ignored examples. Workspace Clippy with all targets/features and warnings denied, formatting, and the documentation build also passed. The article's exact mock-distribution command was executed successfully. Independent reviews led to additional refund, cache-eviction, and visibility-change regressions.
+
+These checks validate local code behavior and compatibility among the proposed patches. They do not certify real-value settlement, prove live network adoption, or resolve the dependency audit. The 14 security-audit findings remain open; the small lint fix does not upgrade third-party packages.
