@@ -1,42 +1,52 @@
-# CI compatibility with Rust 1.98.0
+# Dev compatibility with Rust 1.98.0
 
-## CI-001: Stable Clippy rejects redundant comparison closures (fixed)
+## Baseline
 
-The CI workflow installs the current stable Rust toolchain and denies Clippy
-warnings. Rust 1.98.0 reports `clippy::unnecessary_sort_by` for nine existing
-comparison closures in the types, economics, operations, and CLI crates. The
-first three diagnostics in `nodalync-types` stop the normal CI check before it
-can report the remaining sites.
+This change targets `dev` at `47ee86be4ae6e4ed10add2834f2779ef1ecd2d41`.
+That baseline passes `cargo +1.98.0 check --workspace --locked` and formatting,
+but its strict Clippy checks fail. A full all-feature workspace test run on
+macOS arm64 reports 1,271 passed, one failed, and three ignored. The sole failure
+is `entity_extraction::tests::test_entity_from_node_path`, whose hardcoded
+Windows paths are not parsed into path components on macOS or Linux.
 
-Replace those closures with equivalent `sort_by_key` calls. Hashes and peer identifiers
-retain their ascending byte order; topic frequency and earnings retain their
-descending order through `std::cmp::Reverse`. Both sorting APIs are stable, so
-equal-key ordering is preserved. No economic rules, serialized formats,
-dependencies, lint policies, or CI commands change.
+The original version of this repair targeted old `main` (`db60d90`). Its
+validation results do not describe the newer crates and features on `dev`.
+
+## Compatibility repairs
+
+The existing redundant comparison closures use equivalent `sort_by_key` calls,
+including the additional graph neighbor sort on `dev`. Hashes and peer
+identifiers retain ascending byte order; topic frequency, earnings, and graph
+source counts retain descending order through `std::cmp::Reverse`. Both sorting
+APIs are stable, preserving equal-key order.
+
+The topic revenue average uses `checked_div(...).unwrap_or(0)` instead of a
+separate nonzero check, preserving the zero-message result. Store error tests
+use `std::io::Error::other`. The graph path test constructs its fixture with
+`Path::join`, preserving the same node category and filename on every platform.
+
+Checking all targets also revealed two stale benchmark `SearchPayload`
+initializers that lacked the forwarding fields introduced on `dev`. They now
+explicitly use zero hops and an empty visited-peer list. Benchmark-only unused
+imports, variables, casts, borrows, closures, and intentionally discarded
+results are cleaned up to satisfy warning-denying builds.
 
 ## Reproduction and validation
 
-Install the explicit toolchain without changing the user's default:
+Use the explicit toolchain without changing the user's default:
 
 ```sh
 rustup toolchain install 1.98.0 --profile minimal --component clippy --component rustfmt
 cargo +1.98.0 clippy --locked --workspace --all-targets --all-features -- -D warnings
-```
-
-Against baseline `db60d90`, that command fails on the three types-crate sorts.
-Running once with `-W warnings` inventories all nine sites; no other Clippy
-warnings were reported. After the changes, the strict command passes.
-
-Additional validation on macOS arm64 with Rust 1.98.0:
-
-```sh
 cargo +1.98.0 clippy --locked --workspace -- -D warnings
-cargo +1.98.0 test --locked -p nodalync-types -p nodalync-econ -p nodalync-ops -p nodalync-cli
+cargo +1.98.0 test --locked --workspace --all-features
 cargo +1.98.0 fmt --all --check
 git diff --check
 ```
 
-The existing affected-package test suites pass: 566 tests passed and two existing
-documentation examples were ignored. No new tests are needed for these
-mechanical substitutions. Linux CI remains the cross-platform verification;
-these checks do not exercise real-value settlement.
+The strict Clippy checks pass on macOS arm64. The full all-feature workspace
+suite passes: 1,272 tests passed, none failed, and three existing documentation
+examples were ignored. Formatting and whitespace checks pass. Benchmarks are
+compiled and linted; they are not timed.
+The checks do not exercise real-value settlement, and GitHub Actions remains
+paused at repository level during branch recovery.

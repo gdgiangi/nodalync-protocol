@@ -28,7 +28,7 @@ fn bench_announce_payload_serialization(c: &mut Criterion) {
     c.bench_function("announce_payload_serialize", |b| {
         b.iter(|| {
             let serialized = encode_payload(black_box(&announce));
-            black_box(serialized);
+            let _ = black_box(serialized);
         });
     });
 
@@ -36,7 +36,7 @@ fn bench_announce_payload_serialization(c: &mut Criterion) {
     c.bench_function("announce_payload_deserialize", |b| {
         b.iter(|| {
             let deserialized: Result<AnnouncePayload, _> = decode_payload(black_box(&serialized));
-            black_box(deserialized);
+            let _ = black_box(deserialized);
         });
     });
 }
@@ -56,12 +56,15 @@ fn bench_search_payload_serialization(c: &mut Criterion) {
         filters: Some(search_filters),
         limit: 100,
         offset: 0,
+        max_hops: 0,
+        hop_count: 0,
+        visited_peers: vec![],
     };
 
     c.bench_function("search_payload_serialize", |b| {
         b.iter(|| {
             let serialized = encode_payload(black_box(&search_payload));
-            black_box(serialized);
+            let _ = black_box(serialized);
         });
     });
 
@@ -69,7 +72,7 @@ fn bench_search_payload_serialization(c: &mut Criterion) {
     c.bench_function("search_payload_deserialize", |b| {
         b.iter(|| {
             let deserialized: Result<SearchPayload, _> = decode_payload(black_box(&serialized));
-            black_box(deserialized);
+            let _ = black_box(deserialized);
         });
     });
 }
@@ -80,7 +83,7 @@ fn bench_ping_payload_serialization(c: &mut Criterion) {
     c.bench_function("ping_payload_serialize", |b| {
         b.iter(|| {
             let serialized = encode_payload(black_box(&ping_payload));
-            black_box(serialized);
+            let _ = black_box(serialized);
         });
     });
 
@@ -88,7 +91,7 @@ fn bench_ping_payload_serialization(c: &mut Criterion) {
     c.bench_function("ping_payload_deserialize", |b| {
         b.iter(|| {
             let deserialized: Result<PingPayload, _> = decode_payload(black_box(&serialized));
-            black_box(deserialized);
+            let _ = black_box(deserialized);
         });
     });
 }
@@ -114,7 +117,7 @@ fn bench_full_message_throughput(c: &mut Criterion) {
                     black_box(&private_key),
                 );
                 let wire_bytes = encode_message(black_box(&message));
-                black_box(wire_bytes);
+                let _ = black_box(wire_bytes);
             });
         });
     }
@@ -144,7 +147,7 @@ fn bench_message_decode_throughput(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, _size| {
             b.iter(|| {
                 let decoded = decode_message(black_box(&wire_bytes));
-                black_box(decoded);
+                let _ = black_box(decoded);
             });
         });
     }
@@ -159,14 +162,14 @@ fn bench_cbor_vs_json(c: &mut Criterion) {
     group.bench_function("cbor_serialize", |b| {
         b.iter(|| {
             let serialized = encode_payload(black_box(&announce_payload));
-            black_box(serialized);
+            let _ = black_box(serialized);
         });
     });
 
     group.bench_function("json_serialize", |b| {
         b.iter(|| {
             let serialized = serde_json::to_vec(black_box(&announce_payload));
-            black_box(serialized);
+            let _ = black_box(serialized);
         });
     });
 
@@ -176,7 +179,7 @@ fn bench_cbor_vs_json(c: &mut Criterion) {
     group.bench_function("cbor_deserialize", |b| {
         b.iter(|| {
             let deserialized: Result<AnnouncePayload, _> = decode_payload(black_box(&cbor_data));
-            black_box(deserialized);
+            let _ = black_box(deserialized);
         });
     });
 
@@ -184,7 +187,7 @@ fn bench_cbor_vs_json(c: &mut Criterion) {
         b.iter(|| {
             let deserialized: Result<AnnouncePayload, _> =
                 serde_json::from_slice(black_box(&json_data));
-            black_box(deserialized);
+            let _ = black_box(deserialized);
         });
     });
 
@@ -218,7 +221,7 @@ fn bench_different_message_types(c: &mut Criterion) {
                 black_box(&private_key),
             );
             let wire = encode_message(black_box(&msg));
-            black_box(wire);
+            let _ = black_box(wire);
         });
     });
 
@@ -237,6 +240,9 @@ fn bench_different_message_types(c: &mut Criterion) {
         filters: Some(search_filters),
         limit: 50,
         offset: 0,
+        max_hops: 0,
+        hop_count: 0,
+        visited_peers: vec![],
     };
     let search_bytes = encode_payload(&search).unwrap();
     group.bench_function("search_message_encode", |b| {
@@ -249,7 +255,7 @@ fn bench_different_message_types(c: &mut Criterion) {
                 black_box(&private_key),
             );
             let wire = encode_message(black_box(&msg));
-            black_box(wire);
+            let _ = black_box(wire);
         });
     });
 
@@ -266,7 +272,7 @@ fn bench_different_message_types(c: &mut Criterion) {
                 black_box(&private_key),
             );
             let wire = encode_message(black_box(&msg));
-            black_box(wire);
+            let _ = black_box(wire);
         });
     });
 

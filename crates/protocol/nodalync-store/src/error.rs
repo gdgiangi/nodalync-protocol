@@ -281,7 +281,7 @@ mod tests {
 
     #[test]
     fn test_is_transient() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "test");
+        let io_err = std::io::Error::other("test");
         assert!(StoreError::Io(io_err).is_transient());
         assert!(StoreError::Settlement("test".into()).is_transient());
 
@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn test_retry_delay() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "test");
+        let io_err = std::io::Error::other("test");
         assert_eq!(StoreError::Io(io_err).retry_delay_ms(), Some(1_000));
         assert_eq!(
             StoreError::Settlement("test".into()).retry_delay_ms(),
