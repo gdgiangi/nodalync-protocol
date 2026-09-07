@@ -171,7 +171,7 @@ pub use channel::{create_signed_payment, create_signed_payment_for_manifest, sig
 mod tests {
     use super::*;
     use nodalync_crypto::{content_hash, generate_identity, peer_id_from_public_key};
-    use nodalync_store::NodeStateConfig;
+    use nodalync_store::{NodeStateConfig, PeerInfo, PeerStore};
     use nodalync_types::{Metadata, Visibility};
     use tempfile::TempDir;
 
@@ -302,8 +302,12 @@ mod tests {
             .unwrap();
 
         // Handle query
-        let (_, pk) = generate_identity();
+        let (payer_key, pk) = generate_identity();
         let requester = peer_id_from_public_key(&pk);
+        ops.state
+            .peers
+            .upsert(&PeerInfo::new(requester, pk, vec![], current_timestamp()))
+            .unwrap();
         let manifest = ops.get_content_manifest(&hash).unwrap().unwrap();
 
         // Open a channel with the requester (required for paid content)
@@ -311,7 +315,7 @@ mod tests {
         ops.accept_payment_channel(&channel_id, &requester, 500, 1000)
             .unwrap();
 
-        let payment = nodalync_types::Payment::new(
+        let mut payment = nodalync_types::Payment::new(
             content_hash(b"payment"),
             channel_id,
             100,
@@ -320,6 +324,10 @@ mod tests {
             manifest.provenance.root_l0l1.clone(),
             current_timestamp(),
             nodalync_crypto::Signature::from_bytes([0u8; 64]),
+        );
+        payment.signature = nodalync_crypto::sign(
+            &payer_key,
+            &nodalync_valid::construct_payment_message(&payment),
         );
         let request = nodalync_wire::QueryRequestPayload {
             hash,

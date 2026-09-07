@@ -213,6 +213,10 @@ pub enum ValidationError {
     #[error("query hash mismatch")]
     QueryHashMismatch,
 
+    /// Payment refers to a different channel than the one being charged
+    #[error("payment channel ID does not match the payer's channel")]
+    PaymentChannelMismatch,
+
     /// Channel is not open
     #[error("channel is not open: state is {state}")]
     ChannelNotOpen {
@@ -539,6 +543,7 @@ impl ValidationError {
             Self::InsufficientPayment { .. } => ErrorCode::PaymentInvalid,
             Self::WrongRecipient { .. } => ErrorCode::PaymentInvalid,
             Self::QueryHashMismatch => ErrorCode::PaymentInvalid,
+            Self::PaymentChannelMismatch => ErrorCode::PaymentInvalid,
             Self::ChannelNotOpen { .. } => ErrorCode::ChannelClosed,
             Self::InsufficientChannelBalance { .. } => ErrorCode::InsufficientBalance,
             Self::InvalidNonce { .. } => ErrorCode::InvalidNonce,
