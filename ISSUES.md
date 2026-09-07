@@ -2,6 +2,8 @@
 
 Review baseline: `db60d90805f705149d24fff2559a26a97b37ee2d` (7 September 2026).
 
+This proposal targets `dev`; the findings and historical CI results below remain tied to the original `main` baseline. Reassess them against the additional development-branch functionality before release.
+
 This file records review findings, not GitHub issue numbers. Details, source links, and acceptance gates are in [the review](docs/adoption/review.md).
 
 | ID | Priority | Status | Finding / acceptance condition |

@@ -1,7 +1,14 @@
 # Nodalync: make useful knowledge worth maintaining
 
-**Research and implementation review · 7 September 2026**  
+**Research and implementation review · 7 September 2026**
+
 **Baseline:** [`db60d90`](https://github.com/gdgiangi/nodalync-protocol/tree/db60d90805f705149d24fff2559a26a97b37ee2d). This is a proposal, not a statement that the launch gates below have passed.
+
+**Development branch scope:** This proposal now targets `dev` at `47ee86b`.
+The findings and test counts below describe the linked `main` baseline and its
+original companion patches. They are not a new audit of `dev`, which already
+includes desktop, graph, x402, and settlement changes. Reassess those findings
+against `dev` before using them as release decisions.
 
 Nodalync's most consequential opportunity is to make maintaining useful knowledge economically worthwhile as AI becomes its principal consumer. The test is whether better access to expert evidence improves a real task, and whether the people maintaining that evidence receive verifiable compensation at an acceptable total cost.
 
@@ -73,7 +80,7 @@ Consider a 10,000-unit query with one genuinely valuable external root and 99 eq
 
 This is a conditional arithmetic example, not a measured attack rate. It shows why source count is not contribution value. Direct-L0 weight duplication in current construction does not rescue the example when it affects all roots equally. Repeated import wrappers and duplicate paths also need adversarial tests. Any fix must distinguish legitimate complementary sources from padding without making an untrusted publisher the judge of its own contribution.
 
-The [simulation report](../papers/simulation.md) is useful for exploring its assumptions. It uses quality-weighted selection, externally supplied demand, fixed behaviors, and controller-aware selection dampening. The report itself notes that dampening is not protocol enforcement and shows profitable long-horizon adversaries. Its confidence intervals describe runs of that model; they do not establish willingness to pay or resistance to adaptive attackers. The reviewed tree contains the report and charts, but not the advertised simulator code, complete configurations, and raw results. Reproducibility remains unverified until those artifacts are linked and runnable.
+The [simulation report](https://github.com/gdgiangi/nodalync-protocol/blob/db60d90805f705149d24fff2559a26a97b37ee2d/docs/papers/simulation.md) is useful for exploring its assumptions. It uses quality-weighted selection, externally supplied demand, fixed behaviors, and controller-aware selection dampening. The report itself notes that dampening is not protocol enforcement and shows profitable long-horizon adversaries. Its confidence intervals describe runs of that model; they do not establish willingness to pay or resistance to adaptive attackers. The reviewed tree contains the report and charts, but not the advertised simulator code, complete configurations, and raw results. Reproducibility remains unverified until those artifacts are linked and runnable.
 
 Three experiments matter more than another favorable actor ranking:
 
