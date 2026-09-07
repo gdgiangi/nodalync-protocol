@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use crate::error::Result;
 
 /// Schema version for migration tracking.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// Initialize the database schema.
 ///
@@ -99,11 +99,30 @@ fn migrate_schema(conn: &Connection, from_version: u32) -> Result<()> {
         )?;
     }
 
+    // Migration from version 4 to 5: Track local L3 foundation references.
+    if from_version < 5 {
+        create_l3_references_table(conn)?;
+    }
+
+    Ok(())
+}
+
+/// Local import choices must not replace the source's content-addressed manifest.
+fn create_l3_references_table(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS l3_references (
+            hash BLOB PRIMARY KEY,
+            owner BLOB NOT NULL,
+            imported_at INTEGER NOT NULL
+        )",
+        [],
+    )?;
     Ok(())
 }
 
 /// Create all database tables.
 fn create_tables(conn: &Connection) -> Result<()> {
+    create_l3_references_table(conn)?;
     // Manifests table
     conn.execute(
         "CREATE TABLE IF NOT EXISTS manifests (
@@ -417,6 +436,7 @@ mod tests {
             "settlement_queue",
             "settlement_meta",
             "l1_summaries",
+            "l3_references",
         ];
 
         for table in tables {
@@ -446,7 +466,7 @@ mod tests {
     }
 
     #[test]
-    fn test_migration_v3_to_v4_dedup_settlement_queue() {
+    fn test_migration_v3_to_v5_dedup_settlement_queue_and_add_references() {
         let conn = Connection::open_in_memory().unwrap();
 
         // Create v3 schema manually
@@ -529,6 +549,12 @@ mod tests {
             .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION);
+
+        // Both migrations must run for databases older than settlement deduplication.
+        let references: u32 = conn
+            .query_row("SELECT COUNT(*) FROM l3_references", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(references, 0);
 
         // Verify duplicates were removed
         let count: i32 = conn
@@ -625,5 +651,84 @@ mod tests {
             has_column,
             "funding_tx_id column should exist after migration"
         );
+    }
+
+    #[test]
+    fn test_migration_v4_to_v5_preserves_manifests_edges_and_settlements() {
+        use crate::{ManifestStore, SqliteManifestStore};
+        use nodalync_crypto::{content_hash, PeerId};
+        use nodalync_types::{Manifest, Metadata};
+        use std::sync::{Arc, Mutex};
+
+        fn settlement_rows(conn: &Connection) -> Vec<Vec<rusqlite::types::Value>> {
+            conn.prepare(
+                "SELECT id, payment_id, recipient, amount, source_hash, queued_at, settled, batch_id
+                 FROM settlement_queue ORDER BY id",
+            )
+            .unwrap()
+            .query_map([], |row| (0..8).map(|column| row.get(column)).collect())
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+        }
+
+        let conn = Connection::open_in_memory().unwrap();
+        initialize_schema(&conn).unwrap();
+        conn.execute("DROP TABLE l3_references", []).unwrap();
+        conn.execute("UPDATE schema_version SET version = 4", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO derived_from (content_hash, source_hash) VALUES (?1, ?2)",
+            rusqlite::params![vec![1u8; 32], vec![2u8; 32]],
+        )
+        .unwrap();
+
+        // A current dev database already enforces settlement uniqueness. Its
+        // queued and completed settlements must survive the reference migration.
+        conn.execute(
+            "INSERT INTO settlement_queue
+                (id, payment_id, recipient, amount, source_hash, queued_at, settled, batch_id)
+             VALUES (7, ?1, ?2, 100, ?1, 1000, 0, NULL),
+                    (8, ?1, ?3, 200, ?1, 1001, 1, ?4)",
+            rusqlite::params![vec![3u8; 32], vec![4u8; 20], vec![5u8; 20], vec![6u8; 32]],
+        )
+        .unwrap();
+
+        let conn = Arc::new(Mutex::new(conn));
+        let mut manifests = SqliteManifestStore::new(Arc::clone(&conn));
+        let original = Manifest::new_l0(
+            content_hash(b"Existing source"),
+            PeerId::from_bytes([1; 20]),
+            Metadata::new("Existing", 15),
+            1000,
+        );
+        manifests.store(&original).unwrap();
+
+        let db = conn.lock().unwrap();
+        let original_settlements = settlement_rows(&db);
+        assert_eq!(original_settlements.len(), 2);
+        initialize_schema(&db).unwrap();
+        initialize_schema(&db).unwrap();
+
+        let references: u32 = db
+            .query_row("SELECT COUNT(*) FROM l3_references", [], |row| row.get(0))
+            .unwrap();
+        let edges: u32 = db
+            .query_row("SELECT COUNT(*) FROM derived_from", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(references, 0);
+        assert_eq!(edges, 1);
+        let version: u32 = db
+            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(settlement_rows(&db), original_settlements);
+        assert!(db.execute(
+            "INSERT INTO settlement_queue (payment_id, recipient, amount, source_hash, queued_at)
+             VALUES (?1, ?2, 100, ?1, 1002)",
+            rusqlite::params![vec![3u8; 32], vec![4u8; 20]],
+        ).is_err(), "The v4 settlement uniqueness constraint must remain enforced");
+        drop(db);
+        assert_eq!(manifests.load(&original.hash).unwrap().unwrap(), original);
     }
 }

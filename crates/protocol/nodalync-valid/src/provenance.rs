@@ -126,7 +126,55 @@ fn validate_l3_provenance(manifest: &Manifest, sources: &[Manifest]) -> Validati
     }
 
     // Verify root_l0l1 computation
-    let computed_roots = compute_root_entries(sources);
+    let mut computed_roots = compute_root_entries(sources);
+    // §7.1.6: an L3 used as a local foundational reference also contributes
+    // its own creator. The source manifest remains L3; the optional root entry
+    // in the derivative records that choice without changing the wire format.
+    // Only direct L3 sources can add this entry, with their original payee and
+    // one unit of weight per direct source occurrence.
+    let mut importable = std::collections::HashMap::<Hash, ProvenanceEntry>::new();
+    for source in sources.iter().filter(|source| {
+        source.content_type == ContentType::L3 && prov.derived_from.contains(&source.hash)
+    }) {
+        let entry = importable.entry(source.hash).or_insert_with(|| {
+            ProvenanceEntry::with_weight(source.hash, source.owner, source.visibility, 0)
+        });
+        if entry.owner != source.owner || entry.visibility != source.visibility {
+            return Err(ValidationError::RootEntriesMismatch);
+        }
+        entry.weight += 1;
+    }
+    for contribution in importable.values() {
+        let existing = computed_roots
+            .iter_mut()
+            .find(|entry| entry.hash == contribution.hash);
+        let base_weight = existing.as_ref().map_or(0, |entry| entry.weight);
+        // merge_entries preserves the first inherited snapshot. A source may
+        // have changed visibility since that earlier derivation was created.
+        let expected_visibility = existing
+            .as_ref()
+            .map_or(contribution.visibility, |entry| entry.visibility);
+        if let Some(actual) = prov
+            .root_l0l1
+            .iter()
+            .find(|entry| entry.hash == contribution.hash && entry.weight != base_weight)
+        {
+            let imported_weight = base_weight
+                .checked_add(contribution.weight)
+                .ok_or(ValidationError::RootEntriesMismatch)?;
+            if actual.weight != imported_weight
+                || actual.owner != contribution.owner
+                || actual.visibility != expected_visibility
+            {
+                return Err(ValidationError::RootEntriesMismatch);
+            }
+            if let Some(existing) = existing {
+                existing.weight = imported_weight;
+            } else {
+                computed_roots.push(contribution.clone());
+            }
+        }
+    }
     if !roots_match(&prov.root_l0l1, &computed_roots) {
         return Err(ValidationError::RootEntriesMismatch);
     }
@@ -190,7 +238,7 @@ fn compute_root_entries(sources: &[Manifest]) -> Vec<ProvenanceEntry> {
 
 /// Check if two sets of provenance entries match (ignoring order).
 ///
-/// Entries match if they have the same hashes with the same weights.
+/// Entries match in hash, recipient, visibility, and weight, without duplicates.
 fn roots_match(actual: &[ProvenanceEntry], expected: &[ProvenanceEntry]) -> bool {
     use std::collections::HashMap;
 
@@ -198,10 +246,11 @@ fn roots_match(actual: &[ProvenanceEntry], expected: &[ProvenanceEntry]) -> bool
         return false;
     }
 
-    let actual_map: HashMap<Hash, u32> = actual.iter().map(|e| (e.hash, e.weight)).collect();
-    let expected_map: HashMap<Hash, u32> = expected.iter().map(|e| (e.hash, e.weight)).collect();
+    let actual_map: HashMap<Hash, &ProvenanceEntry> = actual.iter().map(|e| (e.hash, e)).collect();
+    let expected_map: HashMap<Hash, &ProvenanceEntry> =
+        expected.iter().map(|e| (e.hash, e)).collect();
 
-    actual_map == expected_map
+    actual_map.len() == actual.len() && actual_map == expected_map
 }
 
 #[cfg(test)]
@@ -501,5 +550,99 @@ mod tests {
             ProvenanceEntry::with_weight(hash2, owner, Visibility::Shared, 3), // Different weight
         ];
         assert!(!roots_match(&entries1, &entries3));
+    }
+
+    fn derived_manifest(content: &[u8], sources: &[Manifest]) -> Manifest {
+        let mut manifest = create_l0_manifest(content);
+        manifest.content_type = ContentType::L3;
+        let inputs: Vec<_> = sources
+            .iter()
+            .map(|source| {
+                (
+                    source.hash,
+                    &source.provenance,
+                    source.owner,
+                    source.visibility,
+                )
+            })
+            .collect();
+        manifest.provenance = Provenance::from_sources(&inputs);
+        manifest
+    }
+
+    #[test]
+    fn test_imported_l3_root_requires_original_payee_visibility_and_unit_weight() {
+        let root = create_l0_manifest(b"Original source");
+        let source = derived_manifest(b"Source insight", &[root]);
+        let mut imported = derived_manifest(b"Imported derivative", std::slice::from_ref(&source));
+        imported.provenance.root_l0l1.push(ProvenanceEntry::new(
+            source.hash,
+            source.owner,
+            source.visibility,
+        ));
+        assert!(validate_provenance(&imported, std::slice::from_ref(&source)).is_ok());
+
+        let mut forged_payee = imported.clone();
+        forged_payee.provenance.root_l0l1.last_mut().unwrap().owner = test_peer_id();
+        assert!(validate_provenance(&forged_payee, std::slice::from_ref(&source)).is_err());
+        let mut forged_visibility = imported.clone();
+        forged_visibility
+            .provenance
+            .root_l0l1
+            .last_mut()
+            .unwrap()
+            .visibility = Visibility::Shared;
+        assert!(validate_provenance(&forged_visibility, std::slice::from_ref(&source)).is_err());
+        let mut inflated = imported.clone();
+        inflated.provenance.root_l0l1.last_mut().unwrap().weight = 2;
+        assert!(validate_provenance(&inflated, std::slice::from_ref(&source)).is_err());
+        let mut unrelated = imported.clone();
+        unrelated.provenance.root_l0l1.last_mut().unwrap().hash = content_hash(b"Unrelated");
+        assert!(validate_provenance(&unrelated, std::slice::from_ref(&source)).is_err());
+
+        // Imported status never permits dropping or redirecting upstream roots.
+        let mut missing_upstream = imported.clone();
+        missing_upstream.provenance.root_l0l1.remove(0);
+        assert!(validate_provenance(&missing_upstream, std::slice::from_ref(&source)).is_err());
+        let mut redirected_upstream = imported;
+        redirected_upstream.provenance.root_l0l1[0].owner = test_peer_id();
+        assert!(validate_provenance(&redirected_upstream, &[source]).is_err());
+    }
+
+    #[test]
+    fn test_imported_creator_already_in_another_source_keeps_both_paths() {
+        let root = create_l0_manifest(b"Original");
+        let source = derived_manifest(b"First insight", &[root]);
+        let mut intermediate = derived_manifest(b"Next insight", std::slice::from_ref(&source));
+        intermediate.provenance.root_l0l1.push(ProvenanceEntry::new(
+            source.hash,
+            source.owner,
+            source.visibility,
+        ));
+        let sources = [source.clone(), intermediate];
+        let mut result = derived_manifest(b"Combines both paths", &sources);
+        assert!(validate_provenance(&result, &sources).is_ok());
+        // Importing the direct source adds one contribution; the inherited
+        // contribution through the second source is not lost or counted twice.
+        let entry = result
+            .provenance
+            .root_l0l1
+            .iter_mut()
+            .find(|e| e.hash == source.hash)
+            .unwrap();
+        assert_eq!(entry.weight, 1);
+        entry.weight += 1;
+        assert!(validate_provenance(&result, &sources).is_ok());
+    }
+
+    #[test]
+    fn test_duplicate_root_entries_cannot_hide_missing_roots() {
+        let owner = test_peer_id();
+        let first = ProvenanceEntry::new(content_hash(b"First"), owner, Visibility::Shared);
+        let second = ProvenanceEntry::new(content_hash(b"Second"), owner, Visibility::Shared);
+        assert!(!roots_match(
+            &[first.clone(), first.clone()],
+            &[first, second]
+        ));
     }
 }
