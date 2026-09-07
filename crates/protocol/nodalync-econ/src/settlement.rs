@@ -94,7 +94,7 @@ pub fn create_settlement_batch(payments: &[Payment]) -> SettlementBatch {
         .collect();
 
     // Sort entries by recipient for deterministic ordering
-    entries.sort_by(|a, b| a.recipient.0.cmp(&b.recipient.0));
+    entries.sort_by_key(|entry| entry.recipient.0);
 
     // Compute batch ID and merkle root
     let batch_id = compute_batch_id(&entries);
