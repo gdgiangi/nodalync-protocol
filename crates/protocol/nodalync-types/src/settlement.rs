@@ -140,7 +140,7 @@ impl SettlementBatch {
     /// Get all unique recipients in this batch.
     pub fn unique_recipients(&self) -> Vec<PeerId> {
         let mut recipients: Vec<PeerId> = self.entries.iter().map(|e| e.recipient).collect();
-        recipients.sort_by(|a, b| a.0.cmp(&b.0));
+        recipients.sort_by_key(|recipient| recipient.0);
         recipients.dedup();
         recipients
     }

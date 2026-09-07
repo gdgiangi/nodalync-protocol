@@ -946,7 +946,7 @@ fn extract_topics(mentions: &[nodalync_types::Mention]) -> Vec<String> {
 
     // Sort by count and take top 5
     let mut sorted: Vec<_> = entity_counts.into_iter().collect();
-    sorted.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted.sort_by_key(|entry| std::cmp::Reverse(entry.1));
 
     sorted.into_iter().take(5).map(|(k, _)| k).collect()
 }
