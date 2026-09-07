@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev, codex/desktop-integration]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 env:
   CARGO_TERM_COLOR: always
@@ -161,3 +161,28 @@ jobs:
 
       - name: Run security audit
         run: cargo audit
+
+  frontend:
+    name: Desktop frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Test desktop calculations
+        run: npm test
