@@ -8,7 +8,9 @@
 //! - Signature verification
 //! - Provenance matching
 
-use nodalync_crypto::{sign, verify, Hash, PrivateKey, PublicKey, Signature};
+use nodalync_crypto::{
+    peer_id_from_public_key, sign, verify, Hash, PrivateKey, PublicKey, Signature,
+};
 use nodalync_types::{Amount, Channel, ChannelState, Manifest, Payment, PeerId, ProvenanceEntry};
 
 use crate::error::{ValidationError, ValidationResult};
@@ -44,7 +46,7 @@ pub trait BondChecker {
 /// * `payment` - The payment to validate
 /// * `channel` - The payment channel
 /// * `manifest` - The manifest for the queried content
-/// * `payer_pubkey` - The payer's public key for signature verification
+/// * `payer_pubkey` - The payer's public key; missing keys are rejected
 /// * `payment_nonce` - The payment's nonce value
 ///
 /// # Returns
@@ -55,6 +57,32 @@ pub fn validate_payment(
     channel: &Channel,
     manifest: &Manifest,
     payer_pubkey: Option<&PublicKey>,
+    payment_nonce: u64,
+) -> ValidationResult<()> {
+    validate_payment_basic(payment, channel, manifest, payment_nonce)?;
+
+    let pubkey = payer_pubkey.ok_or_else(|| ValidationError::PublicKeyNotFound {
+        peer_id: channel.peer_id.to_string(),
+    })?;
+
+    // A valid signature from another identity cannot authorize this channel.
+    if peer_id_from_public_key(pubkey) != channel.peer_id
+        || !verify_payment_signature(pubkey, payment)
+    {
+        return Err(ValidationError::InvalidPaymentSignature);
+    }
+
+    Ok(())
+}
+
+/// Validate payment parameters without authenticating the payer.
+///
+/// This is only a structural check. Callers accepting a payment must also verify
+/// its signature and payer identity, or use [`validate_payment`] instead.
+pub fn validate_payment_basic(
+    payment: &Payment,
+    channel: &Channel,
+    manifest: &Manifest,
     payment_nonce: u64,
 ) -> ValidationResult<()> {
     // 1. Amount sufficient
@@ -78,7 +106,12 @@ pub fn validate_payment(
         return Err(ValidationError::QueryHashMismatch);
     }
 
-    // 4. Channel is open
+    // 4. The signed channel ID must identify the channel being charged.
+    if payment.channel_id != channel.channel_id {
+        return Err(ValidationError::PaymentChannelMismatch);
+    }
+
+    // Channel is open
     if channel.state != ChannelState::Open {
         return Err(ValidationError::ChannelNotOpen {
             state: format!("{:?}", channel.state),
@@ -101,13 +134,6 @@ pub fn validate_payment(
         });
     }
 
-    // 7. Verify signature (if public key provided)
-    if let Some(pubkey) = payer_pubkey {
-        if !verify_payment_signature(pubkey, payment) {
-            return Err(ValidationError::InvalidPaymentSignature);
-        }
-    }
-
     // 8. Provenance matches manifest
     if !provenance_matches(&payment.provenance, &manifest.provenance.root_l0l1) {
         return Err(ValidationError::ProvenanceMismatch);
@@ -116,22 +142,9 @@ pub fn validate_payment(
     Ok(())
 }
 
-/// Validate payment without signature verification.
-///
-/// Use this for quick validation when the signature has already been verified
-/// or when the payer's public key is not available.
-pub fn validate_payment_basic(
-    payment: &Payment,
-    channel: &Channel,
-    manifest: &Manifest,
-    payment_nonce: u64,
-) -> ValidationResult<()> {
-    validate_payment(payment, channel, manifest, None, payment_nonce)
-}
-
 /// Verify a payment signature.
 ///
-/// The signature covers the payment data (excluding the signature itself).
+/// The signature covers the fields encoded by [`construct_payment_message`].
 fn verify_payment_signature(pubkey: &PublicKey, payment: &Payment) -> bool {
     // Construct the message that was signed
     // This should match the signing process in nodalync-ops
@@ -141,11 +154,12 @@ fn verify_payment_signature(pubkey: &PublicKey, payment: &Payment) -> bool {
 
 /// Construct the message bytes for payment signing/verification.
 ///
-/// The payment message includes all fields except the signature:
+/// The current protocol signs these fields:
 /// `channel_id || amount (u64 BE) || recipient || query_hash || timestamp (u64 BE)`
+///
+/// Payment ID, provenance, and the query request's nonce are not included in this
+/// legacy encoding. Changing the encoding requires a coordinated protocol update.
 pub fn construct_payment_message(payment: &Payment) -> Vec<u8> {
-    // The payment message includes all fields except the signature
-    // Format: channel_id || amount (u64 BE) || recipient || query_hash || timestamp (u64 BE)
     let mut message = Vec::new();
     message.extend_from_slice(payment.channel_id.as_ref());
     message.extend_from_slice(&payment.amount.to_be_bytes());
@@ -297,6 +311,71 @@ mod tests {
 
         let result = validate_payment_basic(&payment, &channel, &manifest, nonce);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_full_validation_rejects_missing_payer_key() {
+        let manifest = create_test_manifest(b"Content", 100);
+        let channel = create_test_channel(test_peer_id(), 1000);
+        let (payment, nonce) = create_test_payment(&manifest, &channel, 100);
+
+        assert!(matches!(
+            validate_payment(&payment, &channel, &manifest, None, nonce),
+            Err(ValidationError::PublicKeyNotFound { .. })
+        ));
+    }
+
+    #[test]
+    fn test_full_validation_accepts_authenticated_payer() {
+        let (private_key, public_key) = generate_identity();
+        let manifest = create_test_manifest(b"Content", 100);
+        let channel = create_test_channel(peer_id_from_public_key(&public_key), 1000);
+        let (mut payment, nonce) = create_test_payment(&manifest, &channel, 100);
+        payment.signature = sign(&private_key, &construct_payment_message(&payment));
+
+        assert!(validate_payment(&payment, &channel, &manifest, Some(&public_key), nonce).is_ok());
+    }
+
+    #[test]
+    fn test_full_validation_rejects_forged_signature() {
+        let (_, public_key) = generate_identity();
+        let manifest = create_test_manifest(b"Content", 100);
+        let channel = create_test_channel(peer_id_from_public_key(&public_key), 1000);
+        let (payment, nonce) = create_test_payment(&manifest, &channel, 100);
+
+        assert_eq!(
+            validate_payment(&payment, &channel, &manifest, Some(&public_key), nonce),
+            Err(ValidationError::InvalidPaymentSignature)
+        );
+    }
+
+    #[test]
+    fn test_full_validation_rejects_valid_signature_from_another_identity() {
+        let (private_key, public_key) = generate_identity();
+        let manifest = create_test_manifest(b"Content", 100);
+        let channel = create_test_channel(test_peer_id(), 1000);
+        let (mut payment, nonce) = create_test_payment(&manifest, &channel, 100);
+        payment.signature = sign(&private_key, &construct_payment_message(&payment));
+
+        assert_eq!(
+            validate_payment(&payment, &channel, &manifest, Some(&public_key), nonce),
+            Err(ValidationError::InvalidPaymentSignature)
+        );
+    }
+
+    #[test]
+    fn test_payment_for_another_channel_is_rejected() {
+        let (private_key, public_key) = generate_identity();
+        let manifest = create_test_manifest(b"Content", 100);
+        let channel = create_test_channel(peer_id_from_public_key(&public_key), 1000);
+        let (mut payment, nonce) = create_test_payment(&manifest, &channel, 100);
+        payment.channel_id = content_hash(b"another channel");
+        payment.signature = sign(&private_key, &construct_payment_message(&payment));
+
+        assert_eq!(
+            validate_payment(&payment, &channel, &manifest, Some(&public_key), nonce),
+            Err(ValidationError::PaymentChannelMismatch)
+        );
     }
 
     #[test]

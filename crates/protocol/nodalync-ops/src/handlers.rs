@@ -73,7 +73,7 @@ where
     /// 1. Load manifest
     /// 2. Validate access
     /// 3. Validate payment amount
-    /// 4. Validate payment signature for paid content (channel, nonce, signature)
+    /// 4. Authenticate every nonzero payment (channel, nonce, signature)
     /// 5. Update channel state (credit)
     /// 6. Generate payment ID
     /// 7. Calculate 95/5 distribution (5% synthesis fee to owner, 95% to root L0/L1 contributors)
@@ -115,18 +115,16 @@ where
             return Err(OpsError::PaymentInsufficient);
         }
 
-        // 4. Validate payment signature for paid content
-        // Payment channels are REQUIRED for paid content queries.
-        if manifest.economics.price > 0 {
+        // 4. Authenticate every transfer, including payments for free content.
+        // Validate before mutating balances or submitting a settlement batch.
+        if payment_amount > 0 {
             match self.state.channels.get(requester)? {
                 Some(channel) if channel.is_open() => {
                     // Full payment validation: signature, nonce, amount, provenance
                     let requester_pubkey = self
                         .state
                         .peers
-                        .get(requester)
-                        .ok()
-                        .flatten()
+                        .get(requester)?
                         .map(|info| info.public_key)
                         .filter(|pk| pk.0 != [0u8; 32]);
 
@@ -138,14 +136,6 @@ where
                         request.payment_nonce,
                     )
                     .map_err(|e| OpsError::PaymentValidationFailed(e.to_string()))?;
-
-                    // Verify payment nonce is strictly greater than channel nonce (replay prevention)
-                    if request.payment_nonce <= channel.nonce {
-                        return Err(OpsError::PaymentValidationFailed(format!(
-                            "payment nonce {} must be > channel nonce {}",
-                            request.payment_nonce, channel.nonce
-                        )));
-                    }
                 }
                 Some(_) => {
                     // Channel exists but not open - require open channel for paid content
@@ -1409,7 +1399,7 @@ mod tests {
     use super::*;
     use crate::node_ops::DefaultNodeOperations;
     use nodalync_crypto::{content_hash, generate_identity, peer_id_from_public_key};
-    use nodalync_store::NodeStateConfig;
+    use nodalync_store::{NodeStateConfig, PeerInfo};
     use nodalync_types::{Metadata, ProvenanceEntry};
     use nodalync_wire::ChannelBalances;
     use std::sync::Arc;
@@ -1430,6 +1420,28 @@ mod tests {
     fn test_peer_id() -> PeerId {
         let (_, public_key) = generate_identity();
         peer_id_from_public_key(&public_key)
+    }
+
+    fn register_test_payer(ops: &mut DefaultNodeOperations) -> (PeerId, PrivateKey) {
+        let (private_key, public_key) = generate_identity();
+        let peer_id = peer_id_from_public_key(&public_key);
+        ops.state
+            .peers
+            .upsert(&PeerInfo::new(
+                peer_id,
+                public_key,
+                vec![],
+                current_timestamp(),
+            ))
+            .unwrap();
+        (peer_id, private_key)
+    }
+
+    fn sign_test_payment(payment: &mut Payment, private_key: &PrivateKey) {
+        payment.signature = nodalync_crypto::sign(
+            private_key,
+            &nodalync_valid::construct_payment_message(payment),
+        );
     }
 
     fn create_test_payment(
@@ -1518,7 +1530,7 @@ mod tests {
             .unwrap();
 
         // Handle query request
-        let requester = test_peer_id();
+        let (requester, payer_key) = register_test_payer(&mut ops);
 
         // Open a channel with the requester (required for paid content)
         let channel_id = content_hash(b"test-query-channel");
@@ -1526,13 +1538,15 @@ mod tests {
             .unwrap();
 
         let manifest = ops.get_content_manifest(&hash).unwrap().unwrap();
-        let payment = create_test_payment_with_provenance(
+        let mut payment = create_test_payment_with_provenance(
             100,
             manifest.owner,
             hash,
             channel_id,
             manifest.provenance.root_l0l1.clone(),
         );
+
+        sign_test_payment(&mut payment, &payer_key);
 
         let request = QueryRequestPayload {
             hash,
@@ -1791,7 +1805,7 @@ mod tests {
             .unwrap();
 
         // Handle query request
-        let requester = test_peer_id();
+        let (requester, payer_key) = register_test_payer(&mut ops);
 
         // Open a channel with the requester (required for paid content)
         let channel_id = content_hash(b"test-settlement-channel");
@@ -1799,13 +1813,15 @@ mod tests {
             .unwrap();
 
         let manifest = ops.get_content_manifest(&hash).unwrap().unwrap();
-        let payment = create_test_payment_with_provenance(
+        let mut payment = create_test_payment_with_provenance(
             100,
             manifest.owner,
             hash,
             channel_id,
             manifest.provenance.root_l0l1.clone(),
         );
+
+        sign_test_payment(&mut payment, &payer_key);
 
         let request = QueryRequestPayload {
             hash,
@@ -1838,7 +1854,7 @@ mod tests {
         // for any retry. This is more conservative and prevents double-spend.
         let (mut ops, _temp) = create_test_ops();
         let content = b"Premium knowledge content";
-        let requester = test_peer_id();
+        let (requester, payer_key) = register_test_payer(&mut ops);
 
         // Create and publish paid content
         let meta = Metadata::new("Premium Knowledge", content.len() as u64);
@@ -1860,7 +1876,7 @@ mod tests {
         let manifest = ops.state.manifests.load(&hash).unwrap().unwrap();
 
         // Create payment with correct provenance
-        let payment = Payment::new(
+        let mut payment = Payment::new(
             content_hash(b"payment1"),
             channel_id,
             100,
@@ -1872,6 +1888,8 @@ mod tests {
         );
 
         // Query with nonce 1 - without settlement, will fail at settlement step
+        sign_test_payment(&mut payment, &payer_key);
+
         let request = QueryRequestPayload {
             hash,
             query: None,
@@ -1916,7 +1934,7 @@ mod tests {
         // even without settlement configured. This is a security validation.
         let (mut ops, _temp) = create_test_ops();
         let content = b"Premium knowledge content";
-        let requester = test_peer_id();
+        let (requester, payer_key) = register_test_payer(&mut ops);
 
         // Create and publish paid content
         let meta = Metadata::new("Premium Knowledge", content.len() as u64);
@@ -1940,7 +1958,7 @@ mod tests {
         let manifest = ops.state.manifests.load(&hash).unwrap().unwrap();
 
         // Try to replay with an old nonce (should fail BEFORE settlement check)
-        let payment = Payment::new(
+        let mut payment = Payment::new(
             content_hash(b"replay-payment"),
             channel_id,
             100,
@@ -1950,6 +1968,8 @@ mod tests {
             current_timestamp(),
             Signature::from_bytes([0u8; 64]),
         );
+
+        sign_test_payment(&mut payment, &payer_key);
 
         let request = QueryRequestPayload {
             hash,
@@ -1993,6 +2013,172 @@ mod tests {
         let result = ops.handle_query_request(&requester, &request).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().content, content.to_vec());
+    }
+
+    async fn authenticated_query_fixture(
+        price: u64,
+    ) -> (
+        DefaultNodeOperations,
+        TempDir,
+        PeerId,
+        PrivateKey,
+        QueryRequestPayload,
+        Arc<nodalync_test_utils::MockSettlement>,
+    ) {
+        let (mut ops, temp) = create_test_ops();
+        let content = b"Content with authenticated payments";
+        let hash = ops
+            .create_content(
+                content,
+                Metadata::new("Payment validation", content.len() as u64),
+            )
+            .unwrap();
+        ops.publish_content(&hash, Visibility::Shared, price)
+            .await
+            .unwrap();
+
+        let (requester, private_key) = register_test_payer(&mut ops);
+        let channel_id = content_hash(b"authenticated-query-channel");
+        ops.accept_payment_channel(&channel_id, &requester, 500, 1000)
+            .unwrap();
+        let manifest = ops.state.manifests.load(&hash).unwrap().unwrap();
+        let mut payment = create_test_payment_with_provenance(
+            100,
+            manifest.owner,
+            hash,
+            channel_id,
+            manifest.provenance.root_l0l1,
+        );
+        sign_test_payment(&mut payment, &private_key);
+        let request = QueryRequestPayload {
+            hash,
+            query: None,
+            payment,
+            version_spec: None,
+            payment_nonce: 1,
+        };
+        let settlement = Arc::new(nodalync_test_utils::MockSettlement::new());
+        ops.set_settlement(settlement.clone());
+        (ops, temp, requester, private_key, request, settlement)
+    }
+
+    async fn assert_rejected_without_payment_side_effects(
+        ops: &mut DefaultNodeOperations,
+        requester: &PeerId,
+        request: &QueryRequestPayload,
+        settlement: &nodalync_test_utils::MockSettlement,
+    ) {
+        let channel_before = ops.state.channels.get(requester).unwrap();
+        let manifest_before = ops.state.manifests.load(&request.hash).unwrap();
+        let result = ops.handle_query_request(requester, request).await;
+        assert!(
+            matches!(result, Err(OpsError::PaymentValidationFailed(_))),
+            "unauthenticated payment must be rejected: {result:?}"
+        );
+        assert_eq!(ops.state.channels.get(requester).unwrap(), channel_before);
+        assert_eq!(
+            ops.state.manifests.load(&request.hash).unwrap(),
+            manifest_before
+        );
+        assert!(settlement.settled_batches().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_nonzero_queries_require_a_known_valid_payer_key() {
+        // The same checks must hold when the content itself is free.
+        for price in [0, 100] {
+            for key_state in ["missing", "unset", "wrong identity", "forged signature"] {
+                let (mut ops, _temp, requester, _private_key, mut request, settlement) =
+                    authenticated_query_fixture(price).await;
+                match key_state {
+                    "missing" => {
+                        ops.state.peers.delete(&requester).unwrap();
+                    }
+                    "unset" => {
+                        let mut peer = ops.state.peers.get(&requester).unwrap().unwrap();
+                        peer.public_key = nodalync_crypto::PublicKey::from_bytes([0u8; 32]);
+                        ops.state.peers.upsert(&peer).unwrap();
+                    }
+                    "wrong identity" => {
+                        // Even a cryptographically valid signature must belong
+                        // to the requester whose channel would be debited.
+                        let (other_key, other_pubkey) = generate_identity();
+                        let mut peer = ops.state.peers.get(&requester).unwrap().unwrap();
+                        peer.public_key = other_pubkey;
+                        ops.state.peers.upsert(&peer).unwrap();
+                        sign_test_payment(&mut request.payment, &other_key);
+                    }
+                    "forged signature" => {
+                        request.payment.signature = Signature::from_bytes([0u8; 64]);
+                    }
+                    _ => unreachable!(),
+                }
+                assert_rejected_without_payment_side_effects(
+                    &mut ops,
+                    &requester,
+                    &request,
+                    &settlement,
+                )
+                .await;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_nonzero_queries_reject_a_signature_for_another_channel() {
+        for price in [0, 100] {
+            let (mut ops, _temp, requester, private_key, mut request, settlement) =
+                authenticated_query_fixture(price).await;
+            request.payment.channel_id = content_hash(b"different-channel");
+            sign_test_payment(&mut request.payment, &private_key);
+
+            assert_rejected_without_payment_side_effects(
+                &mut ops,
+                &requester,
+                &request,
+                &settlement,
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_authenticated_nonzero_queries_settle_and_deliver() {
+        for price in [0, 100] {
+            let (mut ops, _temp, requester, _private_key, request, settlement) =
+                authenticated_query_fixture(price).await;
+            let before = ops.state.channels.get(&requester).unwrap().unwrap();
+            let response = ops
+                .handle_query_request(&requester, &request)
+                .await
+                .unwrap();
+
+            assert_eq!(response.content, b"Content with authenticated payments");
+            assert_eq!(response.payment_receipt.amount, 100);
+            assert_eq!(response.manifest.economics.total_queries, 1);
+            assert_eq!(response.manifest.economics.total_revenue, 100);
+            assert_eq!(settlement.settled_batches().len(), 1);
+            let after = ops.state.channels.get(&requester).unwrap().unwrap();
+            assert_eq!(after.their_balance, before.their_balance - 100);
+            assert_eq!(after.my_balance, before.my_balance + 100);
+            assert_eq!(after.nonce, request.payment_nonce);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_nonzero_payment_for_free_content_requires_channel() {
+        let (mut ops, _temp, requester, _private_key, request, settlement) =
+            authenticated_query_fixture(0).await;
+        ops.state.channels.delete(&requester).unwrap();
+        let manifest_before = ops.state.manifests.load(&request.hash).unwrap();
+
+        let result = ops.handle_query_request(&requester, &request).await;
+        assert!(matches!(result, Err(OpsError::ChannelRequired)));
+        assert_eq!(
+            ops.state.manifests.load(&request.hash).unwrap(),
+            manifest_before
+        );
+        assert!(settlement.settled_batches().is_empty());
     }
 
     #[tokio::test]

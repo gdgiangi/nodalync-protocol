@@ -5,7 +5,9 @@
 
 use nodalync_crypto::{content_hash, generate_identity, peer_id_from_public_key};
 use nodalync_ops::DefaultNodeOperations;
-use nodalync_store::{NodeStateConfig, QueuedDistribution, SettlementQueueStore};
+use nodalync_store::{
+    NodeStateConfig, PeerInfo, PeerStore, QueuedDistribution, SettlementQueueStore,
+};
 use nodalync_test_utils::*;
 use nodalync_types::{Metadata, Visibility};
 use std::sync::Arc;
@@ -377,13 +379,17 @@ async fn test_paid_query_with_mock_settlement() {
         .unwrap();
 
     // Open a channel with a requester
-    let (_, _, requester) = test_keypair();
+    let (payer_key, payer_pubkey, requester) = test_keypair();
+    ops.state
+        .peers
+        .upsert(&PeerInfo::new(requester, payer_pubkey, vec![], now()))
+        .unwrap();
     let channel_id = content_hash(b"paid-query-channel");
     ops.accept_payment_channel(&channel_id, &requester, 500, 1000)
         .unwrap();
 
     let manifest = ops.get_content_manifest(&hash).unwrap().unwrap();
-    let payment = nodalync_types::Payment::new(
+    let mut payment = nodalync_types::Payment::new(
         content_hash(b"paid-query-payment"),
         channel_id,
         100,
@@ -394,6 +400,10 @@ async fn test_paid_query_with_mock_settlement() {
         nodalync_crypto::Signature::from_bytes([0u8; 64]),
     );
 
+    payment.signature = nodalync_crypto::sign(
+        &payer_key,
+        &nodalync_valid::construct_payment_message(&payment),
+    );
     let request = nodalync_wire::QueryRequestPayload {
         hash,
         query: None,
