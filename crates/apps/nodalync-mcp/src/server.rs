@@ -39,20 +39,44 @@ use crate::tools::{
     VersionEntry, X402PaymentRequiredOutput, X402PaymentRequirement, X402StatusOutput,
 };
 
-use nodalync_x402::{PaymentGate, X402Config};
+use nodalync_x402::{PaymentGate, X402Config, X402Error};
 
 /// Create a standardized error response for MCP tools.
 ///
 /// Returns a JSON-formatted error with error code, message, and recovery suggestion.
 fn tool_error(error: &NodalyncMcpError) -> CallToolResult {
+    CallToolResult::error(vec![Content::text(error_payload(error).to_string())])
+}
+
+fn error_payload(error: &NodalyncMcpError) -> serde_json::Value {
     let code = error.error_code();
-    let response = serde_json::json!({
+    let suggestion = match error {
+        NodalyncMcpError::QueryBudgetExceeded { .. } => Some(
+            "Use preview_content to inspect the price. Only with an authorized allowance, call query_knowledge with an explicit budget_hbar. Resource reads cannot supply an explicit allowance.",
+        ),
+        NodalyncMcpError::BudgetExceeded { .. } => Some(
+            "Choose cheaper content or ask the operator to configure a larger session budget. Depositing funds does not increase the session budget.",
+        ),
+        _ => code.suggestion(),
+    };
+    serde_json::json!({
         "error": code.to_string(),
         "code": code.code(),
         "message": error.to_string(),
-        "suggestion": code.suggestion(),
-    });
-    CallToolResult::error(vec![Content::text(response.to_string())])
+        "suggestion": suggestion,
+    })
+}
+
+/// Reject invalid limits instead of silently saturating a float-to-integer cast.
+fn query_limit_tinybars(hbar: f64, field: &str) -> Result<u64, McpError> {
+    let tinybars = hbar * crate::budget::TINYBARS_PER_HBAR as f64;
+    if !hbar.is_finite() || hbar < 0.0 || tinybars >= u64::MAX as f64 {
+        return Err(McpError::invalid_params(
+            format!("{field} must be a finite, non-negative HBAR amount representable in tinybars"),
+            None,
+        ));
+    }
+    Ok(hbar_to_tinybars(hbar))
 }
 
 /// Convert a Nodalync PeerId to a base58 string.
@@ -151,6 +175,10 @@ impl NodalyncMcpServer {
     pub async fn new(
         config: McpServerConfig,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        // Validate spending limits before opening storage or starting networking.
+        query_limit_tinybars(config.budget_hbar, "budget_hbar")?;
+        query_limit_tinybars(config.auto_approve_hbar, "auto_approve_hbar")?;
+
         // Initialize node state
         let state_config = NodeStateConfig::new(&config.data_dir);
         let state = NodeState::open(state_config)?;
@@ -517,13 +545,18 @@ impl NodalyncMcpServer {
     /// - Auto-opens payment channels when needed
     /// - Returns all transaction confirmations in the response
     #[tool(
-        description = "Query knowledge from the Nodalync network. Returns content with provenance and full transaction details. Payment is fully automated - channels are opened and deposits are made as needed. Query by content hash (use search_network to find content first)."
+        description = "Query knowledge by content hash (use search_network or list_sources first). Returns content, provenance, and transaction details. Without budget_hbar, the configured auto-approve limit applies; an explicit allowance is still capped by the remaining session query budget. Allowed paid queries may also deposit HBAR and fund payment channels; these funding operations, x402 application fees, and network fees are separate from the query budget."
     )]
     async fn query_knowledge(
         &self,
         Parameters(input): Parameters<QueryKnowledgeInput>,
     ) -> Result<CallToolResult, McpError> {
         debug!(query = %input.query, "Processing query_knowledge request");
+
+        let query_limit = input
+            .budget_hbar
+            .map(|amount| query_limit_tinybars(amount, "budget_hbar"))
+            .transpose()?;
 
         // Parse query as hash
         let hash = match string_to_hash(&input.query) {
@@ -569,12 +602,25 @@ impl NodalyncMcpServer {
         let price = preview.manifest.economics.price;
         let price_hbar = tinybars_to_hbar(price);
 
+        // Enforce the query allowance before x402 settlement, deposits, or channel funding.
+        if let Err(error) = self.budget.check_query_cost(price, query_limit) {
+            return Ok(tool_error(&error));
+        }
+
         // === x402 PAYMENT FLOW ===
         // When x402 is enabled and content has a price, handle the x402 payment protocol:
         // 1. If no payment provided: return 402 Payment Required with payment requirements
         // 2. If payment provided: validate via facilitator, settle, then deliver content
         if price > 0 && self.x402_gate.is_enabled() {
             if let Some(ref payment_header) = input.x402_payment {
+                // Reserve the content price before submitting an external payment.
+                if self.budget.spend(price).is_none() {
+                    return Ok(tool_error(&NodalyncMcpError::BudgetExceeded {
+                        cost: price,
+                        remaining: self.budget.remaining(),
+                    }));
+                }
+
                 // Client provided x402 payment — validate and settle
                 info!(
                     hash = %hash_to_string(&hash),
@@ -595,7 +641,8 @@ impl NodalyncMcpServer {
                             "x402 payment verified and settled"
                         );
 
-                        // Execute the query (no budget deduction needed — paid via x402)
+                        // Keep the reservation after payment succeeds, even if delivery fails.
+                        // A settled external payment cannot be refunded locally.
                         let response = match ops.query_content(&hash, price, None).await {
                             Ok(r) => r,
                             Err(e) => {
@@ -659,10 +706,33 @@ impl NodalyncMcpServer {
                         return Ok(CallToolResult::success(vec![Content::text(json)]));
                     }
                     Err(e) => {
-                        warn!(error = %e, "x402 payment validation failed");
-                        return Ok(tool_error(&NodalyncMcpError::X402PaymentFailed {
-                            reason: e.to_string(),
-                        }));
+                        // Only release the reservation when settlement was never attempted.
+                        // A lost or malformed settlement response does not prove non-payment.
+                        let definitely_unpaid = matches!(
+                            e,
+                            X402Error::InsufficientPayment { .. }
+                                | X402Error::InvalidSignature
+                                | X402Error::MalformedPayload { .. }
+                                | X402Error::UnsupportedScheme { .. }
+                                | X402Error::UnsupportedNetwork { .. }
+                                | X402Error::PaymentExpired { .. }
+                                | X402Error::PaymentNotYetValid { .. }
+                                | X402Error::VerificationFailed { .. }
+                                | X402Error::NotConfigured
+                                | X402Error::NotPayable { .. }
+                                | X402Error::NonceReused { .. }
+                        );
+                        let reason = if definitely_unpaid {
+                            self.budget.refund(price);
+                            e.to_string()
+                        } else {
+                            format!(
+                                "{e}. Payment status is uncertain; the query budget remains reserved. \
+                                 Reconcile the payment before retrying."
+                            )
+                        };
+                        warn!(error = %e, "x402 payment processing failed");
+                        return Ok(tool_error(&NodalyncMcpError::X402PaymentFailed { reason }));
                     }
                 }
             } else {
@@ -715,26 +785,6 @@ impl NodalyncMcpServer {
         }
 
         // === NATIVE PAYMENT CHANNEL FLOW (when x402 is disabled) ===
-
-        // Check per-query budget limit
-        let max_budget = input
-            .budget_hbar
-            .map(hbar_to_tinybars)
-            .unwrap_or(self.budget.remaining());
-        if price > max_budget {
-            return Ok(tool_error(&NodalyncMcpError::BudgetExceeded {
-                cost: price,
-                remaining: max_budget,
-            }));
-        }
-
-        // Check session budget
-        if !self.budget.can_afford(price) {
-            return Ok(tool_error(&NodalyncMcpError::BudgetExceeded {
-                cost: price,
-                remaining: self.budget.remaining(),
-            }));
-        }
 
         // === AUTO-DEPOSIT IF NEEDED ===
         // For paid content, ensure we have enough in settlement contract
@@ -2683,7 +2733,10 @@ impl rmcp::ServerHandler for NodalyncMcpServer {
                  Use `search_network` or `list_sources` to discover content, then `query_knowledge` \
                  to retrieve it. Supports two payment modes: native payment channels (automatic) \
                  and x402 HTTP micropayments (for external agents). Check `x402_status` for \
-                 payment protocol details. Access content directly via `knowledge://{hash}` resources."
+                 payment protocol details. Access content directly via `knowledge://{hash}` resources. \
+                 Queries without an explicit budget_hbar, and all resource reads, use the configured \
+                 auto-approve limit. All query prices count against the session query budget. \
+                 Automatic deposits, channel funding, x402 application fees, and network fees are separate from that budget."
                     .into(),
             ),
         }
@@ -2705,7 +2758,7 @@ impl rmcp::ServerHandler for NodalyncMcpServer {
                 name: "knowledge".to_string(),
                 title: Some("Nodalync Knowledge".to_string()),
                 description: Some(
-                    "Access knowledge content directly by hash. Use list_sources to discover available hashes.".to_string(),
+                    "Access knowledge content by hash, paying from the session query budget up to the configured auto-approve limit. Use list_sources or preview_content to inspect prices first.".to_string(),
                 ),
                 mime_type: Some("text/plain".to_string()),
             };
@@ -2754,6 +2807,12 @@ impl rmcp::ServerHandler for NodalyncMcpServer {
 
             let price = preview.manifest.economics.price;
             let price_hbar = tinybars_to_hbar(price);
+
+            // Resource reads cannot carry an explicit allowance. Apply the same
+            // default limit as query_knowledge before channel funding, reservation, or querying.
+            self.budget.check_query_cost(price, None).map_err(|error| {
+                McpError::invalid_request(error.to_string(), Some(error_payload(&error)))
+            })?;
 
             // Auto-open payment channel if needed (aligned with query_knowledge)
             if price > 0 {
@@ -3051,6 +3110,7 @@ fn parse_visibility(s: &str) -> Option<Visibility> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     fn test_config(temp_dir: &TempDir) -> McpServerConfig {
         McpServerConfig {
@@ -3062,6 +3122,316 @@ mod tests {
             hedera: None,
             x402: None,
         }
+    }
+
+    async fn add_query_fixture(server: &NodalyncMcpServer, price: u64) -> String {
+        let mut ops = server.ops.lock().await;
+        let content = format!("Knowledge priced at {price} tinybars.");
+        let metadata = nodalync_types::Metadata::new("Budget regression", content.len() as u64);
+        let hash = ops.create_content(content.as_bytes(), metadata).unwrap();
+        let mut manifest = ops.state.manifests.load(&hash).unwrap().unwrap();
+        // Use cached, non-owned content to exercise a paid query without a live peer.
+        manifest.owner = UNKNOWN_PEER_ID;
+        manifest.visibility = Visibility::Shared;
+        manifest.economics.price = price;
+        ops.state.manifests.update(&manifest).unwrap();
+        hash_to_string(&hash)
+    }
+
+    // Exercise the real MCP resource handler over its JSON transport.
+    async fn resource_request(server: &NodalyncMcpServer, hash: &str) -> serde_json::Value {
+        let (server_transport, client_transport) = tokio::io::duplex(16_384);
+        let running = rmcp::service::serve_directly(server.clone(), server_transport, None);
+        let (reader, mut writer) = tokio::io::split(client_transport);
+        let request = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "resources/read",
+            "params": { "uri": format!("knowledge://{hash}") }
+        });
+        writer
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .unwrap();
+        let mut reader = BufReader::new(reader);
+        let mut response = String::new();
+        tokio::time::timeout(Duration::from_secs(5), reader.read_line(&mut response))
+            .await
+            .unwrap()
+            .unwrap();
+        running.cancel().await.unwrap();
+        serde_json::from_str(&response).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_query_without_explicit_budget_enforces_auto_approve() {
+        let temp_dir = TempDir::new().unwrap();
+        let server = NodalyncMcpServer::new(test_config(&temp_dir))
+            .await
+            .unwrap();
+        let hash = add_query_fixture(&server, hbar_to_tinybars(0.5)).await;
+
+        let result = server
+            .query_knowledge(Parameters(QueryKnowledgeInput {
+                query: hash.clone(),
+                budget_hbar: None,
+                x402_payment: None,
+            }))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.is_error,
+            Some(true),
+            "0.5 HBAR exceeds the 0.01 HBAR auto-approve limit"
+        );
+        assert_eq!(server.budget.spent(), 0);
+        assert!(!server
+            .ops
+            .lock()
+            .await
+            .is_content_cached(&string_to_hash(&hash).unwrap()));
+    }
+
+    #[tokio::test]
+    async fn test_resource_read_enforces_auto_approve() {
+        let temp_dir = TempDir::new().unwrap();
+        let server = NodalyncMcpServer::new(test_config(&temp_dir))
+            .await
+            .unwrap();
+        let hash = add_query_fixture(&server, hbar_to_tinybars(0.5)).await;
+
+        let response = resource_request(&server, &hash).await;
+
+        assert!(
+            response.get("error").is_some(),
+            "resource read must reject a price above auto-approve: {response}"
+        );
+        assert_eq!(server.budget.spent(), 0);
+        assert!(!server
+            .ops
+            .lock()
+            .await
+            .is_content_cached(&string_to_hash(&hash).unwrap()));
+    }
+
+    #[tokio::test]
+    async fn test_query_explicit_allowance_overrides_default_but_is_enforced() {
+        let temp_dir = TempDir::new().unwrap();
+        let server = NodalyncMcpServer::new(test_config(&temp_dir))
+            .await
+            .unwrap();
+        let hash = add_query_fixture(&server, hbar_to_tinybars(0.5)).await;
+
+        let rejected = server
+            .query_knowledge(Parameters(QueryKnowledgeInput {
+                query: hash.clone(),
+                budget_hbar: Some(0.49),
+                x402_payment: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(rejected.is_error, Some(true));
+        assert_eq!(server.budget.spent(), 0);
+
+        let allowed = server
+            .query_knowledge(Parameters(QueryKnowledgeInput {
+                query: hash,
+                budget_hbar: Some(0.5),
+                x402_payment: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(allowed.is_error, Some(false));
+        assert_eq!(server.budget.spent(), hbar_to_tinybars(0.5));
+    }
+
+    #[tokio::test]
+    async fn test_query_and_resource_allow_exact_auto_approve_limit() {
+        let temp_dir = TempDir::new().unwrap();
+        let server = NodalyncMcpServer::new(test_config(&temp_dir))
+            .await
+            .unwrap();
+        let hash = add_query_fixture(&server, hbar_to_tinybars(0.01)).await;
+
+        let tool = server
+            .query_knowledge(Parameters(QueryKnowledgeInput {
+                query: hash.clone(),
+                budget_hbar: None,
+                x402_payment: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(tool.is_error, Some(false));
+        let resource = resource_request(&server, &hash).await;
+        assert!(resource.get("result").is_some(), "{resource}");
+        assert_eq!(server.budget.spent(), hbar_to_tinybars(0.02));
+    }
+
+    #[tokio::test]
+    async fn test_query_and_resource_share_the_session_ceiling() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut config = test_config(&temp_dir);
+        config.budget_hbar = 0.01;
+        let server = NodalyncMcpServer::new(config).await.unwrap();
+        let hash = add_query_fixture(&server, hbar_to_tinybars(0.006)).await;
+        let allowed = resource_request(&server, &hash).await;
+        assert!(allowed.get("result").is_some(), "{allowed}");
+
+        // Even a large explicit query allowance cannot increase the session budget.
+        let rejected = server
+            .query_knowledge(Parameters(QueryKnowledgeInput {
+                query: hash.clone(),
+                budget_hbar: Some(1.0),
+                x402_payment: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(rejected.is_error, Some(true));
+        let resource = resource_request(&server, &hash).await;
+        assert!(resource.get("error").is_some(), "{resource}");
+        assert_eq!(server.budget.spent(), hbar_to_tinybars(0.006));
+    }
+
+    #[tokio::test]
+    async fn test_zero_limits_still_allow_free_content() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut config = test_config(&temp_dir);
+        config.budget_hbar = 0.0;
+        config.auto_approve_hbar = 0.0;
+        let server = NodalyncMcpServer::new(config).await.unwrap();
+        let hash = add_query_fixture(&server, 0).await;
+        let result = server
+            .query_knowledge(Parameters(QueryKnowledgeInput {
+                query: hash.clone(),
+                budget_hbar: None,
+                x402_payment: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(result.is_error, Some(false));
+        let resource = resource_request(&server, &hash).await;
+        assert!(resource.get("result").is_some(), "{resource}");
+        assert_eq!(server.budget.spent(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_failed_query_and_resource_refund_reserved_budget() {
+        let temp_dir = TempDir::new().unwrap();
+        let server = NodalyncMcpServer::new(test_config(&temp_dir))
+            .await
+            .unwrap();
+        let content_hash = content_hash(b"Unavailable remote content");
+        let price = hbar_to_tinybars(0.01);
+        {
+            let mut ops = server.ops.lock().await;
+            // A remote announcement provides a successful priced preview, but
+            // retrieval must fail after reservation when networking is disabled.
+            ops.state
+                .store_announcement(nodalync_wire::AnnouncePayload {
+                    hash: content_hash,
+                    content_type: ContentType::L0,
+                    title: "Unavailable remote content".to_string(),
+                    l1_summary: nodalync_types::L1Summary::empty(content_hash),
+                    price,
+                    addresses: vec![],
+                    publisher_peer_id: None,
+                });
+            assert_eq!(
+                ops.preview_content(&content_hash)
+                    .await
+                    .unwrap()
+                    .manifest
+                    .economics
+                    .price,
+                price
+            );
+            assert!(ops.state.manifests.load(&content_hash).unwrap().is_none());
+            assert!(ops.state.content.load(&content_hash).unwrap().is_none());
+            assert!(!ops.has_network());
+        }
+        let hash = hash_to_string(&content_hash);
+
+        let result = server
+            .query_knowledge(Parameters(QueryKnowledgeInput {
+                query: hash.clone(),
+                budget_hbar: None,
+                x402_payment: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(server.budget.spent(), 0);
+        let resource = resource_request(&server, &hash).await;
+        assert!(resource.get("error").is_some(), "{resource}");
+        assert_eq!(server.budget.spent(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_invalid_query_allowances_are_rejected_before_querying() {
+        let temp_dir = TempDir::new().unwrap();
+        let server = NodalyncMcpServer::new(test_config(&temp_dir))
+            .await
+            .unwrap();
+        let hash = add_query_fixture(&server, 0).await;
+        for invalid in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY, f64::MAX] {
+            let error = server
+                .query_knowledge(Parameters(QueryKnowledgeInput {
+                    query: hash.clone(),
+                    budget_hbar: Some(invalid),
+                    x402_payment: None,
+                }))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        }
+        assert!(!server
+            .ops
+            .lock()
+            .await
+            .is_content_cached(&string_to_hash(&hash).unwrap()));
+        assert_eq!(server.budget.spent(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_invalid_config_limits_are_rejected_before_opening_storage() {
+        let temp_dir = TempDir::new().unwrap();
+        for invalid in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY, f64::MAX] {
+            for field in ["budget_hbar", "auto_approve_hbar"] {
+                let mut config = test_config(&temp_dir);
+                config.data_dir = temp_dir.path().join("must-not-be-created");
+                if field == "budget_hbar" {
+                    config.budget_hbar = invalid;
+                } else {
+                    config.auto_approve_hbar = invalid;
+                }
+                let path = config.data_dir.clone();
+                let error = NodalyncMcpServer::new(config)
+                    .await
+                    .err()
+                    .expect("invalid limit");
+                assert!(error.to_string().contains(field));
+                assert!(!path.exists());
+            }
+        }
+    }
+
+    #[test]
+    fn test_budget_errors_give_budget_recovery_instead_of_deposit_advice() {
+        let query_error = error_payload(&NodalyncMcpError::QueryBudgetExceeded {
+            cost: 50_000_000,
+            limit: 1_000_000,
+        });
+        assert!(query_error["suggestion"]
+            .as_str()
+            .unwrap()
+            .contains("explicit budget_hbar"));
+        let session_error = error_payload(&NodalyncMcpError::BudgetExceeded {
+            cost: 50_000_000,
+            remaining: 1_000_000,
+        });
+        assert!(session_error["suggestion"]
+            .as_str()
+            .unwrap()
+            .contains("Depositing funds does not increase"));
     }
 
     #[tokio::test]
@@ -3327,6 +3697,288 @@ mod tests {
         }
     }
 
+    /// Local facilitator responses exercise the real x402 HTTP client without funds.
+    async fn mock_x402_facilitator(
+        server: &NodalyncMcpServer,
+        listener: tokio::net::TcpListener,
+        price: u64,
+        settle_response: Option<&'static str>,
+    ) -> tokio::task::JoinHandle<()> {
+        let budget = server.budget.clone();
+        tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            for (path, body) in [
+                ("/verify", Some(r#"{"isValid":true,"payer":"0.0.123"}"#)),
+                ("/settle", settle_response),
+            ] {
+                let (socket, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let mut socket = BufReader::new(socket);
+                let mut request_line = String::new();
+                socket.read_line(&mut request_line).await.unwrap();
+                assert!(request_line.starts_with(&format!("POST {path} ")));
+                let mut content_length = 0;
+                loop {
+                    let mut line = String::new();
+                    socket.read_line(&mut line).await.unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                        content_length = value.trim().parse::<usize>().unwrap();
+                    }
+                }
+                socket
+                    .read_exact(&mut vec![0; content_length])
+                    .await
+                    .unwrap();
+                assert_eq!(budget.spent(), price, "reserve before any external payment");
+                let Some(body) = body else {
+                    // Simulate a facilitator accepting settlement then losing its response.
+                    return;
+                };
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                socket.flush().await.unwrap();
+            }
+        })
+    }
+
+    fn test_x402_header(price: u64) -> String {
+        use base64::Engine;
+        let payload = serde_json::json!({
+            "x402Version": 1, "scheme": "exact", "network": "hedera:testnet",
+            "payload": {
+                "from": "0.0.123", "to": "0.0.7703962", "amount": price.to_string(),
+                "transactionBytes": "00", "signature": "00", "validAfter": "0",
+                "validBefore": u64::MAX.to_string(), "nonce": "test-query-payment"
+            }
+        });
+        base64::engine::general_purpose::STANDARD.encode(payload.to_string())
+    }
+
+    #[tokio::test]
+    async fn test_x402_allowance_rejects_before_payment_processing() {
+        let temp_dir = TempDir::new().unwrap();
+        let server = NodalyncMcpServer::new(test_config_with_x402(&temp_dir))
+            .await
+            .unwrap();
+        let hash = add_query_fixture(&server, hbar_to_tinybars(0.5)).await;
+        let result = server
+            .query_knowledge(Parameters(QueryKnowledgeInput {
+                query: hash,
+                budget_hbar: None,
+                x402_payment: Some("invalid-header-must-not-be-processed".to_string()),
+            }))
+            .await
+            .unwrap();
+        assert_eq!(result.is_error, Some(true));
+        let RawContent::Text(content) = &result.content[0].raw else {
+            panic!("Expected text content")
+        };
+        let error: serde_json::Value = serde_json::from_str(&content.text).unwrap();
+        assert_eq!(error["error"], "INSUFFICIENT_BALANCE");
+        assert!(error["suggestion"]
+            .as_str()
+            .unwrap()
+            .contains("explicit budget_hbar"));
+        assert_eq!(server.budget.spent(), 0);
+        assert!(server.query_cache.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_x402_success_counts_against_shared_session_budget() {
+        let temp_dir = TempDir::new().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut config = test_config_with_x402(&temp_dir);
+        config.budget_hbar = 0.01;
+        let gate = config.x402.as_mut().unwrap();
+        gate.app_fee_percent = 0;
+        gate.facilitator_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = NodalyncMcpServer::new(config).await.unwrap();
+        let price = hbar_to_tinybars(0.006);
+        let hash = add_query_fixture(&server, price).await;
+        let facilitator = mock_x402_facilitator(
+            &server,
+            listener,
+            price,
+            Some(r#"{"success":true,"txHash":"test-settlement","network":"hedera:testnet"}"#),
+        )
+        .await;
+        let result = server
+            .query_knowledge(Parameters(QueryKnowledgeInput {
+                query: hash.clone(),
+                budget_hbar: None,
+                x402_payment: Some(test_x402_header(price)),
+            }))
+            .await
+            .unwrap();
+        facilitator.await.unwrap();
+        assert_eq!(result.is_error, Some(false), "{result:?}");
+        assert_eq!(server.budget.spent(), price);
+        // Native resource reads use the same remaining budget as settled x402 queries.
+        let resource = resource_request(&server, &hash).await;
+        assert!(resource.get("error").is_some(), "{resource}");
+        assert_eq!(server.budget.spent(), price);
+    }
+
+    #[tokio::test]
+    async fn test_x402_settled_payment_is_counted_when_content_delivery_fails() {
+        let temp_dir = TempDir::new().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut config = test_config_with_x402(&temp_dir);
+        let gate = config.x402.as_mut().unwrap();
+        gate.app_fee_percent = 0;
+        gate.facilitator_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = NodalyncMcpServer::new(config).await.unwrap();
+        let price = hbar_to_tinybars(0.01);
+        let hash = content_hash(b"Unavailable content after x402 payment");
+        server
+            .ops
+            .lock()
+            .await
+            .state
+            .store_announcement(nodalync_wire::AnnouncePayload {
+                hash,
+                content_type: ContentType::L0,
+                title: "Unavailable content".to_string(),
+                l1_summary: nodalync_types::L1Summary::empty(hash),
+                price,
+                addresses: vec![],
+                publisher_peer_id: None,
+            });
+        let facilitator = mock_x402_facilitator(
+            &server,
+            listener,
+            price,
+            Some(r#"{"success":true,"txHash":"test-settlement","network":"hedera:testnet"}"#),
+        )
+        .await;
+        let result = server
+            .query_knowledge(Parameters(QueryKnowledgeInput {
+                query: hash_to_string(&hash),
+                budget_hbar: None,
+                x402_payment: Some(test_x402_header(price)),
+            }))
+            .await
+            .unwrap();
+        facilitator.await.unwrap();
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(
+            server.budget.spent(),
+            price,
+            "settled funds were already paid"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_x402_uncertain_settlement_keeps_budget_reserved_and_blocks_retry() {
+        // A malformed response and a disconnected response both follow submission.
+        for settle_response in [Some("malformed settlement response"), None] {
+            let temp_dir = TempDir::new().unwrap();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut config = test_config_with_x402(&temp_dir);
+            config.budget_hbar = 0.01;
+            let gate = config.x402.as_mut().unwrap();
+            gate.app_fee_percent = 0;
+            gate.facilitator_url = format!("http://{}", listener.local_addr().unwrap());
+            let server = NodalyncMcpServer::new(config).await.unwrap();
+            let price = hbar_to_tinybars(0.01);
+            let hash = add_query_fixture(&server, price).await;
+            let facilitator =
+                mock_x402_facilitator(&server, listener, price, settle_response).await;
+            let result = server
+                .query_knowledge(Parameters(QueryKnowledgeInput {
+                    query: hash.clone(),
+                    budget_hbar: None,
+                    x402_payment: Some(test_x402_header(price)),
+                }))
+                .await
+                .unwrap();
+            facilitator.await.unwrap();
+            assert_eq!(result.is_error, Some(true));
+            let RawContent::Text(content) = &result.content[0].raw else {
+                panic!("Expected text content")
+            };
+            let error: serde_json::Value = serde_json::from_str(&content.text).unwrap();
+            assert!(error["message"]
+                .as_str()
+                .unwrap()
+                .contains("remains reserved"));
+            assert_eq!(server.budget.spent(), price);
+            assert_eq!(server.budget.remaining(), 0);
+            assert!(server.query_cache.lock().await.is_empty());
+
+            // A fresh signed payment must not restart payment processing after uncertainty.
+            let retry = server
+                .query_knowledge(Parameters(QueryKnowledgeInput {
+                    query: hash,
+                    budget_hbar: Some(1.0),
+                    x402_payment: Some("fresh-payment-must-not-be-processed".to_string()),
+                }))
+                .await
+                .unwrap();
+            assert_eq!(retry.is_error, Some(true));
+            let RawContent::Text(content) = &retry.content[0].raw else {
+                panic!("Expected text content")
+            };
+            let error: serde_json::Value = serde_json::from_str(&content.text).unwrap();
+            assert_eq!(error["error"], "INSUFFICIENT_BALANCE");
+            assert_eq!(server.budget.spent(), price);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_resource_allowance_precedes_preserved_channel_auto_open() {
+        use nodalync_store::ChannelStore;
+        let temp_dir = TempDir::new().unwrap();
+        let server = NodalyncMcpServer::new(test_config(&temp_dir))
+            .await
+            .unwrap();
+        let hash = add_query_fixture(&server, hbar_to_tinybars(0.5)).await;
+        let owner = NodalyncPeerId::from_bytes([7; 20]);
+        let content_hash = string_to_hash(&hash).unwrap();
+        {
+            let mut ops = server.ops.lock().await;
+            // Permit the existing 1 HBAR auto-funding amount in this fixture.
+            ops.config.channel.min_deposit = hbar_to_tinybars(1.0);
+            let mut manifest = ops.state.manifests.load(&content_hash).unwrap().unwrap();
+            manifest.owner = owner;
+            ops.state.manifests.update(&manifest).unwrap();
+        }
+        let rejected = resource_request(&server, &hash).await;
+        assert!(rejected.get("error").is_some(), "{rejected}");
+        {
+            let mut ops = server.ops.lock().await;
+            assert!(ops.state.channels.get(&owner).unwrap().is_none());
+            let mut manifest = ops.state.manifests.load(&content_hash).unwrap().unwrap();
+            manifest.economics.price = hbar_to_tinybars(0.01);
+            ops.state.manifests.update(&manifest).unwrap();
+        }
+        let allowed = resource_request(&server, &hash).await;
+        assert!(allowed.get("result").is_some(), "{allowed}");
+        assert!(server
+            .ops
+            .lock()
+            .await
+            .state
+            .channels
+            .get(&owner)
+            .unwrap()
+            .is_some());
+        assert_eq!(server.budget.spent(), hbar_to_tinybars(0.01));
+    }
+
     #[tokio::test]
     async fn test_x402_status_disabled() {
         let temp_dir = TempDir::new().unwrap();
@@ -3398,6 +4050,12 @@ mod tests {
             .query_knowledge(Parameters(query_input))
             .await
             .unwrap();
+
+        assert_eq!(
+            server.budget.spent(),
+            0,
+            "payment requirements do not spend"
+        );
 
         // Should NOT be an error — it's a successful response with payment requirements
         assert!(!result.is_error.unwrap_or(false));
@@ -3514,6 +4172,12 @@ mod tests {
             .query_knowledge(Parameters(query_input))
             .await
             .unwrap();
+
+        assert_eq!(
+            server.budget.spent(),
+            0,
+            "failed payment releases reservation"
+        );
 
         // Should be an error
         assert!(result.is_error.unwrap_or(false));
