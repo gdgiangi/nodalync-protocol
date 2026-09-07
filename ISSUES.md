@@ -16,3 +16,9 @@ This file records review findings, not GitHub issue numbers. Details, source lin
 | ADOPT-08 | P2 | Open | Link runnable simulator, configs, and raw data; current report's reproducibility claim cannot be verified from this tree. |
 | ADOPT-09 | P1 | Proposal ready | Run the matched-task pilot and publish quality, total cost, repeat use, and independently reconciled payout evidence before claiming adoption. |
 | ADOPT-10 | P0 | Open | Resolve adapter/contract settlement-entry encoding mismatch and demonstrate buyer-funding-to-recipient conservation against the actual deployed contract, not only mocks. |
+| ADOPT-11 | P1 | Open; CI blocked | CI reports 14 vulnerability findings against the baseline lockfile. Assess reachable features, upgrade affected dependency families, and rerun audit/integration tests; do not blanket-suppress advisories. |
+
+## Reviewable changes
+
+- [Adoption review, pilot, and article — PR #45](https://github.com/gdgiangi/nodalync-protocol/pull/45)
+- [Nonzero payment authentication — draft PR #46](https://github.com/gdgiangi/nodalync-protocol/pull/46); authenticated peer-key discovery remains a prerequisite.
