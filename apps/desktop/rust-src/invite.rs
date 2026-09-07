@@ -189,8 +189,8 @@ mod tests {
             "/ip4/10.0.0.1/tcp/9001".to_string(),
         ];
 
-        let invite = generate_full_invite(&pid, addrs.clone(), Some("Test Node".to_string()))
-            .unwrap();
+        let invite =
+            generate_full_invite(&pid, addrs.clone(), Some("Test Node".to_string())).unwrap();
         assert!(invite.starts_with(INVITE_PREFIX));
 
         let parsed = parse_invite(&invite).unwrap();

@@ -1,141 +1,84 @@
-# Nodalync Desktop App
+# Nodalync Studio
 
-A Tauri-based desktop application for the Nodalync Protocol, providing a graphical interface for node operation, network monitoring, and creator earnings tracking.
+A native Tauri 2 application for local notes, content imports, and a knowledge
+graph. The Rust backend uses Nodalync's protocol crates directly. Browsing the
+Vite URL by itself does not provide the native backend.
 
-## Overview
+## Run locally
 
-This desktop app addresses the CLI-only limitation identified in the protocol FAQ (Section 17), providing a user-friendly GUI for:
+Install Node.js, Rust, and your platform's Tauri build prerequisites. On macOS,
+Xcode Command Line Tools are sufficient for the desktop target. Run these
+commands from `apps/desktop`:
 
-- **Node Management**: Start, stop, configure, and monitor your Nodalync node
-- **Network Overview**: Visualize network connections, DHT participation, and peer discovery
-- **Creator Dashboard**: Track earnings, view payment channels, monitor content attribution
-- **Settings & Configuration**: Manage node configuration, network settings, and preferences
-
-## Architecture
-
-### Technology Stack
-- **Frontend**: HTML/CSS/JavaScript (or React/Vue.js)
-- **Backend**: Tauri (Rust) - integrates with existing nodalync-cli
-- **IPC**: Tauri commands invoke nodalync-cli processes
-- **State Management**: Local app state with CLI data synchronization
-
-### Integration Approach
-The desktop app wraps and extends the existing CLI functionality rather than reimplementing protocol logic:
-
-```
-Desktop App (Tauri)
-├── Frontend (HTML/JS/CSS)
-│   ├── Dashboard View
-│   ├── Network View 
-│   ├── Settings View
-│   └── System Tray
-└── Rust Backend
-    ├── CLI Command Wrappers
-    ├── File System Watchers
-    ├── Background Tasks
-    └── Tauri Commands
+```sh
+npm ci
+RUSTUP_TOOLCHAIN=1.98.0 npm run native:dev
 ```
 
-### Command Integration
-The app executes nodalync-cli commands and parses output:
+`native:dev` starts Vite on port 1420 and opens the native application with hot
+reload. The active Rust manifest and `tauri.conf.json` are both in this directory;
+the historical `src-tauri` scaffold is not the application manifest.
 
-```rust
-// Example: Get node status
-tauri::command
-async fn get_node_status() -> Result<NodeStatus, String> {
-    let output = Command::new("nodalync-cli")
-        .args(["node", "status", "--json"])
-        .output()
-        .await?;
-    
-    let status: NodeStatus = serde_json::from_slice(&output.stdout)?;
-    Ok(status)
-}
+To open the native app with compiled frontend assets and no Vite server:
+
+```sh
+RUSTUP_TOOLCHAIN=1.98.0 npm run native
 ```
 
-## Development Setup
+The app creates or unlocks a local encrypted identity before content operations.
+Creating a note or importing text stores private content on this device. Starting
+a network connection is a separate action.
 
-### Prerequisites
-1. **Rust toolchain** (see main CONTRIBUTING.md)
-2. **Node.js 18+** for frontend tooling
-3. **Tauri CLI**: `cargo install tauri-cli`
-4. **Working nodalync-cli** installation
+## Isolated local profile
 
-### Building
-```bash
-cd apps/desktop
-npm install           # Install frontend dependencies
-cargo tauri dev       # Start development server
-cargo tauri build     # Build production app
+Use an absolute directory for a separate development profile, without changing
+your normal Nodalync Studio identity or content:
+
+```sh
+NODALYNC_DATA_DIR=/tmp/nodalync-studio-dev-profile \
+RUSTUP_TOOLCHAIN=1.98.0 npm run native:dev
 ```
 
-## User Interface Design
+By default, the graph database is `studio/knowledge.db` within that profile. Set
+`NODALYNC_GRAPH_DB` to an explicit database path to inspect a chosen graph.
+The app does not automatically open the repository's tracked sample databases.
+Without overrides, node data uses the operating system's application-data
+directory for `com.nodalync.studio`.
 
-### Main Window
-- **Header**: Node status indicator, network connectivity, sync status
-- **Sidebar**: Navigation (Dashboard, Network, Settings, Help)
-- **Main Content**: Context-dependent views
+## Validation
 
-### Dashboard View
-- Node uptime and status
-- Recent earnings summary
-- Active payment channels
-- Network participation stats
+```sh
+npm run build
+npm test
+cargo +1.98.0 check --locked --manifest-path Cargo.toml
+cargo +1.98.0 test --locked --manifest-path Cargo.toml
+```
 
-### Network View
-- Connected peers map/list
-- DHT participation status
-- Content routing visualization
-- Network statistics
+Native dialog permissions are scoped to the main window. The bundled document
+picker imports local text/Markdown files; local note reads do not contact peers
+or initiate payments.
 
-### Settings View
-- Node configuration editor
-- Network preferences
-- Logging and debugging options
-- Auto-update settings
+## Native UI test fixture and local app bundle
 
-### System Tray Integration
-- Quick status overview
-- Start/stop node
-- Show main window
-- Exit application
+A development-only example creates three synthetic private notes and a small
+linked graph through the real protocol and graph APIs. It refuses to replace
+an existing identity or populate a graph that already contains entities:
 
-## Development Phases
+```sh
+cargo +1.98.0 run --locked --example seed_dev_profile -- /tmp/nodalync-studio-dev-profile
+```
 
-### Phase 1: Foundation (Current)
-- [ ] Tauri project setup and configuration
-- [ ] Basic app structure with navigation
-- [ ] CLI command integration architecture
-- [ ] Simple dashboard with node status
+The example prints its synthetic test-only unlock password. It does not start
+networking or settle payments.
 
-### Phase 2: Core Features
-- [ ] Network monitoring and visualization
-- [ ] Creator earnings dashboard
-- [ ] Configuration management UI
-- [ ] System tray integration
+For native app discovery by macOS tools, build and wrap the development binary:
 
-### Phase 3: Enhancement
-- [ ] Real-time updates and notifications
-- [ ] Advanced network diagnostics
-- [ ] Export/import functionality
-- [ ] Help system and documentation
+```sh
+cargo +1.98.0 build --locked --no-default-features
+python3 scripts/bundle-dev-app.py /tmp/nodalync-studio-dev-profile
+```
 
-## Security Considerations
-
-- **CLI Execution**: Sanitize all inputs to CLI commands
-- **File Access**: Use Tauri's secure file system APIs
-- **Network**: No direct protocol implementation - rely on CLI
-- **Updates**: Use Tauri's secure update mechanism
-
-## Contributing
-
-This desktop app follows the same contribution guidelines as the main protocol. See the root CONTRIBUTING.md for development setup, testing, and code style guidelines.
-
-## Status
-
-**Current**: Foundation phase - project scaffolding and architecture design
-**Target**: User-friendly desktop experience for the Nodalync Protocol
-
----
-
-This desktop app provides the graphical interface that makes Nodalync accessible to creators and node operators who prefer GUIs over command-line tools.
+This creates and registers `target/debug/bundle/macos/Nodalync Studio.app` without
+launching it. Its launcher uses that isolated profile and the existing Vite
+server on port 1420. Close the app before rebuilding the bundle. The bundle stays
+under the ignored Cargo target directory.

@@ -8,10 +8,10 @@
 //! - Unpublish
 //! - Version history
 
-use std::sync::Arc;
 use nodalync_crypto::Hash;
 use nodalync_types::ContentType;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tauri::State;
 use tokio::sync::Mutex;
 use tracing::info;
@@ -226,7 +226,10 @@ pub async fn query_content(
 
     info!(
         "Querying content: hash={}, content_cost={}, app_fee={}, total={}",
-        hash, amount, app_fee, amount + app_fee
+        hash,
+        amount,
+        app_fee,
+        amount + app_fee
     );
 
     let response = state

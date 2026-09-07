@@ -89,9 +89,10 @@ impl ProtocolState {
             .map_err(|e| ProtocolError::Store(format!("Failed to open node state: {}", e)))?;
 
         // Load identity
-        let identity_store =
-            nodalync_store::IdentityStore::new(data_dir.join("identity"))
-                .map_err(|e| ProtocolError::Identity(format!("Failed to open identity store: {}", e)))?;
+        let identity_store = nodalync_store::IdentityStore::new(data_dir.join("identity"))
+            .map_err(|e| {
+                ProtocolError::Identity(format!("Failed to open identity store: {}", e))
+            })?;
 
         if !identity_store.exists() {
             return Err(ProtocolError::NoIdentity);
@@ -140,9 +141,10 @@ impl ProtocolState {
 
         info!("Initializing new node identity at {}", data_dir.display());
 
-        let identity_store =
-            nodalync_store::IdentityStore::new(data_dir.join("identity"))
-                .map_err(|e| ProtocolError::Identity(format!("Failed to create identity store: {}", e)))?;
+        let identity_store = nodalync_store::IdentityStore::new(data_dir.join("identity"))
+            .map_err(|e| {
+                ProtocolError::Identity(format!("Failed to create identity store: {}", e))
+            })?;
 
         if identity_store.exists() {
             return Err(ProtocolError::IdentityExists);
@@ -208,6 +210,9 @@ impl ProtocolState {
 
     /// Get default data directory for this platform.
     pub fn default_data_dir() -> PathBuf {
+        if let Some(path) = std::env::var_os("NODALYNC_DATA_DIR").filter(|path| !path.is_empty()) {
+            return PathBuf::from(path);
+        }
         directories::ProjectDirs::from("com", "nodalync", "studio")
             .map(|dirs| dirs.data_dir().to_path_buf())
             .unwrap_or_else(|| PathBuf::from(".nodalync-studio"))

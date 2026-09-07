@@ -50,8 +50,11 @@ impl PeerStore {
         match std::fs::read_to_string(&path) {
             Ok(json) => match serde_json::from_str(&json) {
                 Ok(store) => {
-                    info!("Loaded {} known peers from {}", 
-                        Self::count(&store), path.display());
+                    info!(
+                        "Loaded {} known peers from {}",
+                        Self::count(&store),
+                        path.display()
+                    );
                     store
                 }
                 Err(e) => {
@@ -79,10 +82,13 @@ impl PeerStore {
 
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize peer store: {}", e))?;
-        std::fs::write(&path, json)
-            .map_err(|e| format!("Failed to write peer store: {}", e))?;
+        std::fs::write(&path, json).map_err(|e| format!("Failed to write peer store: {}", e))?;
 
-        info!("Saved {} known peers to {}", self.peers.len(), path.display());
+        info!(
+            "Saved {} known peers to {}",
+            self.peers.len(),
+            path.display()
+        );
         Ok(())
     }
 
@@ -94,16 +100,17 @@ impl PeerStore {
         nodalync_id: Option<String>,
         manual: bool,
     ) {
-        let entry = self.peers.entry(peer_id.to_string()).or_insert_with(|| {
-            KnownPeer {
+        let entry = self
+            .peers
+            .entry(peer_id.to_string())
+            .or_insert_with(|| KnownPeer {
                 peer_id: peer_id.to_string(),
                 addresses: Vec::new(),
                 nodalync_id: None,
                 last_seen: Utc::now(),
                 connection_count: 0,
                 manual,
-            }
-        });
+            });
 
         // Update addresses (merge, don't replace)
         for addr in addresses {
@@ -153,7 +160,10 @@ impl PeerStore {
         self.peers.retain(|_, p| p.last_seen > cutoff || p.manual);
         let removed = before - self.peers.len();
         if removed > 0 {
-            info!("Pruned {} stale peers (older than {} days)", removed, max_age_days);
+            info!(
+                "Pruned {} stale peers (older than {} days)",
+                removed, max_age_days
+            );
         }
     }
 

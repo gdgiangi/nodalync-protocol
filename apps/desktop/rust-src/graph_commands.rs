@@ -10,6 +10,7 @@ use tokio::sync::Mutex as TokioMutex;
 use tracing::info;
 
 use crate::protocol::ProtocolState;
+use std::sync::Arc;
 
 /// Graph node for D3 force simulation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,11 +122,7 @@ pub async fn get_graph_data(db: State<'_, StdMutex<L2GraphDB>>) -> Result<GraphD
         .filter_map(|r| r.ok())
         .collect();
 
-    info!(
-        "Loaded graph: {} nodes, {} links",
-        nodes.len(),
-        links.len()
-    );
+    info!("Loaded graph: {} nodes, {} links", nodes.len(), links.len());
     Ok(GraphData { nodes, links })
 }
 
@@ -218,9 +215,7 @@ pub async fn get_graph_stats(db: State<'_, StdMutex<L2GraphDB>>) -> Result<Graph
     info!("Getting graph statistics");
     let db = db.lock().map_err(|e| format!("DB lock error: {}", e))?;
 
-    let stats = db
-        .get_stats()
-        .map_err(|e| format!("Stats error: {}", e))?;
+    let stats = db.get_stats().map_err(|e| format!("Stats error: {}", e))?;
 
     let entity_count = *stats.get("entities").unwrap_or(&0);
     let relationship_count = *stats.get("relationships").unwrap_or(&0);
@@ -311,17 +306,21 @@ pub struct ExtractionResult {
 pub async fn extract_mentions(
     content_hash: String,
     db: State<'_, StdMutex<L2GraphDB>>,
-    protocol: State<'_, TokioMutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<TokioMutex<Option<ProtocolState>>>>,
 ) -> Result<ExtractionResult, String> {
     info!("Extracting mentions for content: {}", content_hash);
 
     // 1. Run L1 extraction via protocol ops
     let l1_summary = {
         let mut guard = protocol.lock().await;
-        let state = guard.as_mut().ok_or("Node not initialized — unlock first")?;
+        let state = guard
+            .as_mut()
+            .ok_or("Node not initialized — unlock first")?;
 
         let hash = crate::publish_commands::parse_hash(&content_hash)?;
-        state.ops.extract_l1_summary(&hash)
+        state
+            .ops
+            .extract_l1_summary(&hash)
             .map_err(|e| format!("Extraction failed: {}", e))?
     };
 
@@ -329,11 +328,13 @@ pub async fn extract_mentions(
     let db = db.lock().map_err(|e| format!("DB lock error: {}", e))?;
 
     // Register this content in the graph DB if not already there
-    let content_id = match db.content_hash_exists(&content_hash)
+    let content_id = match db
+        .content_hash_exists(&content_hash)
         .map_err(|e| format!("DB error: {}", e))?
     {
         Some(id) => id,
-        None => db.register_content(&content_hash, "L0")
+        None => db
+            .register_content(&content_hash, "L0")
             .map_err(|e| format!("Failed to register content: {}", e))?,
     };
 
@@ -355,15 +356,13 @@ pub async fn extract_mentions(
             seen_labels.insert(key);
 
             // Try to match against existing L2 graph entities
-            match db.find_entity(&normalized)
+            match db
+                .find_entity(&normalized)
                 .map_err(|e| format!("Entity lookup error: {}", e))?
             {
                 Some(existing_entity) => {
                     // Match found — link to content and report
-                    db.link_entity_source(&existing_entity.id, &content_id)
-                        .map_err(|e| format!("Failed to link entity source: {}", e))?;
-                    db.increment_source_count(&existing_entity.id)
-                        .map_err(|e| format!("Failed to increment source count: {}", e))?;
+                    link_extracted_source(&db, &existing_entity.id, &content_id)?;
 
                     extracted_entities.push(ExtractedEntity {
                         entity_id: existing_entity.id,
@@ -376,7 +375,8 @@ pub async fn extract_mentions(
                 }
                 None => {
                     // No match — create a new entity stub
-                    let entity_id = db.next_entity_id()
+                    let entity_id = db
+                        .next_entity_id()
                         .map_err(|e| format!("Failed to get entity ID: {}", e))?;
 
                     let entity_type = classify_entity_type(&normalized);
@@ -390,19 +390,21 @@ pub async fn extract_mentions(
                         confidence: 0.6, // Sub-1.0 — flagged for review
                         first_seen: now,
                         last_updated: now,
-                        source_count: 1,
-                        metadata_json: Some(serde_json::json!({
-                            "auto_extracted": true,
-                            "needs_review": true,
-                            "source_content": content_hash,
-                        }).to_string()),
+                        source_count: 0,
+                        metadata_json: Some(
+                            serde_json::json!({
+                                "auto_extracted": true,
+                                "needs_review": true,
+                                "source_content": content_hash,
+                            })
+                            .to_string(),
+                        ),
                         aliases: Vec::new(),
                     };
 
                     db.upsert_entity(&new_entity)
                         .map_err(|e| format!("Failed to create entity: {}", e))?;
-                    db.link_entity_source(&entity_id, &content_id)
-                        .map_err(|e| format!("Failed to link entity source: {}", e))?;
+                    link_extracted_source(&db, &entity_id, &content_id)?;
 
                     extracted_entities.push(ExtractedEntity {
                         entity_id,
@@ -425,13 +427,11 @@ pub async fn extract_mentions(
         }
         seen_labels.insert(key);
 
-        if let Some(existing) = db.find_entity(topic)
+        if let Some(existing) = db
+            .find_entity(topic)
             .map_err(|e| format!("Entity lookup error: {}", e))?
         {
-            db.link_entity_source(&existing.id, &content_id)
-                .map_err(|e| format!("Failed to link entity source: {}", e))?;
-            db.increment_source_count(&existing.id)
-                .map_err(|e| format!("Failed to increment source count: {}", e))?;
+            link_extracted_source(&db, &existing.id, &content_id)?;
 
             extracted_entities.push(ExtractedEntity {
                 entity_id: existing.id,
@@ -461,6 +461,27 @@ pub async fn extract_mentions(
         topics: l1_summary.primary_topics,
         summary: l1_summary.summary,
     })
+}
+
+/// Insert a source and update its count together, so indexing retries are idempotent.
+fn link_extracted_source(db: &L2GraphDB, entity_id: &str, content_id: &str) -> Result<(), String> {
+    let transaction = db
+        .connection()
+        .unchecked_transaction()
+        .map_err(|error| format!("Failed to begin source update: {}", error))?;
+    let inserted = transaction.execute(
+        "INSERT OR IGNORE INTO entity_sources (entity_id, content_id, added_at) VALUES (?1, ?2, ?3)",
+        (entity_id, content_id, chrono::Utc::now().timestamp()),
+    ).map_err(|error| format!("Failed to link entity source: {}", error))?;
+    if inserted > 0 {
+        transaction.execute(
+            "UPDATE entities SET source_count = source_count + 1, last_updated = ?1 WHERE id = ?2",
+            (chrono::Utc::now().timestamp(), entity_id),
+        ).map_err(|error| format!("Failed to update source count: {}", error))?;
+    }
+    transaction
+        .commit()
+        .map_err(|error| format!("Failed to save source update: {}", error))
 }
 
 /// Simple heuristic to classify entity type from the label.
@@ -783,6 +804,67 @@ pub async fn get_entity_content_links(
         .filter_map(|r| r.ok())
         .collect();
 
-    info!("Found {} content links for entity {}", links.len(), entity_id);
+    info!(
+        "Found {} content links for entity {}",
+        links.len(),
+        entity_id
+    );
     Ok(links)
+}
+
+#[cfg(test)]
+mod indexing_tests {
+    use super::*;
+
+    fn empty_entity() -> (L2GraphDB, String) {
+        let db = L2GraphDB::new(":memory:").unwrap();
+        let id = db.next_entity_id().unwrap();
+        db.upsert_entity(&nodalync_graph::Entity {
+            id: id.clone(),
+            canonical_label: "Provenance".into(),
+            entity_type: "concept".into(),
+            description: None,
+            confidence: 0.6,
+            first_seen: chrono::Utc::now(),
+            last_updated: chrono::Utc::now(),
+            source_count: 0,
+            metadata_json: None,
+            aliases: vec![],
+        })
+        .unwrap();
+        (db, id)
+    }
+
+    #[test]
+    fn indexing_retry_does_not_count_a_source_twice() {
+        let (db, id) = empty_entity();
+        let first = db.register_content("first-content", "L0").unwrap();
+        link_extracted_source(&db, &id, &first).unwrap();
+        link_extracted_source(&db, &id, &first).unwrap();
+        assert_eq!(db.find_entity_by_id(&id).unwrap().unwrap().source_count, 1);
+        assert_eq!(db.get_entity_sources(&id).unwrap().len(), 1);
+        let second = db.register_content("second-content", "L0").unwrap();
+        link_extracted_source(&db, &id, &second).unwrap();
+        assert_eq!(db.find_entity_by_id(&id).unwrap().unwrap().source_count, 2);
+    }
+
+    #[test]
+    fn failed_count_update_rolls_back_link_before_retry() {
+        let (db, id) = empty_entity();
+        let content = db.register_content("retry-content", "L0").unwrap();
+        db.connection()
+            .execute_batch(
+                "CREATE TRIGGER reject_count BEFORE UPDATE OF source_count ON entities
+             BEGIN SELECT RAISE(ABORT, 'injected source count failure'); END;",
+            )
+            .unwrap();
+        assert!(link_extracted_source(&db, &id, &content).is_err());
+        assert!(db.get_entity_sources(&id).unwrap().is_empty());
+        assert_eq!(db.find_entity_by_id(&id).unwrap().unwrap().source_count, 0);
+        db.connection()
+            .execute_batch("DROP TRIGGER reject_count")
+            .unwrap();
+        link_extracted_source(&db, &id, &content).unwrap();
+        assert_eq!(db.find_entity_by_id(&id).unwrap().unwrap().source_count, 1);
+    }
 }

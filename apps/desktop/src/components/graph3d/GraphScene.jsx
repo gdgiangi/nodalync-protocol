@@ -2,13 +2,13 @@
  * GraphScene — Main 3D knowledge graph visualization using React Three Fiber.
  * Renders L0 (bottom), L2 (middle), L3 (top) planes with force-directed layout.
  */
-import { useRef, useState, useCallback, useMemo, useEffect } from "react";
+import { forwardRef, useImperativeHandle, useRef, useState, useCallback, useMemo, useEffect } from "react";
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
-import { EffectComposer, Bloom } from "@react-three/postprocessing";
 import * as THREE from "three";
 import { ForceGraph } from "./ForceGraph";
 import { GraphTooltip } from "./GraphTooltip";
+import { graphCameraFrame } from "./camera";
 import { getNodeLevel } from "../../lib/constants";
 
 // Layer Y positions in 3D space
@@ -31,13 +31,83 @@ export const LAYER_HEX = {
   L3: "#8b5cf6",
 };
 
-export default function GraphScene({
+const GraphScene = forwardRef(function GraphScene({
   data,
   onNodeClick,
   onBackgroundClick,
   selectedEntity,
-}) {
+}, ref) {
   const controlsRef = useRef(null);
+  const nodePositionsRef = useRef(new Map());
+  const nodeObjectsRef = useRef(new Map());
+  const animationRef = useRef(null);
+
+  const cancelCameraMotion = useCallback(() => {
+    if (animationRef.current !== null) {
+      cancelAnimationFrame(animationRef.current);
+      animationRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => cancelCameraMotion, [cancelCameraMotion]);
+
+  const moveCamera = useCallback((target, position) => {
+    const controls = controlsRef.current;
+    if (!controls) return false;
+    cancelCameraMotion();
+    const startTarget = controls.target.clone();
+    const startPosition = controls.object.position.clone();
+    const startTime = performance.now();
+    const duration = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 650;
+    function animate(now) {
+      const progress = duration === 0 ? 1 : Math.min((now - startTime) / duration, 1);
+      const eased = 1 - (1 - progress) ** 3;
+      controls.target.lerpVectors(startTarget, target, eased);
+      controls.object.position.lerpVectors(startPosition, position, eased);
+      controls.update();
+      animationRef.current = progress < 1 ? requestAnimationFrame(animate) : null;
+    }
+    animationRef.current = requestAnimationFrame(animate);
+    return true;
+  }, [cancelCameraMotion]);
+
+  const focusPosition = useCallback((position) => {
+    const controls = controlsRef.current;
+    if (!controls || !position) return false;
+    const target = new THREE.Vector3(position.x, position.y, position.z);
+    const direction = controls.object.position.clone().sub(controls.target);
+    if (direction.lengthSq() === 0) direction.set(0, 0.6, 0.8);
+    const destination = target.clone().add(direction.normalize().multiplyScalar(18));
+    return moveCamera(target, destination);
+  }, [moveCamera]);
+
+  const fitGraph = useCallback(() => {
+    const controls = controlsRef.current;
+    if (!controls) return false;
+    const frame = graphCameraFrame(Array.from(nodePositionsRef.current.values()), controls.object, {
+      width: controls.domElement?.clientWidth,
+      height: controls.domElement?.clientHeight,
+    });
+    if (!frame) return false;
+    controls.maxDistance = Math.max(150, frame.distance * 2);
+    controls.object.far = frame.far;
+    controls.object.updateProjectionMatrix();
+    return moveCamera(frame.target, frame.position);
+  }, [moveCamera]);
+
+  useImperativeHandle(ref, () => ({
+    zoomToEntity(entityId) {
+      const object = nodeObjectsRef.current.get(entityId);
+      const position = object
+        ? object.getWorldPosition(new THREE.Vector3())
+        : nodePositionsRef.current.get(entityId);
+      return focusPosition(position);
+    },
+    resetZoom() {
+      return fitGraph();
+    },
+  }), [focusPosition, fitGraph]);
+
   const [hoveredNode, setHoveredNode] = useState(null);
   const [tooltipPos, setTooltipPos] = useState(null);
 
@@ -126,7 +196,7 @@ export default function GraphScene({
   );
 
   return (
-    <div className="w-full h-full relative" style={{ background: "#0a0a0a" }}>
+    <div className="w-full h-full relative" style={{ background: "#0a0a0a", isolation: "isolate", overflow: "hidden", zIndex: 0 }}>
       <Canvas
         camera={{ position: [0, 45, 60], fov: 50, near: 0.1, far: 500 }}
         gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }}
@@ -151,11 +221,6 @@ export default function GraphScene({
           <meshBasicMaterial color="#0a0a0a" transparent opacity={0} />
         </mesh>
 
-        {/* Layer indicator planes (subtle grid) */}
-        <LayerPlane y={LAYER_Y.L0} color="#3b82f6" label="L0 — Sources" />
-        <LayerPlane y={LAYER_Y.L2} color="#f59e0b" label="L2 — Entities" />
-        <LayerPlane y={LAYER_Y.L3} color="#8b5cf6" label="L3 — Derived" />
-
         {/* Force-directed graph */}
         <ForceGraph
           l0Nodes={l0Nodes}
@@ -169,21 +234,15 @@ export default function GraphScene({
           onNodeHover={handleNodeHover}
           onNodeUnhover={handleNodeUnhover}
           controlsRef={controlsRef}
+          nodePositionsRef={nodePositionsRef}
+          nodeObjectsRef={nodeObjectsRef}
+          onLayoutReady={fitGraph}
         />
-
-        {/* Post-processing bloom */}
-        <EffectComposer>
-          <Bloom
-            luminanceThreshold={0.2}
-            luminanceSmoothing={0.9}
-            intensity={0.8}
-            radius={0.6}
-          />
-        </EffectComposer>
 
         {/* Camera controls */}
         <OrbitControls
           ref={controlsRef}
+          onStart={cancelCameraMotion}
           enablePan={true}
           enableZoom={true}
           enableRotate={true}
@@ -205,34 +264,6 @@ export default function GraphScene({
       )}
     </div>
   );
-}
+});
 
-/**
- * Subtle translucent plane marking each layer
- */
-function LayerPlane({ y, color }) {
-  return (
-    <group position={[0, y, 0]}>
-      {/* Thin grid ring to indicate the plane */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[28, 30, 64]} />
-        <meshBasicMaterial
-          color={color}
-          transparent
-          opacity={0.04}
-          side={THREE.DoubleSide}
-        />
-      </mesh>
-      {/* Inner subtle disc */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]}>
-        <circleGeometry args={[28, 64]} />
-        <meshBasicMaterial
-          color={color}
-          transparent
-          opacity={0.015}
-          side={THREE.DoubleSide}
-        />
-      </mesh>
-    </group>
-  );
-}
+export default GraphScene;

@@ -12,6 +12,7 @@ use tracing::info;
 use nodalync_x402::{PaymentGate, X402Config, X402Status, TransactionRecord};
 
 use crate::protocol::ProtocolState;
+use std::sync::Arc;
 
 // ─── Shared State ────────────────────────────────────────────────────────────
 
@@ -93,7 +94,7 @@ pub async fn get_x402_status(
 pub async fn configure_x402(
     input: X402ConfigInput,
     gate: State<'_, SharedPaymentGate>,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<X402StatusResponse, String> {
     // Validate fee rate
     if let Some(fee) = input.app_fee_percent {
@@ -253,7 +254,7 @@ pub struct FacilitatorCheckResponse {
 
 /// Resolve the data directory from protocol state or default.
 async fn resolve_data_dir(
-    protocol: &State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: &State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> std::path::PathBuf {
     let guard = protocol.lock().await;
     match guard.as_ref() {

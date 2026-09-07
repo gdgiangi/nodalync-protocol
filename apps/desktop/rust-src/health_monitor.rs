@@ -151,14 +151,12 @@ pub fn spawn_health_monitor(
 ) -> HealthMonitorHandle {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-    let join_handle = tokio::spawn(run_health_monitor(
-        network,
-        protocol,
-        health,
-        shutdown_rx,
-    ));
+    let join_handle = tokio::spawn(run_health_monitor(network, protocol, health, shutdown_rx));
 
-    info!("Network health monitor spawned (interval={}s)", HEALTH_CHECK_INTERVAL_SECS);
+    info!(
+        "Network health monitor spawned (interval={}s)",
+        HEALTH_CHECK_INTERVAL_SECS
+    );
 
     HealthMonitorHandle {
         shutdown_tx,
@@ -258,11 +256,12 @@ async fn run_health_check(
             .as_ref()
             .map(|s| PeerStore::load(&s.data_dir).peers.len())
             .unwrap_or(0);
-        let save_ts = if state.last_peer_save.elapsed() < Duration::from_secs(PEER_SAVE_INTERVAL_SECS) {
-            Some(now.to_rfc3339())
-        } else {
-            None
-        };
+        let save_ts =
+            if state.last_peer_save.elapsed() < Duration::from_secs(PEER_SAVE_INTERVAL_SECS) {
+                Some(now.to_rfc3339())
+            } else {
+                None
+            };
         (known, save_ts)
     };
 
@@ -314,10 +313,7 @@ fn classify_health(peers: usize, listen_addrs: usize, uptime_secs: u64) -> (Stri
         );
     }
 
-    (
-        "healthy".to_string(),
-        format!("{} peers connected", peers),
-    )
+    ("healthy".to_string(), format!("{} peers connected", peers))
 }
 
 /// Attempt to reconnect to known peers from the persistent store.
@@ -346,26 +342,21 @@ async fn attempt_reconnect(
         return;
     }
 
-    info!(
-        "Attempting reconnection to {} known peers",
-        entries.len()
-    );
+    info!("Attempting reconnection to {} known peers", entries.len());
 
     for (_peer_id_str, addr_str) in &entries {
         state.reconnect_attempts += 1;
 
         match addr_str.parse() {
-            Ok(addr) => {
-                match network.dial(addr).await {
-                    Ok(()) => {
-                        state.reconnect_successes += 1;
-                        info!("Reconnected to peer via {}", addr_str);
-                    }
-                    Err(e) => {
-                        debug!("Reconnect failed for {}: {}", addr_str, e);
-                    }
+            Ok(addr) => match network.dial(addr).await {
+                Ok(()) => {
+                    state.reconnect_successes += 1;
+                    info!("Reconnected to peer via {}", addr_str);
                 }
-            }
+                Err(e) => {
+                    debug!("Reconnect failed for {}: {}", addr_str, e);
+                }
+            },
             Err(e) => {
                 debug!("Skipping invalid address {}: {}", addr_str, e);
             }

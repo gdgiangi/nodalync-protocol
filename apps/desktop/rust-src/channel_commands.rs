@@ -10,9 +10,9 @@
 //! 4. User calls query_content — payment goes through the channel
 //! 5. Optionally: close_channel when done
 
-use std::sync::Arc;
 use nodalync_store::ChannelStore;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tauri::State;
 use tokio::sync::Mutex;
 use tracing::info;
@@ -194,11 +194,7 @@ pub async fn open_channel(
             .await
             .map_err(|e| format!("Failed to open channel: {}", e))?;
 
-        let info = channel_to_info(
-            &nodalync_peer_id,
-            &channel,
-            Some(peer_id),
-        );
+        let info = channel_to_info(&nodalync_peer_id, &channel, Some(peer_id));
 
         info!(
             "Channel opened: {} with peer {}",
@@ -515,8 +511,12 @@ pub async fn auto_open_and_query(
                 channel_id: None,
             });
         }
-        Err(nodalync_ops::OpsError::ChannelRequired) | Err(nodalync_ops::OpsError::ChannelRequiredWithPeerInfo { .. }) => {
-            info!("Channel required — auto-opening with {} HBAR deposit", default_deposit);
+        Err(nodalync_ops::OpsError::ChannelRequired)
+        | Err(nodalync_ops::OpsError::ChannelRequiredWithPeerInfo { .. }) => {
+            info!(
+                "Channel required — auto-opening with {} HBAR deposit",
+                default_deposit
+            );
         }
         Err(e) => {
             return Err(format!("Query failed: {}", e));
@@ -530,9 +530,9 @@ pub async fn auto_open_and_query(
         .await
         .map_err(|e| format!("Failed to preview content for channel setup: {}", e))?;
 
-    let provider_peer_id = preview.provider_peer_id.ok_or(
-        "Cannot determine content provider's peer ID. Content may be unavailable.",
-    )?;
+    let provider_peer_id = preview
+        .provider_peer_id
+        .ok_or("Cannot determine content provider's peer ID. Content may be unavailable.")?;
 
     // Parse the libp2p peer ID
     let libp2p_peer: nodalync_net::PeerId = provider_peer_id

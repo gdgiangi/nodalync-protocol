@@ -3,8 +3,8 @@
 
 use nodalync_graph::L2GraphDB;
 use std::sync::{Arc, Mutex as StdMutex};
-use tokio::sync::Mutex as TokioMutex;
 use tauri::Manager;
+use tokio::sync::Mutex as TokioMutex;
 use tracing::info;
 
 mod channel_commands;
@@ -29,38 +29,32 @@ use hip991_commands::*;
 use network_commands::*;
 use publish_commands::*;
 
-/// Resolve the graph database path.
-/// Checks (in order): env var, default location relative to exe, fallback.
-fn resolve_db_path() -> String {
-    // 1. Environment variable override
-    if let Ok(path) = std::env::var("NODALYNC_GRAPH_DB") {
-        return path;
-    }
+/// Use an explicit graph database when requested, otherwise keep it with node data.
+fn resolve_db_path() -> std::path::PathBuf {
+    graph_db_path(
+        std::env::var_os("NODALYNC_GRAPH_DB"),
+        &protocol::ProtocolState::default_data_dir(),
+    )
+}
 
-    // 2. Well-known location: repo root
-    // CARGO_MANIFEST_DIR = .../nodalync-protocol/apps/desktop
-    // .parent() → .../nodalync-protocol/apps
-    // .parent() → .../nodalync-protocol  (repo root)
-    let repo_db = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent() // apps/desktop → apps
-        .and_then(|p| p.parent()) // apps → repo root
-        .map(|p| p.join("obsidian_l2_graph.db"));
-
-    if let Some(path) = repo_db {
-        if path.exists() {
-            return path.to_string_lossy().to_string();
-        }
-    }
-
-    // 3. Fallback: current directory
-    "obsidian_l2_graph.db".to_string()
+fn graph_db_path(
+    override_path: Option<std::ffi::OsString>,
+    data_dir: &std::path::Path,
+) -> std::path::PathBuf {
+    override_path
+        .filter(|path| !path.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| data_dir.join("studio").join("knowledge.db"))
 }
 
 fn main() {
     tracing_subscriber::fmt::init();
 
     let db_path = resolve_db_path();
-    info!("Nodalync Studio starting — DB: {}", db_path);
+    info!("Nodalync Studio starting — DB: {}", db_path.display());
+    if let Some(parent) = db_path.parent().filter(|path| !path.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).expect("Failed to create graph database directory");
+    }
 
     let graph_db = L2GraphDB::new(&db_path).expect("Failed to open graph database");
     info!("Graph database opened successfully");
@@ -71,8 +65,7 @@ fn main() {
         Arc::new(TokioMutex::new(None));
 
     // Event loop handle — populated when the network starts, cleared on stop
-    let event_loop_handle: TokioMutex<Option<event_loop::EventLoopHandle>> =
-        TokioMutex::new(None);
+    let event_loop_handle: TokioMutex<Option<event_loop::EventLoopHandle>> = TokioMutex::new(None);
 
     // Health monitor handle — populated when the network starts
     let health_monitor_handle: TokioMutex<Option<health_monitor::HealthMonitorHandle>> =
@@ -83,6 +76,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             info!("Setting up Tauri application");
             app.manage(StdMutex::new(graph_db));
@@ -114,6 +108,7 @@ fn main() {
             publish_text,
             list_content,
             get_content_details,
+            read_content_text,
             delete_content,
             get_node_status,
             start_network,
@@ -176,4 +171,31 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::graph_db_path;
+    use std::path::Path;
+
+    #[test]
+    fn default_graph_database_stays_inside_node_data() {
+        let data_dir = Path::new("isolated-node");
+        assert_eq!(
+            graph_db_path(None, data_dir),
+            data_dir.join("studio").join("knowledge.db")
+        );
+        assert_eq!(
+            graph_db_path(Some("".into()), data_dir),
+            data_dir.join("studio").join("knowledge.db")
+        );
+    }
+
+    #[test]
+    fn explicit_graph_database_is_preserved() {
+        assert_eq!(
+            graph_db_path(Some("chosen.db".into()), Path::new("isolated-node")),
+            Path::new("chosen.db")
+        );
+    }
 }

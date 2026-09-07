@@ -29,11 +29,10 @@ use tauri::State;
 use tokio::sync::Mutex;
 use tracing::info;
 
-use nodalync_settle::topic::{
-    RevenueSummary, TopicFeeConfig, TopicInfo,
-};
+use nodalync_settle::topic::{RevenueSummary, TopicFeeConfig, TopicInfo};
 
 use crate::protocol::ProtocolState;
+use std::sync::Arc;
 
 // ─── Persisted Configuration ─────────────────────────────────────────────────
 
@@ -92,8 +91,7 @@ impl Hip991Config {
     /// Save to disk.
     pub fn save(&self, data_dir: &PathBuf) -> Result<(), String> {
         let dir = data_dir.join("studio");
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| format!("Failed to create studio dir: {}", e))?;
+        std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create studio dir: {}", e))?;
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize HIP-991 config: {}", e))?;
         std::fs::write(Self::config_path(data_dir), json)
@@ -193,7 +191,7 @@ pub struct Hip991SubmitResponse {
 /// Works even if Hedera is not configured (returns unconfigured status).
 #[tauri::command]
 pub async fn get_hip991_status(
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<Hip991StatusResponse, String> {
     let data_dir = resolve_data_dir(&protocol).await;
     let config = Hip991Config::load(&data_dir);
@@ -220,7 +218,7 @@ pub async fn configure_hip991(
     account_id: String,
     key_path: String,
     network: Option<String>,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<Hip991StatusResponse, String> {
     // Validate the key file exists
     if !std::path::Path::new(&key_path).exists() {
@@ -261,7 +259,7 @@ pub async fn configure_hip991(
 pub async fn create_fee_topic(
     fee_amount: Option<u64>,
     topic_memo: Option<String>,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<Hip991TopicResponse, String> {
     let data_dir = resolve_data_dir(&protocol).await;
     let mut config = Hip991Config::load(&data_dir);
@@ -278,25 +276,11 @@ pub async fn create_fee_topic(
         config.fee_config.topic_memo = memo;
     }
 
-    // For non-SDK builds, return a simulated response
+    // A build without the SDK cannot perform or report on-chain operations.
     #[cfg(not(feature = "hedera-sdk"))]
     {
-        let topic_id = format!("0.0.{}", rand::random::<u32>() % 10_000_000);
-
-        config.active_topic_id = Some(topic_id.clone());
-        config.updated_at = Utc::now().to_rfc3339();
-        config.save(&data_dir)?;
-
-        info!(topic_id = %topic_id, "Simulated HIP-991 topic creation (no SDK)");
-
-        return Ok(Hip991TopicResponse {
-            topic_id,
-            fee_amount: config.fee_config.fee_amount,
-            fee_amount_hbar: config.fee_config.fee_amount as f64 / 100_000_000.0,
-            fee_collector: config.fee_config.fee_collector_account_id,
-            transaction_id: None,
-            memo: config.fee_config.topic_memo,
-        });
+        let _ = config;
+        Err("Hedera topic operations are unavailable in this build. Rebuild with the hedera-sdk feature to use the network.".to_string())
     }
 
     // Real SDK implementation
@@ -337,10 +321,10 @@ pub async fn create_fee_topic(
 pub async fn submit_to_topic(
     content_hash: String,
     metadata: Option<String>,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<Hip991SubmitResponse, String> {
     let data_dir = resolve_data_dir(&protocol).await;
-    let mut config = Hip991Config::load(&data_dir);
+    let config = Hip991Config::load(&data_dir);
 
     let topic_id = config
         .active_topic_id
@@ -374,17 +358,8 @@ pub async fn submit_to_topic(
 
     #[cfg(not(feature = "hedera-sdk"))]
     {
-        config.total_submissions += 1;
-        config.updated_at = Utc::now().to_rfc3339();
-        config.save(&data_dir)?;
-
-        return Ok(Hip991SubmitResponse {
-            transaction_id: format!("sim-{}", Utc::now().timestamp()),
-            topic_id,
-            fee_charged: config.fee_config.fee_amount,
-            fee_charged_hbar: config.fee_config.fee_amount as f64 / 100_000_000.0,
-            content_hash,
-        });
+        let _ = (topic_id, message, config);
+        Err("Hedera topic operations are unavailable in this build. Rebuild with the hedera-sdk feature to use the network.".to_string())
     }
 
     #[cfg(feature = "hedera-sdk")]
@@ -401,6 +376,7 @@ pub async fn submit_to_topic(
             .await
             .map_err(|e| format!("Failed to submit to topic: {}", e))?;
 
+        let mut config = config;
         config.total_submissions += 1;
         config.updated_at = Utc::now().to_rfc3339();
         config.save(&data_dir)?;
@@ -421,7 +397,7 @@ pub async fn submit_to_topic(
 #[tauri::command]
 pub async fn get_topic_revenue(
     limit: Option<u32>,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<RevenueSummary, String> {
     let data_dir = resolve_data_dir(&protocol).await;
     let config = Hip991Config::load(&data_dir);
@@ -436,14 +412,8 @@ pub async fn get_topic_revenue(
 
     #[cfg(not(feature = "hedera-sdk"))]
     {
-        return Ok(RevenueSummary {
-            total_revenue: config.total_submissions * config.fee_config.fee_amount,
-            total_revenue_hbar: (config.total_submissions * config.fee_config.fee_amount) as f64
-                / 100_000_000.0,
-            message_count: config.total_submissions,
-            avg_fee_per_message: config.fee_config.fee_amount,
-            records: Vec::new(),
-        });
+        let _ = (topic_id, limit, config);
+        Err("Hedera topic operations are unavailable in this build. Rebuild with the hedera-sdk feature to use the network.".to_string())
     }
 
     #[cfg(feature = "hedera-sdk")]
@@ -466,25 +436,19 @@ pub async fn get_topic_revenue(
 #[tauri::command]
 pub async fn get_topic_details(
     topic_id: Option<String>,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<TopicInfo, String> {
     let data_dir = resolve_data_dir(&protocol).await;
     let config = Hip991Config::load(&data_dir);
 
     let topic_id = topic_id
-        .or(config.active_topic_id)
+        .or(config.active_topic_id.clone())
         .ok_or("No topic ID specified and no active topic.")?;
 
     #[cfg(not(feature = "hedera-sdk"))]
     {
-        return Ok(TopicInfo {
-            topic_id: topic_id.clone(),
-            fee_amount: config.fee_config.fee_amount,
-            denominating_token: None,
-            fee_collector_account_id: config.fee_config.fee_collector_account_id,
-            memo: config.fee_config.topic_memo,
-            created_at: config.updated_at,
-        });
+        let _ = (topic_id, config);
+        Err("Hedera topic operations are unavailable in this build. Rebuild with the hedera-sdk feature to use the network.".to_string())
     }
 
     #[cfg(feature = "hedera-sdk")]
@@ -506,7 +470,7 @@ pub async fn get_topic_details(
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Resolve the data directory from protocol state.
-async fn resolve_data_dir(protocol: &State<'_, Mutex<Option<ProtocolState>>>) -> PathBuf {
+async fn resolve_data_dir(protocol: &State<'_, Arc<Mutex<Option<ProtocolState>>>>) -> PathBuf {
     let guard = protocol.lock().await;
     match guard.as_ref() {
         Some(state) => state.data_dir.clone(),
@@ -516,9 +480,7 @@ async fn resolve_data_dir(protocol: &State<'_, Mutex<Option<ProtocolState>>>) ->
 
 /// Build a HederaConfig from the persisted Hip991Config.
 #[cfg(feature = "hedera-sdk")]
-fn build_hedera_config(
-    config: &Hip991Config,
-) -> Result<nodalync_settle::HederaConfig, String> {
+fn build_hedera_config(config: &Hip991Config) -> Result<nodalync_settle::HederaConfig, String> {
     use nodalync_settle::HederaNetwork;
 
     let network = match config.hedera_network.as_str() {

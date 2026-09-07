@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { isTauri } from "@tauri-apps/api/core";
 
 /**
  * Hook to subscribe to Tauri backend events.
@@ -16,13 +17,14 @@ export function useTauriEvents(eventHandlers) {
   handlersRef.current = eventHandlers;
 
   useEffect(() => {
+    if (!isTauri()) return;
     const unlisteners = [];
 
     for (const eventName of Object.keys(handlersRef.current)) {
       const promise = listen(eventName, (event) => {
         handlersRef.current[eventName]?.(event.payload);
       });
-      unlisteners.push(promise);
+      unlisteners.push(promise.catch((error) => { console.error(`Unable to subscribe to ${eventName}:`, error); return () => {}; }));
     }
 
     return () => {
@@ -47,9 +49,10 @@ export function useTauriEvent(eventName, handler) {
   handlerRef.current = handler;
 
   useEffect(() => {
+    if (!isTauri()) return;
     const promise = listen(eventName, (event) => {
       handlerRef.current?.(event.payload);
-    });
+    }).catch((error) => { console.error(`Unable to subscribe to ${eventName}:`, error); return () => {}; });
 
     return () => {
       promise.then((unlisten) => unlisten());

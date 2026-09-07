@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getEntityColor, formatPredicate } from "../lib/constants";
 
+const CONNECTION_LIMIT = 500;
+
 function formatTimestamp(ts) {
   if (!ts) return "—";
   const date = new Date(typeof ts === "number" ? ts * 1000 : ts);
@@ -22,37 +24,32 @@ export default function EntityDetailPanel({
   onClose,
   onEntitySelect,
   onFocusEntity,
+  onContentSelect,
+  availableContentHashes = [],
 }) {
   const [activeTab, setActiveTab] = useState("overview");
   const [context, setContext] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const [isOpen, setIsOpen] = useState(false);
 
   // Animate in on mount
   useEffect(() => {
-    requestAnimationFrame(() => setIsOpen(true));
+    const frame = requestAnimationFrame(() => setIsOpen(true));
+    return () => cancelAnimationFrame(frame);
   }, []);
 
-  // Load context when entity changes
+  // The graph command is ID-based; text context only includes relationships
+  // between search matches and cannot describe an entity's neighborhood.
   useEffect(() => {
     if (!entity?.id) return;
-    loadContext(entity.label || entity.canonical_label || entity.id);
-  }, [entity?.id]);
-
-  async function loadContext(query) {
-    try {
-      setLoading(true);
-      const data = await invoke("get_context", {
-        query,
-        maxEntities: 20,
-      });
-      setContext(data);
-    } catch (err) {
-      console.error("Failed to load entity context:", err);
-    } finally {
-      setLoading(false);
-    }
-  }
+    let active = true;
+    const entityId = entity.id;
+    setContext(null);
+    invoke("get_subgraph", { entityId, maxHops: 1, maxResults: CONNECTION_LIMIT })
+      .then((data) => { if (active) setContext({ entityId, data, error: null }); })
+      .catch((error) => { if (active) setContext({ entityId, data: null, error: String(error) }); });
+    return () => { active = false; };
+  }, [entity?.id, attempt]);
 
   const handleClose = useCallback(() => {
     setIsOpen(false);
@@ -67,13 +64,17 @@ export default function EntityDetailPanel({
   const confidence = entity.confidence != null ? entity.confidence : null;
   const sourceCount = entity.source_count || 0;
 
-  // Extract relationships from context
-  const relationships = context?.relationships || [];
-  const connectedEntities = context?.entities?.filter((e) => e.id !== entity.id) || [];
+  const loading = context?.entityId !== entity.id;
+  const contextError = loading ? null : context.error;
+  const data = loading ? null : context.data;
+  const relationships = (data?.links || []).filter((link) => link.source === entity.id || link.target === entity.id);
+  const neighborIds = new Set(relationships.flatMap((link) => [link.source, link.target]));
+  const connectedEntities = (data?.nodes || []).filter((node) => node.id !== entity.id && neighborIds.has(node.id));
+  const limited = connectedEntities.length >= CONNECTION_LIMIT;
 
   const tabs = [
     { id: "overview", label: "Overview" },
-    { id: "connections", label: "Connections", count: relationships.length },
+    { id: "connections", label: "Connections", count: data ? relationships.length : null },
     { id: "sources", label: "Sources", count: sourceCount },
   ];
 
@@ -154,6 +155,7 @@ export default function EntityDetailPanel({
           {/* Close button */}
           <button
             onClick={handleClose}
+            aria-label="Close entity details"
             className="w-7 h-7 flex items-center justify-center rounded-md flex-shrink-0"
             style={{
               color: "var(--text-ghost)",
@@ -191,7 +193,7 @@ export default function EntityDetailPanel({
         >
           <QuickStat label="SOURCES" value={sourceCount} />
           <Divider />
-          <QuickStat label="CONNECTIONS" value={connectedEntities.length} />
+          <QuickStat label="CONNECTIONS" value={data ? `${relationships.length}${limited ? "+" : ""}` : null} />
           <Divider />
           <QuickStat
             label="FIRST SEEN"
@@ -286,6 +288,7 @@ export default function EntityDetailPanel({
             scrollbarColor: "rgba(255,255,255,0.08) transparent",
           }}
         >
+          {contextError && <div role="alert" className="studio-error"><p>Couldn’t load connections: {contextError}</p><button className="studio-button" onClick={() => setAttempt((value) => value + 1)}>Try again</button></div>}
           {loading ? (
             <LoadingSkeleton />
           ) : (
@@ -297,16 +300,20 @@ export default function EntityDetailPanel({
                   color={color}
                 />
               )}
-              {activeTab === "connections" && (
+              {activeTab === "connections" && data && (
+                <>
+                <p className="studio-muted">{relationships.length}{limited ? "+" : ""} relationships · {connectedEntities.length}{limited ? "+" : ""} neighboring entities</p>
+                {limited && <p role="status" className="studio-muted">Showing the first {CONNECTION_LIMIT} neighbors.</p>}
                 <ConnectionsTab
                   relationships={relationships}
                   connectedEntities={connectedEntities}
                   currentEntityId={entity.id}
                   onEntitySelect={onEntitySelect}
                 />
+                </>
               )}
               {activeTab === "sources" && (
-                <SourcesTab entity={entity} sourceCount={sourceCount} />
+                <SourcesTab entity={entity} sourceCount={sourceCount} onContentSelect={onContentSelect} availableContentHashes={availableContentHashes} />
               )}
             </>
           )}
@@ -542,12 +549,10 @@ function ConnectionsTab({
           <div className="space-y-1">
             {rels.map((rel, i) => {
               // Determine the "other" entity
-              const isSubject =
-                rel.subject_id === currentEntityId ||
-                rel.subject === currentEntityId;
+              const isSubject = rel.source === currentEntityId;
               const otherId = isSubject
-                ? rel.object_value || rel.object_id || rel.object
-                : rel.subject_id || rel.subject;
+                ? rel.target
+                : rel.source;
               const otherEntity = connectedEntities.find(
                 (e) => e.id === otherId
               );
@@ -559,7 +564,8 @@ function ConnectionsTab({
               return (
                 <button
                   key={rel.id || i}
-                  onClick={() => onEntitySelect?.(otherId)}
+                  onClick={() => otherEntity && onEntitySelect?.(otherId)}
+                  disabled={!otherEntity}
                   className="w-full text-left p-2 rounded-md animate-slide-up"
                   style={{
                     animationDelay: `${i * 40}ms`,
@@ -681,35 +687,32 @@ function ConnectionsTab({
 
 // ─── Sources Tab ─────────────────────────────────────────────────────────────
 
-function SourcesTab({ entity, sourceCount }) {
-  const [contentLinks, setContentLinks] = useState([]);
-  const [linksLoading, setLinksLoading] = useState(false);
-  const [linksError, setLinksError] = useState(null);
+function SourcesTab({ entity, sourceCount, onContentSelect, availableContentHashes = [] }) {
+  const [result, setResult] = useState(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     if (!entity?.id) return;
-    loadContentLinks(entity.id);
-  }, [entity?.id]);
+    let active = true;
+    const entityId = entity.id;
+    setResult(null);
+    invoke("get_entity_content_links", { entityId: String(entityId) })
+      .then((links) => { if (active) setResult({ entityId, links: links || [], error: null }); })
+      .catch((error) => { if (active) setResult({ entityId, links: [], error: String(error) }); });
+    return () => { active = false; };
+  }, [entity?.id, attempt]);
 
-  async function loadContentLinks(entityId) {
-    try {
-      setLinksLoading(true);
-      setLinksError(null);
-      const links = await invoke("get_entity_content_links", {
-        entityId: String(entityId),
-      });
-      setContentLinks(links || []);
-    } catch (err) {
-      console.error("Failed to load content links:", err);
-      setLinksError(String(err));
-      setContentLinks([]);
-    } finally {
-      setLinksLoading(false);
-    }
-  }
+  const linksLoading = result?.entityId !== entity.id;
+  const contentLinks = linksLoading ? [] : result.links;
+  const linksError = linksLoading ? null : result.error;
+  const available = new Set(availableContentHashes);
 
   if (linksLoading) {
     return <LoadingSkeleton />;
+  }
+
+  if (linksError) {
+    return <div role="alert" className="studio-error"><p>Couldn’t load sources: {linksError}</p><button className="studio-button" onClick={() => setAttempt((value) => value + 1)}>Try again</button></div>;
   }
 
   if (sourceCount === 0 && contentLinks.length === 0) {
@@ -728,9 +731,13 @@ function SourcesTab({ entity, sourceCount }) {
           <SectionLabel>Linked Content (L0)</SectionLabel>
           <div className="space-y-1.5">
             {contentLinks.map((cl, i) => (
-              <div
+              <button
+                type="button"
                 key={cl.content_id || cl.content_hash || i}
-                className="card animate-slide-up"
+                className="card animate-slide-up w-full text-left"
+                disabled={!onContentSelect || !available.has(cl.content_hash)}
+                onClick={() => onContentSelect?.(cl.content_hash)}
+                aria-label={`Open source ${cl.content_hash}`}
                 style={{
                   animationDelay: `${i * 50}ms`,
                   animationFillMode: "both",
@@ -783,9 +790,10 @@ function SourcesTab({ entity, sourceCount }) {
                         </span>
                       )}
                     </div>
+                    {!available.has(cl.content_hash) && <p className="studio-muted">Not available in this library</p>}
                   </div>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         </>
@@ -829,15 +837,6 @@ function SourcesTab({ entity, sourceCount }) {
             </div>
           </div>
         </>
-      )}
-
-      {/* Error display */}
-      {linksError && (
-        <div className="mt-3 p-2 rounded" style={{ background: "var(--red-dim)", border: "1px solid rgba(248, 113, 113, 0.2)" }}>
-          <p className="text-[10px]" style={{ color: "var(--red)" }}>
-            Failed to load content links: {linksError}
-          </p>
-        </div>
       )}
 
       {/* Metadata about extraction */}

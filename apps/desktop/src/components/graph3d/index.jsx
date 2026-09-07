@@ -36,11 +36,10 @@ const Graph3D = forwardRef(function Graph3D(
   // Expose imperative methods for parent compatibility
   useImperativeHandle(ref, () => ({
     zoomToEntity(entityId) {
-      // Camera zoom is handled internally by GraphNode click
-      // This is a no-op since we auto-focus on click
+      return sceneRef.current?.zoomToEntity(entityId) ?? false;
     },
     resetZoom() {
-      // Could implement camera reset — for now no-op
+      sceneRef.current?.resetZoom();
     },
   }));
 
@@ -53,6 +52,7 @@ const Graph3D = forwardRef(function Graph3D(
 
   return (
     <GraphScene
+      ref={sceneRef}
       data={normalizedData}
       onNodeClick={handleNodeClick}
       onBackgroundClick={onBackgroundClick}

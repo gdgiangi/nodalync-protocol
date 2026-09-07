@@ -27,11 +27,7 @@ impl EventLoopHandle {
     pub async fn shutdown(self) {
         let _ = self.shutdown_tx.send(true);
         // Give the loop a moment to notice the signal and exit
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            self.join_handle,
-        )
-        .await;
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), self.join_handle).await;
     }
 
     /// Signal the event loop to stop (non-blocking).
@@ -135,7 +131,11 @@ async fn handle_event(
             return; // No response needed
         }
         NetworkEvent::BroadcastReceived { topic, data } => {
-            debug!("Broadcast received on topic '{}': {} bytes", topic, data.len());
+            debug!(
+                "Broadcast received on topic '{}': {} bytes",
+                topic,
+                data.len()
+            );
             // Broadcasts need to go through handle_network_event for announcement caching
         }
         NetworkEvent::NewListenAddr { address } => {
@@ -152,15 +152,13 @@ async fn handle_event(
     let response = {
         let mut guard = protocol.lock().await;
         match guard.as_mut() {
-            Some(state) => {
-                match state.ops.handle_network_event(event).await {
-                    Ok(resp) => resp,
-                    Err(e) => {
-                        warn!("Error handling network event: {}", e);
-                        None
-                    }
+            Some(state) => match state.ops.handle_network_event(event).await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    warn!("Error handling network event: {}", e);
+                    None
                 }
-            }
+            },
             None => {
                 debug!("Protocol not initialized — ignoring network event");
                 None
@@ -175,7 +173,10 @@ async fn handle_event(
             .send_signed_response(request_id, msg_type, payload)
             .await
         {
-            warn!("Failed to send response for request {:?}: {}", request_id, e);
+            warn!(
+                "Failed to send response for request {:?}: {}",
+                request_id, e
+            );
         } else {
             debug!("Sent response for request {:?}", request_id);
         }
@@ -232,7 +233,10 @@ async fn initiate_handshake(
                 )
             }
             None => {
-                debug!("Protocol not initialized — skipping handshake with {}", peer);
+                debug!(
+                    "Protocol not initialized — skipping handshake with {}",
+                    peer
+                );
                 return;
             }
         }

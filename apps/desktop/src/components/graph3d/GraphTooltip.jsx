@@ -32,7 +32,7 @@ export function GraphTooltip({ node, position }) {
         top: position.y - 10,
         maxWidth: 240,
         pointerEvents: "none",
-        zIndex: 100,
+        zIndex: 6,
       }}
     >
       <div className="flex items-center gap-2 mb-1">

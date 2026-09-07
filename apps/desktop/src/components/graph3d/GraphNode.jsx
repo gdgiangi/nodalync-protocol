@@ -1,25 +1,18 @@
 /**
  * GraphNode — Individual 3D node with glow, hover pulse, and label.
  */
-import { useRef, useState, useMemo, useCallback } from "react";
+import { useRef, useMemo, useCallback } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
-import { Html, Billboard, Text } from "@react-three/drei";
+import { Html } from "@react-three/drei";
 import * as THREE from "three";
-import { LAYER_COLORS, LAYER_HEX } from "./GraphScene";
+import { LAYER_COLORS } from "./GraphScene";
 import { getEntityColor } from "../../lib/constants";
 
 // Node sizes by level
 const NODE_SIZE = {
-  L0: 0.35,
-  L2: 0.6,
-  L3: 0.5,
-};
-
-// Emissive intensities
-const EMISSIVE_BASE = {
-  L0: 0.6,
-  L2: 1.2,
-  L3: 0.9,
+  L0: 0.7,
+  L2: 1.05,
+  L3: 1.15,
 };
 
 export function GraphNode({
@@ -28,18 +21,26 @@ export function GraphNode({
   level,
   isSelected,
   isHovered,
-  isConnectedToHover,
   isDimmed,
   zoomLevel = 1.0,
   inCluster = false,
   onClick,
   onHover,
   onUnhover,
-  controlsRef,
+  nodeObjectsRef,
 }) {
   const meshRef = useRef();
   const glowRef = useRef();
-  const { camera, gl } = useThree();
+  const { camera, gl, size: canvasSize } = useThree();
+  const worldPosition = useRef(new THREE.Vector3());
+  const setMeshRef = useCallback((mesh) => {
+    meshRef.current = mesh;
+    if (mesh) nodeObjectsRef?.current.set(node.id, mesh);
+    else nodeObjectsRef?.current.delete(node.id);
+  }, [node.id, nodeObjectsRef]);
+  const pulsePhase = useMemo(() => Array.from(String(node.id))
+    .reduce((value, character) => (value * 31 + character.charCodeAt(0)) % 360, 0), [node.id]);
+
 
   // Unified L2 color scheme - amber/gold base with subtle entity type hints
   const color = useMemo(() => {
@@ -55,42 +56,8 @@ export function GraphNode({
     return LAYER_COLORS[level] || LAYER_COLORS.L2;
   }, [level, node.entity_type]);
 
-  const hexColor = useMemo(() => {
-    if (level === "L2") {
-      const baseHex = "#f59e0b";
-      if (node.entity_type) {
-        // For hex, we'll use the base amber with slight adjustment
-        const entityHex = getEntityColor(node.entity_type);
-        // Simple blend - in practice this would use the Three.js color above
-        return baseHex; // Keep it simple for hex version
-      }
-      return baseHex;
-    }
-    return LAYER_HEX[level] || LAYER_HEX.L2;
-  }, [level, node.entity_type]);
-
-  // Adaptive sizing based on zoom level and cluster membership
-  const baseSize = NODE_SIZE[level] || 0.5;
-  const size = useMemo(() => {
-    let adjustedSize = baseSize;
-    
-    if (inCluster && level === "L2") {
-      // Nodes in clusters are smaller
-      adjustedSize *= 0.7;
-      
-      // Fade in with zoom - invisible when far away, visible when close
-      if (zoomLevel > 0.6) {
-        adjustedSize *= 0.3; // Very small when far
-      } else if (zoomLevel > 0.3) {
-        adjustedSize *= (1 - zoomLevel) + 0.3; // Smooth transition
-      }
-      // Full size when zoomed in (zoomLevel < 0.3)
-    }
-    
-    return adjustedSize;
-  }, [baseSize, inCluster, level, zoomLevel]);
-
-  const emissiveBase = EMISSIVE_BASE[level] || 1.0;
+  // Keep an accessible visual and pointer target at the initial overview distance.
+  const size = NODE_SIZE[level] || 1.05;
 
   // Animate: pulse on hover, breathe gently
   useFrame(({ clock }) => {
@@ -99,11 +66,15 @@ export function GraphNode({
     const t = clock.getElapsedTime();
 
     // Gentle breathing
-    const breathe = 1 + Math.sin(t * 1.5 + node.id * 0.7) * 0.03;
+    const breathe = 1 + Math.sin(t * 1.5 + pulsePhase * 0.01745) * 0.03;
 
     // Hover pulse
     const hoverScale = isHovered ? 1.4 : isSelected ? 1.2 : 1.0;
-    const targetScale = size * hoverScale * breathe;
+    meshRef.current.getWorldPosition(worldPosition.current);
+    const distance = camera.position.distanceTo(worldPosition.current);
+    const worldPerPixel = 2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)
+      / Math.max(canvasSize.height, 1);
+    const targetScale = worldPerPixel * 7 * hoverScale * breathe;
 
     // Smooth interpolation
     const currentScale = meshRef.current.scale.x;
@@ -113,19 +84,6 @@ export function GraphNode({
     // Emissive intensity
     const mat = meshRef.current.material;
     if (mat) {
-      const targetIntensity = isHovered
-        ? emissiveBase * 2.5
-        : isSelected
-        ? emissiveBase * 2.0
-        : isDimmed
-        ? emissiveBase * 0.2
-        : emissiveBase;
-      mat.emissiveIntensity = THREE.MathUtils.lerp(
-        mat.emissiveIntensity,
-        targetIntensity,
-        0.1
-      );
-
       // Opacity for dimming and zoom-based visibility
       let targetOpacity = isDimmed ? 0.25 : 1.0;
       targetOpacity *= nodeOpacity; // Apply zoom-based visibility
@@ -159,31 +117,8 @@ export function GraphNode({
     (e) => {
       e.stopPropagation();
       onClick?.(node);
-
-      // Smooth camera transition to node
-      if (controlsRef?.current) {
-        const controls = controlsRef.current;
-        const targetPos = new THREE.Vector3(...position);
-
-        // Animate target
-        const startTarget = controls.target.clone();
-        const startTime = performance.now();
-        const duration = 800;
-
-        function animate() {
-          const elapsed = performance.now() - startTime;
-          const t = Math.min(elapsed / duration, 1);
-          const eased = 1 - Math.pow(1 - t, 3); // ease out cubic
-
-          controls.target.lerpVectors(startTarget, targetPos, eased);
-          controls.update();
-
-          if (t < 1) requestAnimationFrame(animate);
-        }
-        animate();
-      }
     },
-    [node, onClick, position, controlsRef]
+    [node, onClick]
   );
 
   const handlePointerOver = useCallback(
@@ -192,7 +127,9 @@ export function GraphNode({
       gl.domElement.style.cursor = "pointer";
 
       // Get screen position for tooltip
-      const vec = new THREE.Vector3(...position);
+      const vec = meshRef.current
+        ? meshRef.current.getWorldPosition(new THREE.Vector3())
+        : new THREE.Vector3(...position);
       vec.project(camera);
       const x = (vec.x * 0.5 + 0.5) * gl.domElement.clientWidth;
       const y = (-vec.y * 0.5 + 0.5) * gl.domElement.clientHeight;
@@ -211,26 +148,11 @@ export function GraphNode({
     [gl, onUnhover]
   );
 
-  // Zoom-based visibility for clustered nodes
-  const nodeOpacity = useMemo(() => {
-    if (!inCluster) return 1.0; // Non-clustered nodes always visible
-    
-    if (level === "L2") {
-      if (zoomLevel > 0.7) return 0.0; // Hidden when far away
-      if (zoomLevel > 0.4) return (0.7 - zoomLevel) / 0.3; // Fade in
-      return 1.0; // Fully visible when close
-    }
-    
-    return 1.0; // L0/L3 always visible
-  }, [inCluster, level, zoomLevel]);
+  // Overview still shows every real entity. Zoom changes emphasis, not existence.
+  const nodeOpacity = inCluster && level === "L2" && zoomLevel > 0.7 ? 0.85 : 1;
 
   const label = node.label || node.canonical_label || "";
   const truncLabel = label.length > 20 ? label.substring(0, 17) + "…" : label;
-
-  // Don't render if completely invisible
-  if (nodeOpacity <= 0.01) {
-    return null;
-  }
 
   return (
     <group position={position}>
@@ -248,23 +170,15 @@ export function GraphNode({
 
       {/* Core node sphere */}
       <mesh
-        ref={meshRef}
+        ref={setMeshRef}
         onClick={handleClick}
         onPointerOver={handlePointerOver}
         onPointerOut={handlePointerOut}
         scale={size}
       >
         <sphereGeometry args={[1, 24, 24]} />
-        <meshStandardMaterial
-          color={color}
-          emissive={color}
-          emissiveIntensity={emissiveBase}
-          transparent
-          opacity={1}
-          roughness={0.3}
-          metalness={0.1}
-          toneMapped={false}
-        />
+        <meshBasicMaterial color={isSelected ? "#ffffff" : level === "L2" ? "#ffce72" : color}
+          transparent opacity={1} toneMapped={false} depthTest={false} />
       </mesh>
 
       {/* Selection ring */}
@@ -281,24 +195,23 @@ export function GraphNode({
         </mesh>
       )}
 
-      {/* Text label */}
-      {!isDimmed && nodeOpacity > 0.3 && (
-        <Billboard follow={true} lockX={false} lockY={false} lockZ={false}>
-          <Text
-            position={[0, -(size + 0.6), 0]}
-            fontSize={0.35}
-            color={isHovered || isSelected ? "#ffffff" : "rgba(255,255,255,0.55)"}
-            anchorX="center"
-            anchorY="top"
-            outlineWidth={0.02}
-            outlineColor="#000000"
-            font={undefined}
-            maxWidth={8}
-          >
-            {truncLabel}
-          </Text>
-        </Billboard>
-      )}
+      {/* Local, accessible labels remain usable at every zoom level. */}
+      <Html position={[0, 0, 0]} center zIndexRange={[5, 0]} style={{ pointerEvents: "auto", userSelect: "none" }}>
+        <button type="button" data-graph-entity={node.id} aria-label={`Select ${label || "entity"}`}
+          aria-pressed={Boolean(isSelected)} title={label}
+          onClick={(event) => { event.stopPropagation(); onClick?.(node); }}
+          onMouseEnter={handlePointerOver} onMouseLeave={handlePointerOut}
+          onFocus={(event) => { event.currentTarget.style.outline = "2px solid #ffd486"; handlePointerOver(event); }}
+          onBlur={(event) => { event.currentTarget.style.outline = "none"; handlePointerOut(event); }}
+          style={{
+            display: "block", transform: "translateY(22px)", cursor: "pointer",
+            color: isSelected ? "#ffffff" : "#e5edf7", fontSize: 12, lineHeight: "18px",
+            maxWidth: 125, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+            textShadow: "0 1px 3px #000", padding: "3px 7px", borderRadius: 5,
+            border: isSelected ? "1px solid #ffd486" : "1px solid #42516a",
+            background: isSelected ? "#303040" : "#121b2c", opacity: isDimmed ? 0.6 : 1,
+          }}>{truncLabel || "Untitled entity"}</button>
+      </Html>
     </group>
   );
 }

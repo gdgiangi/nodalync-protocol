@@ -21,6 +21,7 @@ use tokio::sync::Mutex;
 use tracing::info;
 
 use crate::protocol::ProtocolState;
+use std::sync::Arc;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -75,8 +76,7 @@ impl FeeConfig {
     /// Save to disk.
     fn save(&self, data_dir: &PathBuf) -> Result<(), String> {
         let dir = data_dir.join("studio");
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| format!("Failed to create studio dir: {}", e))?;
+        std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create studio dir: {}", e))?;
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize fee config: {}", e))?;
         std::fs::write(Self::config_path(data_dir), json)
@@ -152,8 +152,7 @@ impl TransactionLog {
 
     fn save(&self, data_dir: &PathBuf) -> Result<(), String> {
         let dir = data_dir.join("studio");
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| format!("Failed to create studio dir: {}", e))?;
+        std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create studio dir: {}", e))?;
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize transaction log: {}", e))?;
         std::fs::write(Self::log_path(data_dir), json)
@@ -257,7 +256,7 @@ pub struct FeeConfigResponse {
 /// Works even if node is not initialized (reads from disk).
 #[tauri::command]
 pub async fn get_fee_config(
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<FeeConfigResponse, String> {
     let data_dir = resolve_data_dir(&protocol).await;
     let config = FeeConfig::load(&data_dir);
@@ -286,7 +285,7 @@ pub async fn get_fee_config(
 #[tauri::command]
 pub async fn set_fee_rate(
     rate_percent: f64,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<FeeConfigResponse, String> {
     // Validate
     let rate = rate_percent / 100.0;
@@ -338,7 +337,7 @@ pub struct TransactionHistoryResponse {
 pub async fn get_transaction_history(
     limit: Option<u32>,
     offset: Option<u32>,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<TransactionHistoryResponse, String> {
     let data_dir = resolve_data_dir(&protocol).await;
     let log = TransactionLog::load(&data_dir);
@@ -356,11 +355,8 @@ pub async fn get_transaction_history(
 
     let mut transactions: Vec<TransactionRecord> = log.transactions;
     transactions.reverse(); // newest first
-    let transactions: Vec<TransactionRecord> = transactions
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .collect();
+    let transactions: Vec<TransactionRecord> =
+        transactions.into_iter().skip(offset).take(limit).collect();
 
     Ok(TransactionHistoryResponse {
         transactions,
@@ -400,7 +396,7 @@ pub struct FeeQuote {
 #[tauri::command]
 pub async fn get_fee_quote(
     content_price: u64,
-    protocol: State<'_, Mutex<Option<ProtocolState>>>,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<FeeQuote, String> {
     let data_dir = resolve_data_dir(&protocol).await;
     let config = FeeConfig::load(&data_dir);
@@ -421,7 +417,7 @@ pub async fn get_fee_quote(
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Resolve the data directory from protocol state or default.
-async fn resolve_data_dir(protocol: &State<'_, Mutex<Option<ProtocolState>>>) -> PathBuf {
+async fn resolve_data_dir(protocol: &State<'_, Arc<Mutex<Option<ProtocolState>>>>) -> PathBuf {
     let guard = protocol.lock().await;
     match guard.as_ref() {
         Some(state) => state.data_dir.clone(),

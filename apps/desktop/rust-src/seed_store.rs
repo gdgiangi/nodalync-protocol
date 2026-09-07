@@ -138,8 +138,7 @@ impl SeedStore {
 
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize seed store: {}", e))?;
-        std::fs::write(&path, json)
-            .map_err(|e| format!("Failed to write seed store: {}", e))?;
+        std::fs::write(&path, json).map_err(|e| format!("Failed to write seed store: {}", e))?;
 
         info!("Saved {} seeds to {}", self.seeds.len(), path.display());
         Ok(())
@@ -263,7 +262,10 @@ pub async fn discover_seeds_dns() -> Vec<SeedNode> {
             info!("DNS seed domain resolved, checking TXT records");
         }
         Err(e) => {
-            debug!("DNS seed discovery unavailable: {} (expected before deployment)", e);
+            debug!(
+                "DNS seed discovery unavailable: {} (expected before deployment)",
+                e
+            );
             return Vec::new();
         }
     };
@@ -271,7 +273,10 @@ pub async fn discover_seeds_dns() -> Vec<SeedNode> {
     // For TXT record lookup, we'd need a proper DNS crate like trust-dns.
     // For now, log that DNS discovery was attempted and return empty.
     // This will be wired up when seed infrastructure is deployed.
-    debug!("DNS seed discovery: TXT lookup not yet implemented for {}", DNS_SEED_DOMAIN);
+    debug!(
+        "DNS seed discovery: TXT lookup not yet implemented for {}",
+        DNS_SEED_DOMAIN
+    );
     let _ = resolver;
     Vec::new()
 }
@@ -327,7 +332,11 @@ mod tests {
             .unwrap();
 
         // Should not duplicate
-        let matching: Vec<_> = store.seeds.iter().filter(|s| s.peer_id == peer_id).collect();
+        let matching: Vec<_> = store
+            .seeds
+            .iter()
+            .filter(|s| s.peer_id == peer_id)
+            .collect();
         assert_eq!(matching.len(), 1);
         assert_eq!(matching[0].address, "/ip4/2.2.2.2/tcp/9000");
         assert_eq!(matching[0].label.as_deref(), Some("Updated"));

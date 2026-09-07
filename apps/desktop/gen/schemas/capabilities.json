@@ -1,1 +1,1 @@
-{}
+{"main-window":{"identifier":"main-window","description":"Core window events and native document selection for Nodalync Studio.","local":true,"windows":["main"],"permissions":["core:default","dialog:allow-open"]}}

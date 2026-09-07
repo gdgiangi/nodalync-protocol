@@ -67,7 +67,9 @@ impl PeerInfo {
             })
         });
 
-        let handshake_complete = stored.as_ref().map_or(false, |s| s.public_key.0 != [0u8; 32]);
+        let handshake_complete = stored
+            .as_ref()
+            .map_or(false, |s| s.public_key.0 != [0u8; 32]);
 
         PeerInfo {
             libp2p_id: p.to_string(),
@@ -381,13 +383,13 @@ pub async fn save_known_peers(
         let nodalync_id = network.nodalync_peer_id(peer).map(|id| id.to_string());
 
         // Use addresses from Kademlia routing table (if available)
-        let addresses = addr_map
-            .get(&peer_str)
-            .cloned()
-            .unwrap_or_default();
+        let addresses = addr_map.get(&peer_str).cloned().unwrap_or_default();
 
         if addresses.is_empty() {
-            debug!("Peer {} has no known addresses in routing table — skipping address save", peer_str);
+            debug!(
+                "Peer {} has no known addresses in routing table — skipping address save",
+                peer_str
+            );
         }
 
         store.record_peer(&peer_str, addresses, nodalync_id, false);
@@ -492,7 +494,9 @@ pub async fn auto_start_network(
     // Get identity secret for stable PeerId
     let identity_secret = {
         let guard = protocol.lock().await;
-        let state = guard.as_ref().ok_or("Node not initialized — unlock first")?;
+        let state = guard
+            .as_ref()
+            .ok_or("Node not initialized — unlock first")?;
         state.ops.private_key().map(|k| *k.as_bytes())
     };
 
@@ -624,11 +628,8 @@ pub async fn auto_start_network(
     {
         let protocol_arc = Arc::clone(&*protocol);
         let health_clone = Arc::clone(&*shared_health);
-        let hm_handle = health_monitor::spawn_health_monitor(
-            node.clone(),
-            protocol_arc,
-            health_clone,
-        );
+        let hm_handle =
+            health_monitor::spawn_health_monitor(node.clone(), protocol_arc, health_clone);
         let mut hm_guard = health_monitor.lock().await;
         *hm_guard = Some(hm_handle);
     }
@@ -643,7 +644,10 @@ pub async fn auto_start_network(
                 }
                 Ok(_) => {} // No content to re-announce
                 Err(e) => {
-                    warn!("Content re-announcement failed (network still active): {}", e);
+                    warn!(
+                        "Content re-announcement failed (network still active): {}",
+                        e
+                    );
                 }
             }
         }

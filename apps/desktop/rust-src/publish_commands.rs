@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use nodalync_crypto::{content_hash, Hash};
 use nodalync_net::{Network, NetworkConfig, NetworkNode};
-use nodalync_store::ManifestStore;
+use nodalync_store::{ContentStore, ManifestStore};
 use nodalync_types::{Metadata, Visibility};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -23,13 +23,12 @@ use crate::protocol::ProtocolState;
 pub fn parse_hash(hex: &str) -> Result<Hash, String> {
     let hex = hex.trim();
     if hex.len() != 64 {
-        return Err(format!("Invalid hash length: expected 64 hex chars, got {}", hex.len()));
+        return Err(format!(
+            "Invalid hash length: expected 64 hex chars, got {}",
+            hex.len()
+        ));
     }
-    let bytes: Vec<u8> = (0..64)
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16))
-        .collect::<Result<Vec<u8>, _>>()
-        .map_err(|e| format!("Invalid hex: {}", e))?;
+    let bytes = hex::decode(hex).map_err(|e| format!("Invalid hex: {}", e))?;
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&bytes);
     Ok(Hash(arr))
@@ -159,7 +158,9 @@ pub async fn get_identity(
     protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<IdentityInfo, String> {
     let guard = protocol.lock().await;
-    let state = guard.as_ref().ok_or("Node not initialized - unlock first")?;
+    let state = guard
+        .as_ref()
+        .ok_or("Node not initialized - unlock first")?;
 
     Ok(IdentityInfo {
         name: state.profile.as_ref().map(|p| p.name.clone()),
@@ -186,7 +187,9 @@ pub async fn publish_file(
     protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<PublishResult, String> {
     let mut guard = protocol.lock().await;
-    let state = guard.as_mut().ok_or("Node not initialized - unlock first")?;
+    let state = guard
+        .as_mut()
+        .ok_or("Node not initialized - unlock first")?;
 
     let path = PathBuf::from(&file_path);
     if !path.exists() {
@@ -197,8 +200,7 @@ pub async fn publish_file(
     }
 
     // Read file
-    let content = std::fs::read(&path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
+    let content = std::fs::read(&path).map_err(|e| format!("Failed to read file: {}", e))?;
     if content.is_empty() {
         return Err("Cannot publish an empty file.".into());
     }
@@ -212,14 +214,11 @@ pub async fn publish_file(
     });
 
     // Convert price (NDL → tinybars)
-    let price_units = price
-        .map(|p| (p * 100_000_000.0) as u64)
-        .unwrap_or(0);
+    let price_units = price.map(|p| (p * 100_000_000.0) as u64).unwrap_or(0);
 
     // Validate price
     if price_units > 0 {
-        nodalync_econ::validate_price(price_units)
-            .map_err(|e| format!("Invalid price: {}", e))?;
+        nodalync_econ::validate_price(price_units).map_err(|e| format!("Invalid price: {}", e))?;
     }
 
     // Parse visibility (protocol has Private, Unlisted, Shared, Offline)
@@ -261,14 +260,22 @@ pub async fn publish_file(
     }
 
     // Create content (stores to filesystem + manifest DB)
-    let hash = state.ops.create_content(&content, metadata)
+    let hash = state
+        .ops
+        .create_content(&content, metadata)
         .map_err(|e| format!("Failed to create content: {}", e))?;
 
     // Extract L1 mentions
-    let mentions = state.ops.extract_l1_summary(&hash).ok().map(|s| s.mention_count as usize);
+    let mentions = state
+        .ops
+        .extract_l1_summary(&hash)
+        .ok()
+        .map(|s| s.mention_count as usize);
 
     // Publish (visibility + price + network announce if connected)
-    state.ops.publish_content(&hash, vis, price_units)
+    state
+        .ops
+        .publish_content(&hash, vis, price_units)
         .await
         .map_err(|e| format!("Failed to publish: {}", e))?;
 
@@ -297,7 +304,9 @@ pub async fn publish_text(
     protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<PublishResult, String> {
     let mut guard = protocol.lock().await;
-    let state = guard.as_mut().ok_or("Node not initialized - unlock first")?;
+    let state = guard
+        .as_mut()
+        .ok_or("Node not initialized - unlock first")?;
 
     if text.is_empty() {
         return Err("Cannot publish empty text.".into());
@@ -305,13 +314,10 @@ pub async fn publish_text(
 
     let content = text.as_bytes();
 
-    let price_units = price
-        .map(|p| (p * 100_000_000.0) as u64)
-        .unwrap_or(0);
+    let price_units = price.map(|p| (p * 100_000_000.0) as u64).unwrap_or(0);
 
     if price_units > 0 {
-        nodalync_econ::validate_price(price_units)
-            .map_err(|e| format!("Invalid price: {}", e))?;
+        nodalync_econ::validate_price(price_units).map_err(|e| format!("Invalid price: {}", e))?;
     }
 
     let vis = match visibility.as_deref() {
@@ -333,12 +339,20 @@ pub async fn publish_text(
         return Err(format!("Content already exists ({})", computed_hash));
     }
 
-    let hash = state.ops.create_content(content, metadata)
+    let hash = state
+        .ops
+        .create_content(content, metadata)
         .map_err(|e| format!("Failed to create content: {}", e))?;
 
-    let mentions = state.ops.extract_l1_summary(&hash).ok().map(|s| s.mention_count as usize);
+    let mentions = state
+        .ops
+        .extract_l1_summary(&hash)
+        .ok()
+        .map(|s| s.mention_count as usize);
 
-    state.ops.publish_content(&hash, vis, price_units)
+    state
+        .ops
+        .publish_content(&hash, vis, price_units)
         .await
         .map_err(|e| format!("Failed to publish: {}", e))?;
 
@@ -362,10 +376,16 @@ pub async fn list_content(
     protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<Vec<ContentItem>, String> {
     let guard = protocol.lock().await;
-    let state = guard.as_ref().ok_or("Node not initialized - unlock first")?;
+    let state = guard
+        .as_ref()
+        .ok_or("Node not initialized - unlock first")?;
 
     let filter = nodalync_store::ManifestFilter::new();
-    let manifests = state.ops.state().manifests.list(filter)
+    let manifests = state
+        .ops
+        .state()
+        .manifests
+        .list(filter)
         .map_err(|e| format!("Failed to list content: {}", e))?;
 
     let items: Vec<ContentItem> = manifests
@@ -392,11 +412,15 @@ pub async fn get_content_details(
     protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<ContentItem, String> {
     let guard = protocol.lock().await;
-    let state = guard.as_ref().ok_or("Node not initialized - unlock first")?;
+    let state = guard
+        .as_ref()
+        .ok_or("Node not initialized - unlock first")?;
 
     let hash_parsed = parse_hash(&hash)?;
 
-    let manifest = state.ops.get_content_manifest(&hash_parsed)
+    let manifest = state
+        .ops
+        .get_content_manifest(&hash_parsed)
         .map_err(|e| format!("Failed to get manifest: {}", e))?
         .ok_or_else(|| format!("Content not found: {}", hash))?;
 
@@ -412,6 +436,32 @@ pub async fn get_content_details(
     })
 }
 
+/// Read locally stored UTF-8 content without network queries or payments.
+#[tauri::command]
+pub async fn read_content_text(
+    hash: String,
+    protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
+) -> Result<String, String> {
+    let guard = protocol.lock().await;
+    let state = guard
+        .as_ref()
+        .ok_or("Node not initialized - unlock first")?;
+    read_local_content_text(state, &hash)
+}
+
+fn read_local_content_text(state: &ProtocolState, hash: &str) -> Result<String, String> {
+    let parsed = parse_hash(hash)?;
+    let content = state
+        .ops
+        .state()
+        .content
+        .load(&parsed)
+        .map_err(|error| format!("Failed to read local content: {}", error))?
+        .ok_or_else(|| format!("Content is not stored on this device: {}", hash))?;
+    String::from_utf8(content)
+        .map_err(|_| "This file is not UTF-8 text and cannot be shown as a note.".to_string())
+}
+
 /// Delete published content from this node.
 #[tauri::command]
 pub async fn delete_content(
@@ -419,17 +469,27 @@ pub async fn delete_content(
     protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<(), String> {
     let mut guard = protocol.lock().await;
-    let state = guard.as_mut().ok_or("Node not initialized - unlock first")?;
+    let state = guard
+        .as_mut()
+        .ok_or("Node not initialized - unlock first")?;
 
     let hash_parsed = parse_hash(&hash)?;
 
     // Delete from content store
     use nodalync_store::ContentStore;
-    state.ops.state_mut().content.delete(&hash_parsed)
+    state
+        .ops
+        .state_mut()
+        .content
+        .delete(&hash_parsed)
         .map_err(|e| format!("Failed to delete content: {}", e))?;
 
     // Delete manifest
-    state.ops.state_mut().manifests.delete(&hash_parsed)
+    state
+        .ops
+        .state_mut()
+        .manifests
+        .delete(&hash_parsed)
         .map_err(|e| format!("Failed to delete manifest: {}", e))?;
 
     info!("Deleted content: {}", hash);
@@ -452,12 +512,17 @@ pub async fn get_node_status(
         Some(state) => {
             let content_count = {
                 let filter = nodalync_store::ManifestFilter::new();
-                state.ops.state().manifests.list(filter)
+                state
+                    .ops
+                    .state()
+                    .manifests
+                    .list(filter)
                     .map(|v| v.len())
                     .unwrap_or(0)
             };
 
-            let connected_peers = state.network
+            let connected_peers = state
+                .network
                 .as_ref()
                 .map(|n| n.connected_peers().len())
                 .unwrap_or(0);
@@ -511,7 +576,9 @@ pub async fn start_network(
     // Store the network in protocol state
     {
         let mut guard = protocol.lock().await;
-        let state = guard.as_mut().ok_or("Node not initialized - unlock first")?;
+        let state = guard
+            .as_mut()
+            .ok_or("Node not initialized - unlock first")?;
         state.ops.set_network(node.clone());
         state.network = Some(node.clone());
     }
@@ -579,7 +646,9 @@ pub async fn stop_network(
 
     // Now stop the network in protocol state
     let mut guard = protocol.lock().await;
-    let state = guard.as_mut().ok_or("Node not initialized - unlock first")?;
+    let state = guard
+        .as_mut()
+        .ok_or("Node not initialized - unlock first")?;
     state.stop_network();
     Ok(())
 }
@@ -590,9 +659,12 @@ pub async fn get_peers(
     protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<Vec<String>, String> {
     let guard = protocol.lock().await;
-    let state = guard.as_ref().ok_or("Node not initialized - unlock first")?;
+    let state = guard
+        .as_ref()
+        .ok_or("Node not initialized - unlock first")?;
 
-    let peers = state.network
+    let peers = state
+        .network
         .as_ref()
         .map(|n| n.connected_peers().iter().map(|p| p.to_string()).collect())
         .unwrap_or_default();
@@ -629,7 +701,9 @@ pub async fn add_content(
     protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<ImportResult, String> {
     let mut guard = protocol.lock().await;
-    let state = guard.as_mut().ok_or("Node not initialized - unlock first")?;
+    let state = guard
+        .as_mut()
+        .ok_or("Node not initialized - unlock first")?;
 
     let path = PathBuf::from(&file_path);
     if !path.exists() {
@@ -640,8 +714,7 @@ pub async fn add_content(
     }
 
     // Read file
-    let content = std::fs::read(&path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
+    let content = std::fs::read(&path).map_err(|e| format!("Failed to read file: {}", e))?;
     if content.is_empty() {
         return Err("Cannot import an empty file.".into());
     }
@@ -655,7 +728,8 @@ pub async fn add_content(
     });
 
     // Detect MIME type from extension
-    let mime = path.extension()
+    let mime = path
+        .extension()
         .and_then(|e| e.to_str())
         .map(|ext| match ext.to_lowercase().as_str() {
             "txt" => "text/plain",
@@ -689,16 +763,25 @@ pub async fn add_content(
     }
 
     // Store content locally (L0)
-    let hash = state.ops.create_content(&content, metadata)
+    let hash = state
+        .ops
+        .create_content(&content, metadata)
         .map_err(|e| format!("Failed to store content: {}", e))?;
 
     // Extract L1 mentions (best-effort — don't fail the import if extraction fails)
-    let mentions = state.ops.extract_l1_summary(&hash)
+    let mentions = state
+        .ops
+        .extract_l1_summary(&hash)
         .ok()
         .map(|s| s.mention_count as usize);
 
-    info!("Imported L0 content: {} ({}) — {} bytes, {:?} mentions",
-        title, hash, content.len(), mentions);
+    info!(
+        "Imported L0 content: {} ({}) — {} bytes, {:?} mentions",
+        title,
+        hash,
+        content.len(),
+        mentions
+    );
 
     Ok(ImportResult {
         hash: hash.to_string(),
@@ -720,7 +803,9 @@ pub async fn add_text_content(
     protocol: State<'_, Arc<Mutex<Option<ProtocolState>>>>,
 ) -> Result<ImportResult, String> {
     let mut guard = protocol.lock().await;
-    let state = guard.as_mut().ok_or("Node not initialized - unlock first")?;
+    let state = guard
+        .as_mut()
+        .ok_or("Node not initialized - unlock first")?;
 
     let content = text.as_bytes();
     if content.is_empty() {
@@ -744,16 +829,25 @@ pub async fn add_text_content(
     }
 
     // Store content locally (L0)
-    let hash = state.ops.create_content(content, metadata)
+    let hash = state
+        .ops
+        .create_content(content, metadata)
         .map_err(|e| format!("Failed to store content: {}", e))?;
 
     // Extract L1 mentions
-    let mentions = state.ops.extract_l1_summary(&hash)
+    let mentions = state
+        .ops
+        .extract_l1_summary(&hash)
         .ok()
         .map(|s| s.mention_count as usize);
 
-    info!("Imported L0 text: {} ({}) — {} bytes, {:?} mentions",
-        title, hash, content.len(), mentions);
+    info!(
+        "Imported L0 text: {} ({}) — {} bytes, {:?} mentions",
+        title,
+        hash,
+        content.len(),
+        mentions
+    );
 
     Ok(ImportResult {
         hash: hash.to_string(),
@@ -762,4 +856,47 @@ pub async fn add_text_content(
         content_type: "text/plain".to_string(),
         mentions,
     })
+}
+
+#[cfg(test)]
+mod local_reader_tests {
+    use super::*;
+
+    #[test]
+    fn hash_parser_rejects_non_ascii_without_panicking() {
+        assert!(parse_hash(&"é".repeat(32)).is_err());
+        assert!(parse_hash(&"g".repeat(64)).is_err());
+    }
+
+    #[test]
+    fn local_reader_reads_notes_and_rejects_binary_or_missing_content() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut state =
+            ProtocolState::init(&directory.path().to_path_buf(), "test-password").unwrap();
+        let note = "A local note about Nodalync.\nUnicode stays intact: café.";
+        let note_hash = state
+            .ops
+            .state_mut()
+            .content
+            .store(note.as_bytes())
+            .unwrap();
+        assert_eq!(
+            read_local_content_text(&state, &note_hash.to_string()).unwrap(),
+            note
+        );
+        let binary_hash = state
+            .ops
+            .state_mut()
+            .content
+            .store(&[0xff, 0x00, 0xfe])
+            .unwrap();
+        assert!(read_local_content_text(&state, &binary_hash.to_string())
+            .unwrap_err()
+            .contains("not UTF-8"));
+        let missing_hash = content_hash(b"not stored");
+        assert!(read_local_content_text(&state, &missing_hash.to_string())
+            .unwrap_err()
+            .contains("not stored"));
+        assert!(state.network.is_none());
+    }
 }
