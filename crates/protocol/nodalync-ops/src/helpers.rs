@@ -44,7 +44,7 @@ pub fn total_provenance_weight(entries: &[ProvenanceEntry]) -> u32 {
 /// Get unique owners from provenance entries.
 pub fn unique_owners(entries: &[ProvenanceEntry]) -> Vec<PeerId> {
     let mut owners: Vec<PeerId> = entries.iter().map(|e| e.owner).collect();
-    owners.sort_by(|a, b| a.0.cmp(&b.0));
+    owners.sort_by_key(|owner| owner.0);
     owners.dedup();
     owners
 }
