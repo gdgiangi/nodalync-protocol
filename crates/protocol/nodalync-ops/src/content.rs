@@ -5,7 +5,9 @@
 
 use nodalync_crypto::{content_hash, Hash, Timestamp};
 use nodalync_store::{CacheStore, ContentStore, ManifestStore, ProvenanceGraph};
-use nodalync_types::{ContentType, Manifest, Metadata, Provenance, Version, Visibility};
+use nodalync_types::{
+    ContentType, Manifest, Metadata, Provenance, ProvenanceEntry, Version, Visibility,
+};
 use nodalync_valid::Validator;
 
 use crate::error::{OpsError, OpsResult};
@@ -196,13 +198,20 @@ where
                 "derive requires at least one source",
             ));
         }
-
-        // 1. Verify all sources were queried (in cache or owned)
+        // 1. Verify all sources were queried (cached, imported, or owned)
         // Note: L2 sources are special - they can only be used if owned (never queried)
         for source_hash in sources {
             let manifest_opt = self.state.manifests.load(source_hash)?;
             let is_cached = self.state.cache.is_cached(source_hash);
-            let is_owned = manifest_opt.is_some();
+            let is_owned = manifest_opt
+                .as_ref()
+                .is_some_and(|manifest| manifest.owner == self.peer_id());
+            let is_imported = match &manifest_opt {
+                Some(manifest) if manifest.content_type == ContentType::L3 => {
+                    self.state.has_l3_reference(source_hash, &manifest.owner)?
+                }
+                _ => false,
+            };
 
             // Check if this is an L2 source
             if let Some(ref manifest) = manifest_opt {
@@ -215,7 +224,7 @@ where
                 }
             }
 
-            if !is_cached && !is_owned {
+            if !is_cached && !is_owned && !is_imported {
                 return Err(OpsError::SourceNotQueried(*source_hash));
             }
         }
@@ -242,7 +251,21 @@ where
             .map(|(hash, m)| (*hash, &m.provenance, m.owner, m.visibility))
             .collect();
 
-        let provenance = Provenance::from_sources(&provenance_sources);
+        let mut provenance = Provenance::from_sources(&provenance_sources);
+        // An imported L3 is a local reference, not a new owned L0 manifest.
+        // Preserve every upstream root and add its creator as a foundation.
+        for (source_hash, source) in &source_data {
+            if source.content_type == ContentType::L3
+                && self.state.has_l3_reference(source_hash, &source.owner)?
+            {
+                provenance.root_l0l1.push(ProvenanceEntry::new(
+                    *source_hash,
+                    source.owner,
+                    source.visibility,
+                ));
+            }
+        }
+        provenance.root_l0l1 = Provenance::merge_entries(provenance.root_l0l1);
 
         // Compute content hash
         let hash = content_hash(insight);
@@ -284,7 +307,7 @@ where
     /// Spec §7.1.6:
     /// 1. Verifies L3 was queried (in cache)
     /// 2. Verifies content_type is L3
-    /// 3. Stores reference as new L0
+    /// 3. Stores a local reference without changing the source manifest
     pub fn reference_l3_as_l0(&mut self, l3_hash: &Hash) -> OpsResult<Hash> {
         let timestamp = current_timestamp();
         self.reference_l3_as_l0_with_timestamp(l3_hash, timestamp)
@@ -296,64 +319,28 @@ where
         l3_hash: &Hash,
         timestamp: Timestamp,
     ) -> OpsResult<Hash> {
-        // 1. Verify L3 was queried (in cache or owned)
-        let cached = self.state.cache.get(l3_hash)?;
-        let owned_manifest = self.state.manifests.load(l3_hash)?;
+        let manifest = self
+            .state
+            .manifests
+            .load(l3_hash)?
+            .ok_or(OpsError::SourceNotQueried(*l3_hash))?;
 
-        let (content, manifest) = if let Some(cached_content) = cached {
-            // Get manifest for cached content
-            if let Some(m) = owned_manifest {
-                (cached_content.content, m)
-            } else {
-                return Err(OpsError::invalid_operation(
-                    "cached L3 must have local manifest for reference",
-                ));
-            }
-        } else if let Some(m) = owned_manifest {
-            // Load owned content
-            let content = self
-                .state
-                .content
-                .load(l3_hash)?
-                .ok_or(OpsError::NotFound(*l3_hash))?;
-            (content, m)
-        } else {
+        // A remote manifest alone is discovery metadata, not evidence of access.
+        if manifest.owner != self.peer_id()
+            && !self.state.cache.is_cached(l3_hash)
+            && !self.state.has_l3_reference(l3_hash, &manifest.owner)?
+        {
             return Err(OpsError::SourceNotQueried(*l3_hash));
-        };
+        }
 
         // 2. Verify content_type is L3
         if manifest.content_type != ContentType::L3 {
             return Err(OpsError::NotAnL3);
         }
 
-        // 3. Create new L0 reference
-        // The new L0 hash is the same content, but treated as a new L0
-        let new_hash = *l3_hash; // Same content = same hash
-
-        // Create L0 provenance (self-referential)
-        let provenance = Provenance::new_l0(new_hash, self.peer_id());
-
-        // Create new L0 manifest
-        let new_manifest = Manifest {
-            hash: new_hash,
-            content_type: ContentType::L0, // Now it's L0
-            owner: self.peer_id(),
-            version: Version::new_v1(new_hash, timestamp),
-            visibility: Visibility::Private,
-            access: Default::default(),
-            metadata: manifest.metadata.clone(),
-            economics: Default::default(),
-            provenance,
-            created_at: timestamp,
-            updated_at: timestamp,
-        };
-
-        // Store as L0
-        self.state.content.store_verified(&new_hash, &content)?;
-        self.state.manifests.store(&new_manifest)?;
-        self.state.provenance.add(&new_hash, &[])?;
-
-        Ok(new_hash)
+        self.state
+            .store_l3_reference(l3_hash, &manifest.owner, timestamp)?;
+        Ok(*l3_hash)
     }
 }
 
@@ -470,6 +457,7 @@ mod tests {
         let insight = b"Derived insight";
         let meta2 = Metadata::new("L3", insight.len() as u64);
         let l3_hash = ops.derive_content(&[source_hash], insight, meta2).unwrap();
+        let original = ops.state.manifests.load(&l3_hash).unwrap().unwrap();
 
         // Reference L3 as L0
         let l0_hash = ops.reference_l3_as_l0(&l3_hash).unwrap();
@@ -477,9 +465,272 @@ mod tests {
         // L0 hash should be same (same content)
         assert_eq!(l0_hash, l3_hash);
 
-        // But manifest should now be L0
-        // Note: This would overwrite the L3 manifest in current implementation
-        // In practice, you'd want to handle this differently
+        assert_eq!(
+            ops.state.manifests.load(&l3_hash).unwrap().unwrap(),
+            original
+        );
+        assert!(ops
+            .state
+            .has_l3_reference(&l3_hash, &original.owner)
+            .unwrap());
+        assert!(ops
+            .state
+            .provenance
+            .is_ancestor(&source_hash, &l3_hash)
+            .unwrap());
+    }
+
+    /// Simulate the persisted result of a successful query; settlement itself
+    /// is covered by the economic loop tests rather than this import test.
+    fn cache_source(ops: &mut DefaultNodeOperations, manifest: &Manifest, content: &[u8]) {
+        let receipt = nodalync_wire::PaymentReceipt {
+            payment_id: content_hash(b"import test receipt"),
+            amount: 100,
+            timestamp: 1000,
+            channel_nonce: 1,
+            distributor_signature: nodalync_crypto::Signature::from_bytes([0u8; 64]),
+        };
+        ops.state.manifests.store(manifest).unwrap();
+        ops.state
+            .cache
+            .cache(nodalync_store::CachedContent::new(
+                manifest.hash,
+                content.to_vec(),
+                manifest.owner,
+                1000,
+                receipt,
+            ))
+            .unwrap();
+    }
+
+    #[test]
+    fn test_import_preserves_all_contributors_across_generations_and_restart() {
+        let (mut alice, _alice_dir) = create_test_ops();
+        let (mut bob, _bob_dir) = create_test_ops();
+        let (mut carol, _carol_dir) = create_test_ops();
+        let (mut dave, _dave_dir) = create_test_ops();
+
+        let source = b"Alice's original observation";
+        let root = alice
+            .create_content(source, Metadata::new("Observation", source.len() as u64))
+            .unwrap();
+        let source_manifest = alice.state.manifests.load(&root).unwrap().unwrap();
+        cache_source(&mut bob, &source_manifest, source);
+
+        let insight = b"Bob's insight grounded in Alice's observation";
+        let bob_hash = bob
+            .derive_content(
+                &[root],
+                insight,
+                Metadata::new("Insight", insight.len() as u64),
+            )
+            .unwrap();
+        let bob_manifest = bob.state.manifests.load(&bob_hash).unwrap().unwrap();
+        cache_source(&mut carol, &bob_manifest, insight);
+
+        // A plain derivation preserves roots but does not promote the source
+        // synthesizer. The local import is what changes that decision.
+        let plain = carol
+            .derive_content(&[bob_hash], b"Plain derivative", Metadata::new("Plain", 16))
+            .unwrap();
+        let plain_manifest = carol.state.manifests.load(&plain).unwrap().unwrap();
+        assert_eq!(
+            plain_manifest.provenance.root_l0l1,
+            bob_manifest.provenance.root_l0l1
+        );
+
+        carol
+            .reference_l3_as_l0_with_timestamp(&bob_hash, 2000)
+            .unwrap();
+        carol
+            .reference_l3_as_l0_with_timestamp(&bob_hash, 3000)
+            .unwrap();
+        assert_eq!(
+            carol.state.manifests.load(&bob_hash).unwrap().unwrap(),
+            bob_manifest
+        );
+        // Import records stay local; cached response bytes are not promoted
+        // into owned content storage or republished as Carol's L0.
+        assert!(!carol.state.content.exists(&bob_hash));
+        let imported_at: u64 = carol
+            .state
+            .connection()
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT imported_at FROM l3_references WHERE hash = ?1",
+                [bob_hash.0.as_slice()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(imported_at, 2000);
+        let repeated = carol
+            .derive_content(
+                &[bob_hash, bob_hash],
+                b"Repeated source",
+                Metadata::new("Repeated", 15),
+            )
+            .unwrap();
+        let repeated = carol.state.manifests.load(&repeated).unwrap().unwrap();
+        assert_eq!(
+            repeated
+                .provenance
+                .root_l0l1
+                .iter()
+                .find(|e| e.hash == root)
+                .unwrap()
+                .weight,
+            4
+        );
+        assert_eq!(
+            repeated
+                .provenance
+                .root_l0l1
+                .iter()
+                .find(|e| e.hash == bob_hash)
+                .unwrap()
+                .weight,
+            2
+        );
+
+        // A durable import records prior access even after normal cache eviction.
+        carol.state.cache.evict(0).unwrap();
+        assert!(!carol.state.cache.is_cached(&bob_hash));
+        carol.reference_l3_as_l0(&bob_hash).unwrap();
+
+        let carol_id = carol.peer_id();
+        let config = carol.state.config().clone();
+        drop(carol);
+        let mut carol = DefaultNodeOperations::with_defaults(
+            nodalync_store::NodeState::open(config).unwrap(),
+            carol_id,
+        );
+        let second = b"Carol's new conclusion";
+        let carol_hash = carol
+            .derive_content(
+                &[bob_hash],
+                second,
+                Metadata::new("Conclusion", second.len() as u64),
+            )
+            .unwrap();
+        let carol_manifest = carol.state.manifests.load(&carol_hash).unwrap().unwrap();
+        let roots = &carol_manifest.provenance.root_l0l1;
+        assert_eq!(roots.len(), 2);
+        assert_eq!(
+            roots.iter().find(|e| e.hash == root).unwrap(),
+            &bob_manifest.provenance.root_l0l1[0]
+        );
+        assert_eq!(
+            roots.iter().find(|e| e.hash == bob_hash).unwrap(),
+            &ProvenanceEntry::new(bob_hash, bob.peer_id(), bob_manifest.visibility)
+        );
+        let distributions = nodalync_econ::distribute_revenue(600, &carol_id, roots);
+        let amount_for = |peer| {
+            distributions
+                .iter()
+                .find(|d| d.recipient == peer)
+                .unwrap()
+                .amount
+        };
+        assert_eq!(amount_for(alice.peer_id()), 380);
+        assert_eq!(amount_for(bob.peer_id()), 190);
+        assert_eq!(amount_for(carol_id), 30);
+
+        // The new synthesizer can itself become a foundation, without losing
+        // Alice or Bob or resetting the derivation depth.
+        cache_source(&mut dave, &carol_manifest, second);
+        dave.reference_l3_as_l0(&carol_hash).unwrap();
+        let final_content = b"Dave's further conclusion";
+        let final_hash = dave
+            .derive_content(
+                &[carol_hash],
+                final_content,
+                Metadata::new("Further", final_content.len() as u64),
+            )
+            .unwrap();
+        let final_manifest = dave.state.manifests.load(&final_hash).unwrap().unwrap();
+        assert_eq!(final_manifest.provenance.depth, 3);
+        assert_eq!(final_manifest.provenance.root_l0l1.len(), 3);
+        let distributions = nodalync_econ::distribute_revenue(
+            800,
+            &dave.peer_id(),
+            &final_manifest.provenance.root_l0l1,
+        );
+        let amount_for = |peer| {
+            distributions
+                .iter()
+                .find(|d| d.recipient == peer)
+                .unwrap()
+                .amount
+        };
+        assert_eq!(amount_for(alice.peer_id()), 380);
+        assert_eq!(amount_for(bob.peer_id()), 190);
+        assert_eq!(amount_for(carol_id), 190);
+        assert_eq!(amount_for(dave.peer_id()), 40);
+    }
+
+    #[test]
+    fn test_remote_manifest_alone_does_not_authorize_import_or_derivation() {
+        let (mut author, _author_dir) = create_test_ops();
+        let (mut requester, _requester_dir) = create_test_ops();
+        let root = author
+            .create_content(b"Root", Metadata::new("Root", 4))
+            .unwrap();
+        let l3 = author
+            .derive_content(&[root], b"Insight", Metadata::new("Insight", 7))
+            .unwrap();
+        let manifest = author.state.manifests.load(&l3).unwrap().unwrap();
+        requester.state.manifests.store(&manifest).unwrap();
+
+        assert!(matches!(
+            requester.reference_l3_as_l0(&l3),
+            Err(OpsError::SourceNotQueried(_))
+        ));
+        assert!(matches!(
+            requester.derive_content(&[l3], b"New", Metadata::new("New", 3)),
+            Err(OpsError::SourceNotQueried(_))
+        ));
+        assert!(!requester
+            .state
+            .has_l3_reference(&l3, &manifest.owner)
+            .unwrap());
+        assert!(matches!(
+            requester.reference_l3_as_l0(&content_hash(b"Missing")),
+            Err(OpsError::SourceNotQueried(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_imported_visibility_snapshot_survives_source_publication() {
+        let (mut ops, _dir) = create_test_ops();
+        let root = ops
+            .create_content(b"Root", Metadata::new("Root", 4))
+            .unwrap();
+        let first = ops
+            .derive_content(&[root], b"First insight", Metadata::new("First", 13))
+            .unwrap();
+        ops.reference_l3_as_l0(&first).unwrap();
+        let next = ops
+            .derive_content(&[first], b"Next insight", Metadata::new("Next", 12))
+            .unwrap();
+        ops.publish_content(&first, Visibility::Shared, 0)
+            .await
+            .unwrap();
+
+        let combined = ops
+            .derive_content(&[first, next], b"Combined", Metadata::new("Combined", 8))
+            .unwrap();
+        let manifest = ops.state.manifests.load(&combined).unwrap().unwrap();
+        let entry = manifest
+            .provenance
+            .root_l0l1
+            .iter()
+            .find(|entry| entry.hash == first)
+            .unwrap();
+        assert_eq!(entry.weight, 2);
+        // Existing paths retain visibility at their original derivation time.
+        assert_eq!(entry.visibility, Visibility::Private);
+        assert_eq!(entry.owner, ops.peer_id());
     }
 
     #[test]

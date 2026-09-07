@@ -92,7 +92,7 @@ pub use settlement::SqliteSettlementQueue;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use nodalync_crypto::Hash;
+use nodalync_crypto::{Hash, PeerId, Timestamp};
 use nodalync_wire::AnnouncePayload;
 use rusqlite::Connection;
 
@@ -327,6 +327,40 @@ impl NodeState {
     /// Get a reference to the shared database connection.
     pub fn connection(&self) -> Arc<Mutex<Connection>> {
         Arc::clone(&self.conn)
+    }
+
+    /// Record a local choice to treat an L3 as a foundational source (§7.1.6).
+    ///
+    /// The original manifest and owner remain unchanged. Repeated imports do not
+    /// accumulate weight or replace the first import timestamp.
+    pub fn store_l3_reference(
+        &self,
+        hash: &Hash,
+        owner: &PeerId,
+        imported_at: Timestamp,
+    ) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
+        conn.execute(
+            "INSERT OR IGNORE INTO l3_references (hash, owner, imported_at) VALUES (?1, ?2, ?3)",
+            rusqlite::params![hash.0.as_slice(), owner.0.as_slice(), imported_at],
+        )?;
+        Ok(())
+    }
+
+    /// Whether this exact source owner has been imported as a local foundation.
+    pub fn has_l3_reference(&self, hash: &Hash, owner: &PeerId) -> Result<bool> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
+        Ok(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM l3_references WHERE hash = ?1 AND owner = ?2)",
+            rusqlite::params![hash.0.as_slice(), owner.0.as_slice()],
+            |row| row.get(0),
+        )?)
     }
 
     /// Store a content announcement from a remote node.
