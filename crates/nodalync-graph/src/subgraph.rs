@@ -292,7 +292,7 @@ pub fn get_neighbors(conn: &Connection, entity_id: &str) -> Result<Vec<Entity>> 
     }
 
     // Sort by source_count (most mentioned first)
-    neighbors.sort_by(|a, b| b.source_count.cmp(&a.source_count));
+    neighbors.sort_by_key(|neighbor| std::cmp::Reverse(neighbor.source_count));
 
     Ok(neighbors)
 }

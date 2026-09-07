@@ -885,9 +885,12 @@ Also check [[Nodalync]] again.
 
     #[test]
     fn test_entity_from_node_path() {
-        let vault = Path::new("C:\\vault");
-        let file = Path::new("C:\\vault\\Nodes\\People\\Example Test Person.md");
-        let result = entity_from_node_path(file, vault);
+        let vault = Path::new("vault");
+        let file = vault
+            .join("Nodes")
+            .join("People")
+            .join("Example Test Person.md");
+        let result = entity_from_node_path(&file, vault);
         assert!(result.is_some());
         let (label, etype) = result.unwrap();
         assert_eq!(label, "Example Test Person");

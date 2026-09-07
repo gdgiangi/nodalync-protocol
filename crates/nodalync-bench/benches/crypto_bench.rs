@@ -1,7 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use nodalync_crypto::{
-    generate_identity, peer_id_from_public_key, peer_id_to_string, sign, verify, PrivateKey,
-    PublicKey, Signature,
+    generate_identity, peer_id_from_public_key, peer_id_to_string, sign, verify,
 };
 
 fn bench_identity_generation(c: &mut Criterion) {
@@ -49,7 +48,7 @@ fn bench_signing_throughput(c: &mut Criterion) {
     for size in [64, 256, 1024, 4096, 16384].iter() {
         let message = vec![0u8; *size];
         group.throughput(Throughput::Bytes(*size as u64));
-        group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
+        group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, _size| {
             b.iter(|| {
                 let signature = sign(&private_key, black_box(&message));
                 black_box(signature);
@@ -68,7 +67,7 @@ fn bench_verification_throughput(c: &mut Criterion) {
         let signature = sign(&private_key, &message);
 
         group.throughput(Throughput::Bytes(*size as u64));
-        group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
+        group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, _size| {
             b.iter(|| {
                 let result = verify(
                     black_box(&public_key),
@@ -97,7 +96,7 @@ fn bench_public_key_serialization(c: &mut Criterion) {
     c.bench_function("peer_id_from_string", |b| {
         b.iter(|| {
             let result = nodalync_crypto::peer_id_from_string(black_box(&peer_id_string));
-            black_box(result);
+            let _ = black_box(result);
         });
     });
 }

@@ -27,8 +27,8 @@ fn create_sample_manifest(id: u64, content_size: usize) -> (Manifest, Vec<u8>) {
     let owner = peer_id_from_public_key(&public_key);
     let content = create_sample_content(id, content_size);
     let hash = content_hash(&content);
-    let metadata = Metadata::new(&format!("Test Content {}", id), content.len() as u64);
-    let manifest = Manifest::new_l0(hash, owner, metadata, 1640995200 + id as u64);
+    let metadata = Metadata::new(format!("Test Content {}", id), content.len() as u64);
+    let manifest = Manifest::new_l0(hash, owner, metadata, 1640995200 + id);
     (manifest, content)
 }
 
@@ -57,7 +57,7 @@ fn bench_content_storage(c: &mut Criterion) {
     c.bench_function("retrieve_content", |b| {
         b.iter(|| {
             let retrieved = state_mut.content.load(black_box(&hash));
-            black_box(retrieved);
+            let _ = black_box(retrieved);
         });
     });
 }
@@ -91,7 +91,7 @@ fn bench_manifest_storage(c: &mut Criterion) {
     c.bench_function("store_manifest", |b| {
         b.iter_with_setup(
             || {
-                let (mut state, _temp_dir) = create_temp_state();
+                let (state, _temp_dir) = create_temp_state();
                 let (manifest, _) = create_sample_manifest(rand::random(), 1024);
                 (state, manifest, _temp_dir)
             },
@@ -108,7 +108,7 @@ fn bench_manifest_storage(c: &mut Criterion) {
     c.bench_function("retrieve_manifest", |b| {
         b.iter(|| {
             let retrieved = state_mut.manifests.load(black_box(&manifest.hash));
-            black_box(retrieved);
+            let _ = black_box(retrieved);
         });
     });
 }
@@ -160,7 +160,7 @@ fn bench_batch_content_operations(c: &mut Criterion) {
                     |(state, content_hashes, _temp_dir)| {
                         for hash in &content_hashes {
                             let retrieved = state.content.load(black_box(hash));
-                            black_box(retrieved);
+                            let _ = black_box(retrieved);
                         }
                     },
                 );
@@ -212,7 +212,7 @@ fn bench_announcement_storage(c: &mut Criterion) {
     c.bench_function("retrieve_announcement", |b| {
         b.iter(|| {
             let retrieved = state.get_announcement(black_box(&announcement.hash));
-            black_box(retrieved);
+            let _ = black_box(retrieved);
         });
     });
 }
@@ -237,7 +237,7 @@ fn bench_announcement_search(c: &mut Criterion) {
                 if i % 5 == 0 { "protocol" } else { "testing" }
             ),
             l1_summary: L1Summary::empty(hash),
-            price: (i * 10) as u64,
+            price: i * 10,
             addresses: vec!["/ip4/127.0.0.1/tcp/9000".to_string()],
             publisher_peer_id: None,
         };
@@ -291,7 +291,7 @@ fn bench_database_scaling(c: &mut Criterion) {
                                 content_type: ContentType::L0,
                                 title: format!("Content {}", i),
                                 l1_summary: L1Summary::empty(hash),
-                                price: i as u64,
+                                price: i,
                                 addresses: vec![],
                                 publisher_peer_id: None,
                             };
@@ -329,7 +329,7 @@ fn bench_database_scaling(c: &mut Criterion) {
                                     if i % 100 == 0 { "special" } else { "normal" }
                                 ),
                                 l1_summary: L1Summary::empty(hash),
-                                price: i as u64,
+                                price: i,
                                 addresses: vec![],
                                 publisher_peer_id: None,
                             };
@@ -352,44 +352,41 @@ fn bench_database_scaling(c: &mut Criterion) {
 
 fn bench_mixed_workload(c: &mut Criterion) {
     c.bench_function("mixed_content_manifest_workload", |b| {
-        b.iter_with_setup(
-            || create_temp_state(),
-            |(mut state, _temp_dir)| {
-                // Store content
-                let content = create_sample_content(1, 2048);
-                let hash = state.content.store(black_box(&content)).unwrap();
+        b.iter_with_setup(create_temp_state, |(mut state, _temp_dir)| {
+            // Store content
+            let content = create_sample_content(1, 2048);
+            let hash = state.content.store(black_box(&content)).unwrap();
 
-                // Create and store manifest
-                let (_, public_key) = generate_identity();
-                let owner = peer_id_from_public_key(&public_key);
-                let metadata = Metadata::new("Mixed Workload Test", content.len() as u64);
-                let manifest = Manifest::new_l0(hash, owner, metadata, 1640995200);
-                state.manifests.store(black_box(&manifest)).unwrap();
+            // Create and store manifest
+            let (_, public_key) = generate_identity();
+            let owner = peer_id_from_public_key(&public_key);
+            let metadata = Metadata::new("Mixed Workload Test", content.len() as u64);
+            let manifest = Manifest::new_l0(hash, owner, metadata, 1640995200);
+            state.manifests.store(black_box(&manifest)).unwrap();
 
-                // Store announcement
-                let announcement = AnnouncePayload {
-                    hash,
-                    content_type: ContentType::L0,
-                    title: "Mixed Workload Content".to_string(),
-                    l1_summary: L1Summary::empty(hash),
-                    price: 150,
-                    addresses: vec![],
-                    publisher_peer_id: None,
-                };
-                state.store_announcement(black_box(announcement));
+            // Store announcement
+            let announcement = AnnouncePayload {
+                hash,
+                content_type: ContentType::L0,
+                title: "Mixed Workload Content".to_string(),
+                l1_summary: L1Summary::empty(hash),
+                price: 150,
+                addresses: vec![],
+                publisher_peer_id: None,
+            };
+            state.store_announcement(black_box(announcement));
 
-                // Retrieve everything back
-                let retrieved_content = state.content.load(black_box(&hash)).unwrap();
-                let retrieved_manifest = state.manifests.load(black_box(&hash)).unwrap();
-                let retrieved_announcement = state.get_announcement(black_box(&hash));
+            // Retrieve everything back
+            let retrieved_content = state.content.load(black_box(&hash)).unwrap();
+            let retrieved_manifest = state.manifests.load(black_box(&hash)).unwrap();
+            let retrieved_announcement = state.get_announcement(black_box(&hash));
 
-                black_box((
-                    retrieved_content,
-                    retrieved_manifest,
-                    retrieved_announcement,
-                ));
-            },
-        );
+            black_box((
+                retrieved_content,
+                retrieved_manifest,
+                retrieved_announcement,
+            ));
+        });
     });
 }
 
