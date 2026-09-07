@@ -45,4 +45,3 @@ hedera-sdk = ["nodalync-settle/hedera-sdk"]
 
 [dev-dependencies]
 tempfile.workspace = true
-nodalync-wire.workspace = true

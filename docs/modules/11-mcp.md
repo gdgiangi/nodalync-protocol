@@ -49,8 +49,8 @@ nodalync mcp-server --budget 5.0 --auto-approve 0.1
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--budget`, `-b` | 1.0 | Total session budget for query prices, in HBAR |
-| `--auto-approve`, `-a` | 0.01 | Default maximum query price, in HBAR, including resource reads |
+| `--budget`, `-b` | 1.0 | Total session budget in HBAR |
+| `--auto-approve`, `-a` | 0.01 | Auto-approve queries under this HBAR amount |
 
 ## MCP Tools
 
@@ -58,7 +58,7 @@ When the MCP server is running, AI agents have access to these tools:
 
 | Tool | Description |
 |------|-------------|
-| `query_knowledge` | Query content by hash (paid) |
+| `query_knowledge` | Query content by hash or natural language (paid) |
 | `list_sources` | Browse available content with metadata |
 | `search_network` | Search connected peers for content (requires `--enable-network`) |
 | `preview_content` | View content metadata without paying |
@@ -90,10 +90,7 @@ Direct content access by hash. Use `list_sources` to discover available hashes.
 knowledge://5dY7Kx9mT2...
 ```
 
-Returns the content directly. The price must be at or below the configured
-auto-approve threshold and fit within the remaining session query budget.
-Resource reads cannot provide an explicit per-query allowance; above the default
-threshold, use `query_knowledge` with an authorized `budget_hbar` instead.
+Returns the content directly. Payment is handled automatically from session budget.
 
 ## Architecture
 
@@ -124,49 +121,24 @@ When `--enable-network` is used, the MCP server spawns a background event loop t
 
 ## Budget System
 
-The server checks query prices before deposits, channel funding, or retrieval:
+The budget system prevents runaway spending:
 
-1. **Default allowance**: If `query_knowledge` omits `budget_hbar`, the price must
-   be at or below `--auto-approve`. The same limit applies to `knowledge://`
-   resource reads.
-2. **Explicit allowance**: `query_knowledge` can supply `budget_hbar` to replace
-   that default for one call. The caller must already have authorization for
-   this amount. A smaller explicit allowance is also enforced.
-3. **Session ceiling**: Every query must fit within the remaining `--budget`,
-   including calls with an explicit allowance. Budget reservation is atomic;
-   a failed query refunds the reserved query price.
+1. **Session Budget**: Total HBAR available for the session
+2. **Auto-Approve Threshold**: Queries below this cost are approved automatically
+3. **Atomic Tracking**: Thread-safe spending with `compare_exchange`
 
-With `--budget 1.0 --auto-approve 0.01`, content priced at 0.5 HBAR is rejected by
-both an ordinary `query_knowledge` call and a resource read. After inspecting the
-price with `preview_content` and obtaining authorization, a caller can request:
-
-```json
-{
-  "query": "<content-hash>",
-  "budget_hbar": 0.5
+```rust
+// Budget is tracked atomically
+pub fn try_spend(&self, amount: Amount) -> Result<Amount, McpError> {
+    // Atomic compare-and-swap ensures thread safety
 }
 ```
-
-This succeeds only if at least 0.5 HBAR remains in the session query budget.
-Startup limits and explicit query allowances must be finite, non-negative HBAR
-amounts representable in tinybars. Setting both startup limits to zero allows
-free content and rejects paid queries.
-
-**These are query-price limits, not a wallet-wide spending policy.** The server
-does not implement a human approval dialog: an agent can supply an explicit
-allowance itself, so the host must enforce who may do that. Once a paid query is
-allowed, existing automatic funding can deposit 10 HBAR into settlement and fund
-a channel with 1 HBAR. Those funding amounts and network fees are not deducted
-from the session query budget. The `deposit_hbar` and `open_channel` tools also
-operate separately from it. Funding policy needs separate operator controls;
-do not interpret `--budget` as a cap on all wallet movements.
 
 ## Error Handling
 
 | Error | Cause | Resolution |
 |-------|-------|------------|
-| `QueryBudgetExceeded` | Query price > default or explicit allowance | Inspect the price; use cheaper content or an authorized explicit `budget_hbar` |
-| `BudgetExceeded` | Query cost > remaining session budget | Use cheaper content or ask the operator to configure a larger session budget; a deposit does not change it |
+| `BudgetExceeded` | Query cost > remaining budget | Increase budget or use smaller queries |
 | `ContentNotFound` | Hash doesn't exist locally | Ensure content is published |
 | `StorageError` | Database issues | Check permissions, disk space |
 

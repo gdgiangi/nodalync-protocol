@@ -8,8 +8,6 @@ use nodalync_types::{Amount, Hash};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
 
-use crate::error::{McpError, McpResult};
-
 /// Tinybars per HBAR (10^8).
 pub const TINYBARS_PER_HBAR: u64 = 100_000_000;
 
@@ -131,29 +129,6 @@ impl BudgetTracker {
     /// Check if the budget can afford a given cost.
     pub fn can_afford(&self, cost: Amount) -> bool {
         cost <= self.remaining()
-    }
-
-    /// Check a query against its allowance and the remaining session budget.
-    ///
-    /// Calls without an explicit allowance, including resource reads, use the
-    /// auto-approve threshold. Call this before deposits or channel funding;
-    /// `spend` still reserves the amount atomically before querying.
-    pub(crate) fn check_query_cost(
-        &self,
-        cost: Amount,
-        explicit_limit: Option<Amount>,
-    ) -> McpResult<()> {
-        let limit = explicit_limit.unwrap_or(self.auto_approve_threshold);
-        if cost > limit {
-            return Err(McpError::QueryBudgetExceeded { cost, limit });
-        }
-        if !self.can_afford(cost) {
-            return Err(McpError::BudgetExceeded {
-                cost,
-                remaining: self.remaining(),
-            });
-        }
-        Ok(())
     }
 
     /// Record a spend, returning the new total spent.

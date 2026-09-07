@@ -40,12 +40,9 @@
 //! The server tracks spending against a session budget:
 //!
 //! - Session budget is set at startup (in HBAR)
-//! - Use `preview_content` to inspect pricing before execution
-//! - Queries without an explicit allowance and resource reads use the
-//!   auto-approve threshold (default 0.01 HBAR, inclusive)
+//! - Each query shows cost preview before execution
+//! - Queries auto-approve if under threshold (default 0.01 HBAR)
 //! - Queries are rejected if they would exceed remaining budget
-//! - Query budgets exclude deposits, channel funding, and network fees;
-//!   explicit allowances require authorization from the caller's host
 
 pub mod budget;
 pub mod error;

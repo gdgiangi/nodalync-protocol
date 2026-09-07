@@ -3016,7 +3016,6 @@ dependencies = [
  "nodalync-settle",
  "nodalync-store",
  "nodalync-types",
- "nodalync-wire",
  "rmcp",
  "serde",
  "serde_json",

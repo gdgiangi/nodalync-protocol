@@ -24,13 +24,11 @@ use serde::{Deserialize, Serialize};
 /// - Returns transaction confirmations in the response
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct QueryKnowledgeInput {
-    /// Content hash to retrieve. Discover hashes with list_sources or search_network.
+    /// The query string (natural language or content hash).
     pub query: String,
 
-    /// Explicit maximum query price in HBAR; still limited by the session budget.
-    /// If omitted, uses the configured auto-approve threshold. Supplying this
-    /// overrides that default allowance; the caller must already be authorized.
-    /// This does not cap automatic deposits, channel funding, or network fees.
+    /// Maximum budget for this query in HBAR.
+    /// If not specified, uses auto-approve threshold.
     #[serde(default)]
     pub budget_hbar: Option<f64>,
 }
