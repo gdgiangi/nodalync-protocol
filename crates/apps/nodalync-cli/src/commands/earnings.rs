@@ -43,7 +43,7 @@ pub fn earnings(
         .collect();
 
     // Sort by total earned (descending)
-    content_earnings.sort_by_key(|entry| std::cmp::Reverse(entry.total_earned));
+    content_earnings.sort_by(|a, b| b.total_earned.cmp(&a.total_earned));
 
     // Apply limit
     content_earnings.truncate(limit as usize);

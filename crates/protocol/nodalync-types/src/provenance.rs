@@ -114,7 +114,7 @@ impl Provenance {
     /// Get all unique owner PeerIds from the provenance chain.
     pub fn unique_owners(&self) -> Vec<PeerId> {
         let mut owners: Vec<PeerId> = self.root_l0l1.iter().map(|e| e.owner).collect();
-        owners.sort_by_key(|owner| owner.0);
+        owners.sort_by(|a, b| a.0.cmp(&b.0));
         owners.dedup();
         owners
     }

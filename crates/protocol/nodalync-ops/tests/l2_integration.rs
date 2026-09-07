@@ -264,7 +264,7 @@ fn test_multiple_l1s_build_l2_merge_l2s() {
     let l1_hashes: Vec<Hash> = merged_graph.source_l1s.iter().map(|r| r.l1_hash).collect();
     let unique_l1_count = {
         let mut unique = l1_hashes.clone();
-        unique.sort_by_key(|hash| hash.0);
+        unique.sort_by(|a, b| a.0.cmp(&b.0));
         unique.dedup();
         unique.len()
     };
