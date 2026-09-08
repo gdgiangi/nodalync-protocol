@@ -1,0 +1,222 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1000" viewBox="0 0 1440 1000" fill="none">
+  <title>Synthesis Studio — editable interface design study</title>
+  <desc>Static fictional example. A source drawer, dark visual worktable with source, question, and idea cards, and a warm paper draft. Created as SVG in code, not in Figma or Blender.</desc>
+  <defs>
+    <pattern id="dots" x="0" y="0" width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="0.75" fill="#35443C"/></pattern>
+    <filter id="card-shadow" x="-20%" y="-20%" width="140%" height="160%"><feDropShadow dx="0" dy="5" stdDeviation="8" flood-color="#07100B" flood-opacity="0.24"/></filter>
+    <clipPath id="app-clip"><rect x="24" y="90" width="1392" height="818" rx="18"/></clipPath>
+    <marker id="arrow" markerWidth="7" markerHeight="7" refX="5" refY="3.5" orient="auto"><path d="M1 1L5 3.5L1 6" stroke="#9BAF95" stroke-width="1.2" fill="none"/></marker>
+  </defs>
+  <rect width="1440" height="1000" fill="#E4E7DE"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text x="24" y="33" font-size="11" font-weight="700" letter-spacing="2.2" fill="#4E6054">NODALYNC / SYNTHESIS STUDIO</text>
+    <text x="24" y="64" font-size="25" font-weight="700" letter-spacing="-0.5" fill="#203529">From scattered knowledge to a new idea.</text>
+    <rect x="1087" y="28" width="329" height="35" rx="17.5" fill="#D5DBD0"/>
+    <circle cx="1106" cy="45.5" r="3.5" fill="#64795C"/>
+    <text x="1120" y="50" font-size="11" font-weight="700" letter-spacing="0.6" fill="#40503F">DESIGN STUDY · FICTIONAL EXAMPLE</text>
+    <g clip-path="url(#app-clip)">
+      <rect x="24" y="90" width="1392" height="818" fill="#15221B"/>
+      <rect x="24" y="90" width="1392" height="62" fill="#1B2A21"/>
+      <path d="M24 151.5H1416" stroke="#35473A"/>
+      <rect x="45" y="108" width="28" height="28" rx="7" fill="#B5CF94"/>
+      <path d="M52 116H58V128H52V116ZM58 121L66 115V127L58 132" stroke="#24391F" stroke-width="1.4" stroke-linejoin="round"/>
+      <text x="85" y="126" font-size="14" font-weight="700" fill="#E2EAD9">Studio</text>
+      <path d="M155 107V135" stroke="#40503F"/>
+      <text x="174" y="126" font-size="12" fill="#B8C6B4">Workspaces</text>
+      <path d="M255 118L259 122L255 126" stroke="#82917A" stroke-width="1.4"/>
+      <text x="277" y="126" font-size="13" font-weight="700" fill="#EEF1E7">Making room for independent thought</text>
+      <circle cx="1074" cy="121" r="3" fill="#A6C889"/>
+      <text x="1085" y="125" font-size="11" fill="#B8C8AD">Saved locally</text>
+      <rect x="1195" y="106" width="97" height="31" rx="7" stroke="#52624A"/>
+      <text x="1214" y="126" font-size="11" font-weight="700" fill="#D3DFCB">Focus draft</text>
+      <rect x="1302" y="106" width="94" height="31" rx="7" fill="#B5CF94"/>
+      <text x="1322" y="126" font-size="11" font-weight="700" fill="#263B21">Save idea</text>
+
+      <!-- Source drawer: a bounded working set, not a graph of the full library. -->
+      <rect x="24" y="152" width="274" height="756" fill="#1D2B22"/>
+      <path d="M298 152V908" stroke="#35473A"/>
+      <text x="46" y="187" font-size="15" font-weight="700" fill="#EDF0E3">Your materials</text>
+      <text x="46" y="208" font-size="11" fill="#9CAD95">Find a passage worth thinking with.</text>
+      <rect x="44" y="228" width="232" height="38" rx="8" fill="#14221A" stroke="#43533D"/>
+      <circle cx="61" cy="246" r="5" stroke="#9AAD8E" stroke-width="1.4"/>
+      <path d="M65 250L69 254" stroke="#9AAD8E" stroke-width="1.4"/>
+      <text x="79" y="251" font-size="12" fill="#A7B69B">Search the library</text>
+      <rect x="46" y="284" width="82" height="26" rx="13" fill="#38492C"/>
+      <text x="62" y="301" font-size="11" font-weight="700" fill="#D9EAC8">Selected 3</text>
+      <text x="151" y="301" font-size="11" fill="#A6B79A">All sources</text>
+      <text x="46" y="342" font-size="10" font-weight="700" letter-spacing="1.5" fill="#A9BA9D">IN THIS WORKSPACE</text>
+
+      <rect x="44" y="358" width="232" height="115" rx="10" fill="#293B2B" stroke="#A1BE7D"/>
+      <rect x="59" y="373" width="23" height="25" rx="4" fill="#ABC88E"/>
+      <text x="67" y="390" font-size="11" font-weight="700" fill="#284020">1</text>
+      <text x="94" y="385" font-size="12" font-weight="700" fill="#F0F4E8">The quiet workspace</text>
+      <text x="94" y="402" font-size="10" fill="#B0C3A2">Research note · 6 min read</text>
+      <text x="59" y="429" font-size="11" fill="#C5D1BC">Attention needs a place to return to.</text>
+      <path d="M59 452L63 456L71 448" stroke="#B6D791" stroke-width="1.6"/>
+      <text x="79" y="456" font-size="10" fill="#C5DBAD">2 excerpts on the worktable</text>
+
+      <rect x="44" y="484" width="232" height="100" rx="10" fill="#223126" stroke="#3C4D35"/>
+      <rect x="59" y="498" width="23" height="25" rx="4" fill="#42563A"/>
+      <text x="67" y="515" font-size="11" font-weight="700" fill="#DAE8CE">2</text>
+      <text x="94" y="511" font-size="12" font-weight="700" fill="#E7EEDD">Productive disagreement</text>
+      <text x="94" y="528" font-size="10" fill="#ABBC9E">Field notes · 4 min read</text>
+      <text x="59" y="560" font-size="11" fill="#C4CFBA">Differences can become material.</text>
+
+      <rect x="44" y="595" width="232" height="100" rx="10" fill="#223126" stroke="#3C4D35"/>
+      <rect x="59" y="609" width="23" height="25" rx="4" fill="#42563A"/>
+      <text x="67" y="626" font-size="11" font-weight="700" fill="#DAE8CE">3</text>
+      <text x="94" y="622" font-size="12" font-weight="700" fill="#E7EEDD">Tools for slow thinking</text>
+      <text x="94" y="639" font-size="10" fill="#ABBC9E">Essay · 8 min read</text>
+      <text x="59" y="671" font-size="11" fill="#C4CFBA">Some ideas arrive between tasks.</text>
+
+      <rect x="44" y="716" width="232" height="38" rx="8" stroke="#647451" stroke-dasharray="4 4"/>
+      <path d="M83 730V740M78 735H88" stroke="#D1DEC2" stroke-width="1.4"/>
+      <text x="98" y="739" font-size="11" font-weight="700" fill="#D1DEC2">Bring in another source</text>
+      <path d="M44 827H276" stroke="#3B4C35"/>
+      <text x="46" y="853" font-size="11" font-weight="700" fill="#C2D0B6">An excerpt keeps its origin.</text>
+      <text x="46" y="872" font-size="10" fill="#A3B496">Open any numbered source to read</text>
+      <text x="46" y="887" font-size="10" fill="#A3B496">the original in context.</text>
+
+      <!-- Worktable: readable excerpts, user-authored questions, and emerging ideas. -->
+      <rect x="299" y="152" width="731" height="756" fill="#14221B"/>
+      <rect x="299" y="152" width="731" height="756" fill="url(#dots)" opacity="0.65"/>
+      <text x="323" y="187" font-size="11" font-weight="700" letter-spacing="1.3" fill="#A8BC99">WORKTABLE</text>
+      <text x="323" y="214" font-size="18" font-weight="700" fill="#E1EADB">What helps an idea become our own?</text>
+      <rect x="846" y="170" width="162" height="31" rx="15.5" fill="#25372A" stroke="#42563B"/>
+      <path d="M863 181V191M858 186H868" stroke="#C6DAB4" stroke-width="1.3"/>
+      <text x="878" y="190" font-size="11" font-weight="700" fill="#DAE7CB">Question or idea</text>
+
+      <text x="330" y="254" font-size="10" font-weight="700" letter-spacing="1.2" fill="#A1B490">SOURCES</text>
+      <path d="M400 250H604" stroke="#4D6243"/>
+      <text x="697" y="274" font-size="10" font-weight="700" letter-spacing="1.2" fill="#CCBD8E">QUESTIONS</text>
+
+      <g filter="url(#card-shadow)">
+        <rect x="326" y="270" width="302" height="188" rx="11" fill="#2B3C2D" stroke="#718762"/>
+        <rect x="326" y="270" width="5" height="188" rx="2.5" fill="#B2CB92"/>
+        <rect x="344" y="286" width="25" height="26" rx="4" fill="#B7CE9A"/>
+        <text x="353" y="303" font-size="11" font-weight="700" fill="#314327">1</text>
+        <text x="380" y="298" font-size="10" font-weight="700" fill="#E0EAD2">THE QUIET WORKSPACE</text>
+        <text x="380" y="313" font-size="10" fill="#AEBD9F">Source excerpt</text>
+        <text x="346" y="347" font-family="Georgia, 'Times New Roman', serif" font-size="16" fill="#F0F1E5">“A stable place for unfinished</text>
+        <text x="346" y="371" font-family="Georgia, 'Times New Roman', serif" font-size="16" fill="#F0F1E5">thoughts makes it easier to</text>
+        <text x="346" y="395" font-family="Georgia, 'Times New Roman', serif" font-size="16" fill="#F0F1E5">return and see them differently.”</text>
+        <path d="M346 417H609" stroke="#4D6143"/>
+        <text x="347" y="440" font-size="10" font-weight="700" fill="#C6DDB0">Open source ↗</text>
+        <text x="538" y="440" font-size="10" fill="#C6DDB0">Use in draft</text>
+      </g>
+
+      <g filter="url(#card-shadow)">
+        <rect x="689" y="291" width="303" height="166" rx="10" fill="#E8D7AA"/>
+        <path d="M964 291H992V319L964 291Z" fill="#CAB684"/>
+        <text x="709" y="319" font-size="10" font-weight="700" letter-spacing="1.2" fill="#675C3B">A QUESTION</text>
+        <text x="709" y="349" font-family="Georgia, 'Times New Roman', serif" font-size="18" fill="#3E392B">What if unfinished work</text>
+        <text x="709" y="375" font-family="Georgia, 'Times New Roman', serif" font-size="18" fill="#3E392B">is something to preserve,</text>
+        <text x="709" y="401" font-family="Georgia, 'Times New Roman', serif" font-size="18" fill="#3E392B">rather than clear away?</text>
+        <text x="710" y="437" font-size="10" fill="#726443">Your note · open question</text>
+      </g>
+
+      <g filter="url(#card-shadow)">
+        <rect x="345" y="488" width="307" height="178" rx="11" fill="#25362A" stroke="#617A53"/>
+        <rect x="345" y="488" width="5" height="178" rx="2.5" fill="#90AE7C"/>
+        <rect x="363" y="504" width="25" height="26" rx="4" fill="#A4BE8C"/>
+        <text x="372" y="521" font-size="11" font-weight="700" fill="#314327">2</text>
+        <text x="399" y="516" font-size="10" font-weight="700" fill="#E0EAD2">PRODUCTIVE DISAGREEMENT</text>
+        <text x="399" y="531" font-size="10" fill="#AEBD9F">Source excerpt</text>
+        <text x="365" y="565" font-family="Georgia, 'Times New Roman', serif" font-size="16" fill="#F0F1E5">“Placing different accounts</text>
+        <text x="365" y="589" font-family="Georgia, 'Times New Roman', serif" font-size="16" fill="#F0F1E5">beside one another can expose</text>
+        <text x="365" y="613" font-family="Georgia, 'Times New Roman', serif" font-size="16" fill="#F0F1E5">questions neither asks alone.”</text>
+        <text x="365" y="649" font-size="10" font-weight="700" fill="#BED8A7">Open source ↗</text>
+        <text x="561" y="649" font-size="10" fill="#BED8A7">Use in draft</text>
+      </g>
+
+      <path d="M630 406C667 406 661 492 692 515" stroke="#9CAE8E" stroke-width="1.4" stroke-dasharray="4 5"/>
+      <path d="M652 570C667 570 678 565 692 560" stroke="#9CAE8E" stroke-width="1.4" stroke-dasharray="4 5"/>
+      <text x="708" y="490" font-size="10" font-weight="700" letter-spacing="1.2" fill="#ABC595">IDEAS</text>
+      <g filter="url(#card-shadow)">
+        <rect x="695" y="505" width="306" height="190" rx="11" fill="#C6D5AE"/>
+        <circle cx="718" cy="530" r="7" stroke="#617F46" stroke-width="1.4"/>
+        <path d="M715 531L718 528L721 531M718 528V534" stroke="#617F46" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+        <text x="733" y="534" font-size="10" font-weight="700" letter-spacing="1.1" fill="#486337">AN EMERGING IDEA</text>
+        <text x="715" y="566" font-family="Georgia, 'Times New Roman', serif" font-size="18" fill="#283D23">A workspace could remember</text>
+        <text x="715" y="592" font-family="Georgia, 'Times New Roman', serif" font-size="18" fill="#283D23">the question, not just</text>
+        <text x="715" y="618" font-family="Georgia, 'Times New Roman', serif" font-size="18" fill="#283D23">the answer.</text>
+        <rect x="714" y="646" width="79" height="27" rx="13.5" fill="#ADC38F"/>
+        <text x="727" y="664" font-size="10" font-weight="700" fill="#385429">Sources 1, 2</text>
+        <text x="873" y="664" font-size="10" font-weight="700" fill="#385429">Add to draft →</text>
+      </g>
+
+      <g>
+        <rect x="336" y="729" width="302" height="74" rx="10" fill="#26372A" stroke="#4E6543"/>
+        <rect x="330" y="721" width="302" height="74" rx="10" fill="#2E4030" stroke="#657E56"/>
+        <path d="M350 742L358 746L350 750" stroke="#C3D5B0" stroke-width="1.4" stroke-linejoin="round"/>
+        <text x="371" y="748" font-size="12" font-weight="700" fill="#E1EBD6">Keep for later</text>
+        <text x="349" y="777" font-size="11" fill="#AEC19D">3 excerpts · an unfinished direction</text>
+        <rect x="587" y="739" width="25" height="25" rx="6" fill="#465E3B"/>
+        <text x="596" y="756" font-size="11" font-weight="700" fill="#D5E5C4">3</text>
+      </g>
+
+      <rect x="321" y="847" width="139" height="37" rx="9" fill="#26382A" stroke="#526747"/>
+      <path d="M336 865H346M439 860V870M434 865H444" stroke="#D6E3C5" stroke-width="1.5"/>
+      <text x="368" y="870" font-size="11" fill="#D6E3C5">100%</text>
+      <path d="M355 855V876M422 855V876" stroke="#526747"/>
+      <rect x="471" y="847" width="108" height="37" rx="9" fill="#26382A" stroke="#526747"/>
+      <path d="M486 859H498M486 865H498M486 871H494" stroke="#D6E3C5" stroke-width="1.4"/>
+      <text x="508" y="870" font-size="11" fill="#D6E3C5">Outline</text>
+      <text x="768" y="871" font-size="10" fill="#A1B693">Arrange freely. Your places stay put.</text>
+
+      <!-- Draft: a readable destination for newly authored work. -->
+      <rect x="1030" y="152" width="386" height="756" fill="#F4F0E5"/>
+      <rect x="1030" y="152" width="4" height="756" fill="#0B160F" opacity="0.13"/>
+      <text x="1058" y="186" font-size="11" font-weight="700" letter-spacing="1.6" fill="#6C785B">YOUR DRAFT</text>
+      <rect x="1307" y="168" width="81" height="27" rx="13.5" fill="#E4E7D6"/>
+      <circle cx="1320" cy="181.5" r="3" fill="#69894B"/>
+      <text x="1331" y="186" font-size="10" font-weight="700" fill="#5C7148">In progress</text>
+      <path d="M1058 211H1388" stroke="#DADACC"/>
+      <text x="1058" y="249" font-family="Georgia, 'Times New Roman', serif" font-size="28" fill="#293C2B">A place for</text>
+      <text x="1058" y="284" font-family="Georgia, 'Times New Roman', serif" font-size="28" fill="#293C2B">unfinished thought</text>
+      <text x="1058" y="313" font-size="11" fill="#7A806A">An idea in your own words</text>
+
+      <text x="1058" y="356" font-family="Georgia, 'Times New Roman', serif" font-size="15" fill="#3E4938">Most tools help us finish. What if a</text>
+      <text x="1058" y="380" font-family="Georgia, 'Times New Roman', serif" font-size="15" fill="#3E4938">thinking tool also helped us return?</text>
+      <text x="1058" y="419" font-family="Georgia, 'Times New Roman', serif" font-size="15" fill="#3E4938">A stable worktable could preserve</text>
+      <text x="1058" y="443" font-family="Georgia, 'Times New Roman', serif" font-size="15" fill="#3E4938">fragments, alternatives, and questions</text>
+      <text x="1058" y="467" font-family="Georgia, 'Times New Roman', serif" font-size="15" fill="#3E4938">until a new interpretation emerges.</text>
+      <rect x="1347" y="454" width="22" height="19" rx="4" fill="#D7E1C2"/>
+      <text x="1355" y="468" font-size="10" font-weight="700" fill="#4B6835">1</text>
+      <text x="1058" y="506" font-family="Georgia, 'Times New Roman', serif" font-size="15" fill="#3E4938">The useful unit may be a question</text>
+      <text x="1058" y="530" font-family="Georgia, 'Times New Roman', serif" font-size="15" fill="#3E4938">with evidence beside it: something we</text>
+      <text x="1058" y="554" font-family="Georgia, 'Times New Roman', serif" font-size="15" fill="#3E4938">can rearrange, challenge, and revisit.</text>
+      <rect x="1347" y="541" width="22" height="19" rx="4" fill="#D7E1C2"/>
+      <text x="1355" y="555" font-size="10" font-weight="700" fill="#4B6835">2</text>
+      <text x="1058" y="599" font-family="Georgia, 'Times New Roman', serif" font-size="15" font-style="italic" fill="#8A8E7D">What would I try next?</text>
+      <path d="M1058 612V632" stroke="#6D8D48" stroke-width="1.5"/>
+      <text x="1058" y="684" font-size="10" font-weight="700" letter-spacing="1.3" fill="#747E63">SOURCES IN THIS DRAFT</text>
+      <path d="M1058 699H1388" stroke="#DADACC"/>
+      <rect x="1058" y="715" width="23" height="24" rx="4" fill="#D5DFBF"/>
+      <text x="1066" y="731" font-size="10" font-weight="700" fill="#4B6835">1</text>
+      <text x="1093" y="730" font-size="11" font-weight="700" fill="#475D38">The quiet workspace</text>
+      <text x="1374" y="730" font-size="12" fill="#748561">↗</text>
+      <rect x="1058" y="752" width="23" height="24" rx="4" fill="#D5DFBF"/>
+      <text x="1066" y="768" font-size="10" font-weight="700" fill="#4B6835">2</text>
+      <text x="1093" y="767" font-size="11" font-weight="700" fill="#475D38">Productive disagreement</text>
+      <text x="1374" y="767" font-size="12" fill="#748561">↗</text>
+      <rect x="1058" y="808" width="330" height="45" rx="8" fill="#E7E9DA"/>
+      <text x="1072" y="828" font-size="10" font-weight="700" fill="#626F50">Your interpretation stays distinct from its sources.</text>
+      <text x="1072" y="843" font-size="10" fill="#778168">Every numbered reference opens the original.</text>
+      <text x="1058" y="885" font-size="10" fill="#818775">Working draft · local workspace</text>
+      <text x="1348" y="885" font-size="10" fill="#6E785C">Private</text>
+    </g>
+    <rect x="24.5" y="90.5" width="1391" height="817" rx="17.5" stroke="#43523D" stroke-opacity="0.5"/>
+    <text x="24" y="940" font-size="10" font-weight="700" letter-spacing="1.2" fill="#56674D">GATHER</text>
+    <text x="24" y="962" font-size="12" fill="#43563C">Bring passages into focus.</text>
+    <path d="M307 933V965" stroke="#B8C2AF"/>
+    <text x="335" y="940" font-size="10" font-weight="700" letter-spacing="1.2" fill="#56674D">THINK</text>
+    <text x="335" y="962" font-size="12" fill="#43563C">Arrange. Question. Let structure emerge.</text>
+    <path d="M664 933V965" stroke="#B8C2AF"/>
+    <text x="692" y="940" font-size="10" font-weight="700" letter-spacing="1.2" fill="#56674D">WRITE</text>
+    <text x="692" y="962" font-size="12" fill="#43563C">Develop an idea without losing evidence.</text>
+    <path d="M1066 933V965" stroke="#B8C2AF"/>
+    <text x="1094" y="940" font-size="10" font-weight="700" letter-spacing="1.2" fill="#56674D">RESUME</text>
+    <text x="1094" y="962" font-size="12" fill="#43563C">Return to the same working context.</text>
+  </g>
+</svg>

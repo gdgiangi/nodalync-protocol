@@ -20,6 +20,7 @@ mod peer_store;
 mod protocol;
 mod publish_commands;
 mod seed_store;
+mod synthesis_commands;
 
 use channel_commands::*;
 use discovery_commands::*;
@@ -28,6 +29,7 @@ use graph_commands::*;
 use hip991_commands::*;
 use network_commands::*;
 use publish_commands::*;
+use synthesis_commands::*;
 
 /// Use an explicit graph database when requested, otherwise keep it with node data.
 fn resolve_db_path() -> std::path::PathBuf {
@@ -99,6 +101,10 @@ fn main() {
             create_l3_summary,
             get_l3_summaries,
             get_entity_content_links,
+            // Source-backed, human-authored private L3 content.
+            list_synthesis_sources,
+            save_synthesis,
+            get_synthesis_details,
             // Protocol commands (Phase 2 — publish flow)
             check_identity,
             init_node,
