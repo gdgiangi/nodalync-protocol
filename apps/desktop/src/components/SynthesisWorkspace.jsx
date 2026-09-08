@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ReactFlow, Background, Controls, ReactFlowProvider } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { blankBoard, boardKey, MAX_SOURCES, MAX_THOUGHTS, citationFor, removeSource, citePassage, saveFingerprint, validateBoard, readBoardStore } from "../lib/synthesis";
+import { blankBoard, boardKey, MAX_SOURCES, MAX_THOUGHTS, initialPassage, citationFor, removeSource, citePassage, saveFingerprint, validateBoard, readBoardStore } from "../lib/synthesis";
 import "./synthesis/synthesis.css";
 
 function Mark({ kind = "idea", size = 18 }) {
@@ -11,7 +11,7 @@ function Mark({ kind = "idea", size = 18 }) {
 function SourceNode({ data, selected }) {
   return <article className={`sy-source-card ${selected ? "is-selected" : ""}`}>
     <header className="sy-drag-handle"><span className="sy-citation">{data.label}</span><span className="sy-card-kind">SOURCE PASSAGE</span><button className="nodrag sy-remove" aria-label={`Remove source ${data.title}`} onClick={data.onRemove}>×</button></header>
-    <h3>{data.title}</h3><p className="sy-passage">{data.excerpt || "Choose a passage from this source."}</p>
+    <h3>{data.title}</h3>{data.description?.startsWith("Obsidian: ") && <p className="sy-source-origin" title={data.description}>{data.description.slice(10)}</p>}<p className="sy-passage">{data.excerpt || "Choose a passage from this source."}</p>
     <footer className="nodrag"><button onClick={data.onRead}>Read & choose passage <span>↗</span></button><button className="sy-cite-action" onClick={data.onCite}>Cite in draft</button></footer>
   </article>;
 }
@@ -144,7 +144,7 @@ function Workspace({ profileId, onSaved, onOpenContent }) {
     setPendingSource(item.hash); setError(null);
     try {
       const text = await invoke("read_content_text", { hash: item.hash });
-      setStore((current) => ({ ...current, boards: current.boards.map((currentBoard) => currentBoard.id !== boardId || currentBoard.sources.some((source) => source.hash === item.hash) ? currentBoard : { ...currentBoard, sources: [...currentBoard.sources, { ...item, excerpt: text.slice(0, 420), passage: { start: 0, end: Math.min(text.length, 420) }, position: { x: 30 + (currentBoard.sources.length % 2) * 300, y: 30 + Math.floor(currentBoard.sources.length / 2) * 330 } }], updatedAt: Date.now() }) }));
+      setStore((current) => ({ ...current, boards: current.boards.map((currentBoard) => currentBoard.id !== boardId || currentBoard.sources.some((source) => source.hash === item.hash) ? currentBoard : { ...currentBoard, sources: [...currentBoard.sources, { ...item, ...initialPassage(text), position: { x: 30 + (currentBoard.sources.length % 2) * 300, y: 30 + Math.floor(currentBoard.sources.length / 2) * 330 } }], updatedAt: Date.now() }) }));
     } catch (err) { setError(`Couldn’t bring in this source: ${String(err)}`); }
     finally { setPendingSource(null); }
   }

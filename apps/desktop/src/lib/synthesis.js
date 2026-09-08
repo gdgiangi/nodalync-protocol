@@ -8,6 +8,16 @@ export function citationFor(sources, hash) {
   const index = sources.findIndex((source) => source.hash === hash);
   return index < 0 ? null : `S${index + 1}`;
 }
+export function initialPassage(text, limit = 420) {
+  // Skip a complete YAML header for the card preview, keeping exact offsets
+  // into the untouched original for selection and citation.
+  const frontmatter = text.match(/^\uFEFF?---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)(?:\r?\n|$)/);
+  const headerEnd = frontmatter?.[0].length || 0;
+  const whitespace = text.slice(headerEnd).match(/^\s*/)[0].length;
+  const start = headerEnd + whitespace;
+  const end = Math.min(text.length, start + limit);
+  return { excerpt: text.slice(start, end), passage: { start, end } };
+}
 export function removeSource(board, hash) {
   const index = board.sources.findIndex((source) => source.hash === hash);
   if (index < 0) return board;

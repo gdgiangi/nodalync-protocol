@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { blankBoard, removeSource, citePassage, validateBoard, saveFingerprint, readBoardStore } from './synthesis.js';
+import { blankBoard, removeSource, citePassage, validateBoard, saveFingerprint, readBoardStore, initialPassage } from './synthesis.js';
 const sources = [{ hash: 'a', excerpt: 'One source\nTwo lines' }, { hash: 'b', excerpt: 'A competing account' }, { hash: 'c', excerpt: 'Another view' }];
 const board = { id: 'draft', title: 'New idea', question: 'What if?', body: 'My interpretation [S2] and [S3].', sources, thoughts: [] };
 const storedBoard = {
@@ -19,6 +19,16 @@ test('removing an unused source keeps every remaining citation tied to the same 
 });
 test('citing an excerpt preserves multiline text and identifies its actual source', () => {
   assert.equal(citePassage('A new idea.', sources[0], 'S1'), 'A new idea.\n\n> One source\n> Two lines\n[S1]\n\n');
+});
+test('Obsidian previews begin after metadata and still address the exact original passage', () => {
+  for (const newline of ['\n', '\r\n']) {
+    const original = ['---', 'type: insight', 'tags: [research]', '---', '', '# A new idea', 'Café and 🧠 remain intact.'].join(newline);
+    const preview = initialPassage(original);
+    assert.equal(preview.excerpt, ['# A new idea', 'Café and 🧠 remain intact.'].join(newline));
+    assert.equal(original.slice(preview.passage.start, preview.passage.end), preview.excerpt);
+  }
+  assert.equal(initialPassage('---\nAn unfinished header').excerpt, '---\nAn unfinished header');
+  assert.equal(initialPassage('Plain note').excerpt, 'Plain note');
 });
 test('a synthesis needs real foundations and no dangling citation labels', () => {
   assert.equal(validateBoard(board), null);
