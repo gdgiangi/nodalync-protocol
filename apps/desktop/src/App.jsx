@@ -1,14 +1,12 @@
-import { Component, Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import SynthesisWorkspace from "./components/SynthesisWorkspace";
 import ContentLibrary from "./components/ContentLibrary";
 import CreateContentDialog from "./components/CreateContentDialog";
 import KnowledgeImport from "./components/KnowledgeImport";
 import BalanceDashboard from "./components/BalanceDashboard";
-import EntityDetailPanel from "./components/EntityDetailPanel";
+import RelationshipExplorer from "./components/RelationshipExplorer";
 import { useTauriEvents } from "./hooks/useTauriEvents";
-
-const GraphView = lazy(() => import("./components/graph3d"));
 
 const errorMessage = (error) => {
   const message = typeof error === "string" ? error : error?.message || "Something went wrong. Please try again.";
@@ -31,7 +29,6 @@ const paths = {
   check: <path d="m5 12 4 4L19 6"/>,
   lock: <><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V6a4 4 0 0 1 8 0v4m-4 5v2"/></>,
   refresh: <><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 12-1l2 6M4 12l2 6a7 7 0 0 0 12-1"/></>,
-  fit: <><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/><circle cx="12" cy="12" r="3"/></>,
   file: <><path d="M14 3H5v18h14V8zM14 3v5h5M8 13h8m-8 4h6"/></>,
   copy: <><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M15 8V3H3v13h5"/></>,
 };
@@ -41,17 +38,6 @@ function Icon({ name, size = 18 }) {
 function Brand() {
   return <div className="studio-brand"><span className="studio-mark"><Icon name="graph" size={22}/></span><span>nodalync<small>STUDIO</small></span></div>;
 }
-function EmptyState({ icon = "graph", title, children, action }) {
-  return <div className="studio-empty"><span className="studio-empty-icon"><Icon name={icon} size={30}/></span><h2>{title}</h2><p>{children}</p>{action}</div>;
-}
-class GraphBoundary extends Component {
-  state = { error: null };
-  static getDerivedStateFromError(error) { return { error }; }
-  render() {
-    return this.state.error ? <EmptyState title="The graph couldn’t be displayed">Your notes are still available in the library. Try reopening the graph; hardware acceleration is required for the 3D view.</EmptyState> : this.props.children;
-  }
-}
-
 function Setup({ mode, onReady, onRetry, startupError }) {
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
@@ -260,31 +246,25 @@ export default function App() {
   const [identity, setIdentity] = useState(null);
   const [status, setStatus] = useState(null);
   const [items, setItems] = useState([]);
-  const [graph, setGraph] = useState({ nodes: [], links: [] });
   const [stats, setStats] = useState(null);
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [libraryLoaded, setLibraryLoaded] = useState(false);
-  const [graphLoading, setGraphLoading] = useState(false);
   const [libraryError, setLibraryError] = useState(null);
-  const [graphError, setGraphError] = useState(null);
   const [view, setView] = useState("synthesis");
   const [showCreate, setShowCreate] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [showBalance, setShowBalance] = useState(false);
   const [selectedContent, setSelectedContent] = useState(null);
-  const [detailEntity, setDetailEntity] = useState(null);
   const [graphFocus, setGraphFocus] = useState(null);
-  const [graphDirty, setGraphDirty] = useState(false);
-  const [entitySourceHashes, setEntitySourceHashes] = useState([]);
+  const [focusRequest, setFocusRequest] = useState(0);
+  const [refreshVersion, setRefreshVersion] = useState(0);
   const [readerError, setReaderError] = useState(null);
   const [networkBusy, setNetworkBusy] = useState(false);
   const [nodeError, setNodeError] = useState(null);
   const [toast, setToast] = useState(null);
-  const graphRef = useRef(null);
   const libraryVersion = useRef(0);
-  const graphVersion = useRef(0);
   const readerVersion = useRef(0);
-  const loading = view === "library" ? libraryLoading || !libraryLoaded : view === "graph" ? graphLoading : false;
+  const loading = view === "library" && (libraryLoading || !libraryLoaded);
 
   const boot = useCallback(async () => {
     if (!isTauri()) { setMode("browser"); return; }
@@ -304,31 +284,17 @@ export default function App() {
     if (results[1].status === "fulfilled") setStats(results[1].value);
     setLibraryLoaded(true); setLibraryLoading(false);
   }, []);
-  const loadGraph = useCallback(async (entityId = null) => {
-    const version = ++graphVersion.current; setGraphLoading(true); setGraphError(null);
-    try {
-      const data = entityId
-        ? await invoke("get_subgraph", { entityId, maxHops: 2, maxResults: 100 })
-        : await invoke("get_graph_data");
-      if (version === graphVersion.current) { setGraph(data); setGraphDirty(false); }
-    } catch (error) { if (version === graphVersion.current) setGraphError(errorMessage(error)); }
-    finally { if (version === graphVersion.current) setGraphLoading(false); }
-  }, []);
   useEffect(() => {
     if (mode !== "ready") return;
     if (view === "library") { loadLibrary(); return () => { libraryVersion.current++; }; }
-    if (view === "graph") { loadGraph(graphFocus); return () => { graphVersion.current++; }; }
-  }, [mode, view, graphFocus, loadLibrary, loadGraph]);
+  }, [mode, view, loadLibrary]);
   const refresh = useCallback(() => {
     if (view === "library") loadLibrary();
-    else if (view === "graph") {
-      setDetailEntity(null);
-      if (graphFocus) setGraphFocus(null); else loadGraph();
-    }
+    else if (view === "graph") setRefreshVersion((version) => version + 1);
     invoke("get_node_status").then(setStatus).catch((error) => setNodeError(errorMessage(error)));
-  }, [view, graphFocus, loadLibrary, loadGraph]);
+  }, [view, loadLibrary]);
   const contentChanged = useCallback(() => {
-    setGraphDirty(true);
+    setRefreshVersion((version) => version + 1);
     if (view === "library") loadLibrary();
     invoke("get_node_status").then(setStatus).catch((error) => setNodeError(errorMessage(error)));
     window.dispatchEvent(new Event("studio:content-saved"));
@@ -339,42 +305,27 @@ export default function App() {
     return () => clearInterval(timer);
   }, [mode]);
   useTauriEvents({ "graph:updated": () => { if (mode === "ready") contentChanged(); }, "l2:complete": () => { if (mode === "ready") contentChanged(); } });
-  useEffect(() => {
-    setEntitySourceHashes([]);
-    if (!detailEntity?.id) return;
-    let active = true;
-    invoke("get_entity_content_links", { entityId: detailEntity.id })
-      .then((links) => { if (active) setEntitySourceHashes(links.map((link) => link.content_hash)); })
-      .catch(() => { /* The panel displays its source-query errors. */ });
-    return () => { active = false; };
-  }, [detailEntity?.id]);
   useEffect(() => { if (!toast) return; const timer = setTimeout(() => setToast(null), 5000); return () => clearTimeout(timer); }, [toast]);
   useEffect(() => {
     const handler = (event) => {
       if (mode !== "ready") return;
-      if (event.key === "Escape" && detailEntity && !showSearch && !showCreate && !selectedContent && !showBalance && !document.querySelector("dialog[open], .sc-import-panel")) {
-        event.preventDefault(); setDetailEntity(null); return;
-      }
       if (document.querySelector(".sy-reader[open], .sy-thought-editor[open]")) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); if (!showCreate && !selectedContent && !showBalance) setShowSearch((value) => !value); }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") { event.preventDefault(); if (!showSearch && !selectedContent && !showBalance) setShowCreate(true); }
     };
     window.addEventListener("keydown", handler); return () => window.removeEventListener("keydown", handler);
-  }, [mode, showCreate, showSearch, selectedContent, showBalance, detailEntity]);
+  }, [mode, showCreate, showSearch, selectedContent, showBalance]);
   function focusEntity(entityId) {
-    setDetailEntity(null); setGraphFocus(entityId); setView("graph");
-    if (view === "graph" && graphFocus === entityId) loadGraph(entityId);
+    setGraphFocus(entityId); setFocusRequest((request) => request + 1); setView("graph");
   }
   function navigateView(nextView) {
-    setDetailEntity(null);
-    if (nextView === "graph") setGraphFocus(null);
     setView(nextView);
   }
   async function openContent(item) {
     const version = ++readerVersion.current; setReaderError(null);
     try {
       const content = item.version != null ? item : await invoke("get_content_details", { hash: item.hash });
-      if (version === readerVersion.current) { setDetailEntity(null); setSelectedContent(content); }
+      if (version === readerVersion.current) setSelectedContent(content);
     } catch (error) { if (version === readerVersion.current) setReaderError(errorMessage(error)); }
   }
   async function toggleNetwork() {
@@ -395,14 +346,14 @@ export default function App() {
       <div className="studio-sidebar-bottom"><button className={`studio-node-link ${view === "node" ? "active" : ""}`} onClick={() => navigateView("node")}><span className={`studio-node-avatar ${status?.network_active ? "connected" : ""}`}><Icon name="node"/></span><span><strong>{identity?.name || "My workspace"}</strong><small>{status?.network_active ? "Network online" : "Local mode"}</small></span><Icon name="arrow" size={15}/></button><div className="studio-sidebar-foot"><span>STUDIO</span><span>0.1.0</span></div></div>
     </aside>
     <main className="studio-main"><header className="studio-topbar"><div className="studio-breadcrumb"><span>Workspace</span><span>/</span><strong>{title}</strong></div><span className="studio-local-state"><i className={status?.network_active ? "online" : ""}/>{status?.network_active ? `${status.connected_peers} peers connected` : "On this device"}</span></header>
-      {view !== "synthesis" && <div className="studio-page-title"><div><span className="studio-eyebrow">{view === "node" ? "IDENTITY & CONNECTION" : "YOUR KNOWLEDGE SPACE"}</span><h1>{title}<span className="studio-title-dot">.</span></h1><p>{view === "graph" ? "Follow the connections between the ideas you’ve collected." : view === "node" ? "A local identity. A place on the network. You choose when to connect." : "A collection of notes and sources, with their origins intact."}</p></div><div className="studio-page-actions"><button className="studio-icon-button" aria-label="Refresh workspace" onClick={refresh} disabled={loading}><Icon name="refresh"/></button><button className="studio-button" onClick={() => action("import")}><Icon name="import"/>Import files</button><button className="studio-button primary" onClick={() => setShowCreate(true)}><Icon name="plus"/>New note</button></div></div>}
+      {view !== "synthesis" && <div className={`studio-page-title ${view === "graph" ? "is-relationships" : ""}`}><div><span className="studio-eyebrow">{view === "node" ? "IDENTITY & CONNECTION" : "YOUR KNOWLEDGE SPACE"}</span><h1>{title}<span className="studio-title-dot">.</span></h1><p>{view === "graph" ? "Explore one entity at a time, with readable relationships and their original sources." : view === "node" ? "A local identity. A place on the network. You choose when to connect." : "A collection of notes and sources, with their origins intact."}</p></div><div className="studio-page-actions"><button className="studio-icon-button" aria-label="Refresh workspace" onClick={refresh} disabled={loading}><Icon name="refresh"/></button><button className="studio-button" onClick={() => action("import")}><Icon name="import"/>Import files</button><button className="studio-button primary" onClick={() => setShowCreate(true)}><Icon name="plus"/>New note</button></div></div>}
       <div className="studio-synthesis-view" hidden={view !== "synthesis"} style={{ display: view === "synthesis" ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }}><SynthesisWorkspace profileId={identity.peer_id} onSaved={contentSaved} onOpenContent={openContent}/></div>
-      {view === "library" && <><div className="studio-metrics"><div><span className="studio-metric-icon"><Icon name="file"/></span><strong>{items.length}</strong><span>notes & sources</span></div><div><span className="studio-metric-icon"><Icon name="graph"/></span><strong>{stats?.entity_count ?? "—"}</strong><span>connected entities</span></div><div><span className="studio-metric-icon"><Icon name="activity"/></span><strong>{stats?.relationship_count ?? "—"}</strong><span>relationships</span></div><span className="studio-metrics-note"><Icon name="lock" size={13}/> Stored locally</span></div><div className="studio-library-wrap"><ContentLibrary items={items} onSelect={openContent} loading={loading} error={libraryError} onCreate={() => setShowCreate(true)} onImport={() => action("import")}/></div></>}
-      {view === "graph" && <div className="studio-graph-wrap"><div className="studio-graph-toolbar"><span><i/>{graphFocus ? "Focused graph" : "All relationships"}<small>{graph.nodes.length} entities · {graph.links.length} links</small></span><div>{(graphFocus || graphDirty) && <button className="studio-button" onClick={refresh}>{graphDirty ? "Refresh relationships" : "Show full graph"}</button>}<button className="studio-button" onClick={() => graphRef.current?.resetZoom()} disabled={!graph.nodes.length}><Icon name="fit" size={16}/>Fit graph</button></div></div><div className="studio-graph-canvas">{graphError ? <EmptyState title="We couldn’t load the graph" action={<button className="studio-button" onClick={refresh}>Try again</button>}>{graphError}</EmptyState> : !graph.nodes.length ? <EmptyState title={loading ? "Loading your graph" : "Ideas get better together"} action={!loading && <button className="studio-button primary" onClick={() => action("import")}><Icon name="import"/>Import a source</button>}>{loading ? "Finding the connections…" : "Create or import a text note. Studio will extract entities and reveal their connections here."}</EmptyState> : <GraphBoundary key={view}><Suspense fallback={<EmptyState title="Opening the relationship view">Loading the 3D workspace…</EmptyState>}><GraphView ref={graphRef} data={graph} selectedEntity={detailEntity} onNodeClick={setDetailEntity} onBackgroundClick={() => { setDetailEntity(null); graphRef.current?.resetZoom(); }}/></Suspense></GraphBoundary>}</div><footer><span>Drag to orbit <b>·</b> Scroll to zoom <b>·</b> Select an entity to explore</span><span>L2 / PRIVATE KNOWLEDGE</span></footer></div>}
+      {view === "library" && <><div className="studio-metrics"><div><span className="studio-metric-icon"><Icon name="file"/></span><strong>{items.length}</strong><span>notes & sources</span></div><div><span className="studio-metric-icon"><Icon name="graph"/></span><strong>{stats?.entity_count ?? "—"}</strong><span>entities</span></div><div><span className="studio-metric-icon"><Icon name="activity"/></span><strong>{stats?.relationship_count ?? "—"}</strong><span>relationships</span></div><span className="studio-metrics-note"><Icon name="lock" size={13}/> Stored locally</span></div><div className="studio-library-wrap"><ContentLibrary items={items} onSelect={openContent} loading={loading} error={libraryError} onCreate={() => setShowCreate(true)} onImport={() => action("import")}/></div></>}
+      {view === "graph" && <div className="studio-graph-wrap"><RelationshipExplorer initialEntityId={graphFocus} focusRequest={focusRequest} refreshVersion={refreshVersion} onFocusChange={setGraphFocus} onOpenContent={openContent}/></div>}
       {view === "node" && <div className="studio-node-page"><section className="studio-settings-card"><div className="studio-settings-heading"><span className="studio-card-icon"><Icon name="lock"/></span><div><h2>Your identity</h2><p>Created locally and encrypted with your password.</p></div></div><dl><div><dt>Workspace</dt><dd>{identity?.name || "My workspace"}</dd></div><div><dt>Node ID</dt><dd><code title={identity?.peer_id}>{shortId(identity?.peer_id)}</code><button className="studio-icon-button" aria-label="Copy node ID" onClick={copyId}><Icon name="copy" size={16}/></button></dd></div><div><dt>Storage</dt><dd className="studio-storage-path">{identity?.data_dir}</dd></div></dl></section><section className="studio-settings-card"><div className="studio-settings-heading"><span className="studio-card-icon"><Icon name="node"/></span><div><h2>Network connection</h2><p>{status?.network_active ? "Your node is connected to the peer network." : "Your workspace works offline. Connect when you want to discover peers."}</p></div></div><div className="studio-network-row"><span className="studio-badge"><i className={status?.network_active ? "online" : ""}/>{status?.network_active ? `${status.connected_peers} connected peers` : "Local mode"}</span><button className="studio-button" disabled={networkBusy} onClick={toggleNetwork}>{networkBusy ? "Updating connection…" : status?.network_active ? "Disconnect" : "Connect to network"}</button></div>{nodeError && <p role="alert" className="studio-error">{nodeError}</p>}</section><div className="studio-settings-note"><Icon name="file"/><p>New notes stay private. Connecting your node does not publish them.</p></div></div>}
       <footer className="studio-statusbar"><span><i/>{loading ? "Refreshing workspace…" : "Local workspace ready"}</span><span>Built on Nodalync <span className="studio-status-separator">/</span> Knowledge with provenance</span></footer>
     </main>
     <CreateContentDialog isOpen={showCreate} onClose={() => setShowCreate(false)} onCreated={contentSaved}/><KnowledgeImport onImportComplete={contentChanged}/><BalanceDashboard isOpen={showBalance} onClose={() => setShowBalance(false)}/><QuickFind isOpen={showSearch} onClose={() => setShowSearch(false)} items={items} onContent={openContent} onEntity={focusEntity} onAction={action}/>
-    {selectedContent && <ContentReader item={selectedContent} onClose={() => { readerVersion.current++; setSelectedContent(null); }}/>}{detailEntity && <EntityDetailPanel entity={detailEntity} onClose={() => setDetailEntity(null)} onEntitySelect={focusEntity} onFocusEntity={focusEntity} availableContentHashes={entitySourceHashes} onContentSelect={(hash) => openContent({ hash })}/>}{readerError && <div role="alert" className="studio-toast studio-error"><span>Couldn’t open content: {readerError}</span><button className="studio-icon-button" aria-label="Dismiss content error" onClick={() => setReaderError(null)}><Icon name="close" size={14}/></button></div>}{toast && <div role="status" className="studio-toast"><Icon name="check" size={16}/>{toast}<button className="studio-icon-button" aria-label="Dismiss notification" onClick={() => setToast(null)}><Icon name="close" size={14}/></button></div>}
+    {selectedContent && <ContentReader item={selectedContent} onClose={() => { readerVersion.current++; setSelectedContent(null); }}/>}{readerError && <div role="alert" className="studio-toast studio-error"><span>Couldn’t open content: {readerError}</span><button className="studio-icon-button" aria-label="Dismiss content error" onClick={() => setReaderError(null)}><Icon name="close" size={14}/></button></div>}{toast && <div role="status" className="studio-toast"><Icon name="check" size={16}/>{toast}<button className="studio-icon-button" aria-label="Dismiss notification" onClick={() => setToast(null)}><Icon name="close" size={14}/></button></div>}
   </div>;
 }

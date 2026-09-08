@@ -19,6 +19,7 @@ mod network_commands;
 mod peer_store;
 mod protocol;
 mod publish_commands;
+mod relationship_commands;
 mod seed_store;
 mod synthesis_commands;
 
@@ -29,6 +30,7 @@ use graph_commands::*;
 use hip991_commands::*;
 use network_commands::*;
 use publish_commands::*;
+use relationship_commands::*;
 use synthesis_commands::*;
 
 /// Use an explicit graph database when requested, otherwise keep it with node data.
@@ -95,6 +97,10 @@ fn main() {
             search_entities,
             get_graph_stats,
             get_context,
+            // Paged relationship browsing; never loads the full graph.
+            list_relationship_entities,
+            get_relationship_neighborhood,
+            list_relationship_sources,
             // L1 Extraction pipeline (bridges L0 → L1 → L2)
             extract_mentions,
             // L3 Synthesis commands
