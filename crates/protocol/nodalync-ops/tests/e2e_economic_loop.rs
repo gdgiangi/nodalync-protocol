@@ -20,11 +20,13 @@
 use std::sync::Arc;
 
 use nodalync_crypto::{
-    content_hash, generate_identity, peer_id_from_public_key, Hash, PeerId, Signature,
+    content_hash, generate_identity, peer_id_from_public_key, Hash, PeerId, PrivateKey, PublicKey,
+    Signature,
 };
 use nodalync_ops::{DefaultNodeOperations, OpsError};
 use nodalync_store::{
-    ContentStore, ManifestStore, NodeState, NodeStateConfig, SettlementQueueStore,
+    ContentStore, ManifestStore, NodeState, NodeStateConfig, PeerInfo, PeerStore,
+    SettlementQueueStore,
 };
 use nodalync_test_utils::MockSettlement;
 use nodalync_types::{ContentType, Manifest, Metadata, Provenance, ProvenanceEntry, Visibility};
@@ -37,6 +39,8 @@ use tempfile::TempDir;
 struct TestNode {
     ops: DefaultNodeOperations,
     peer_id: PeerId,
+    private_key: PrivateKey,
+    public_key: PublicKey,
     mock_settle: MockSettlement,
     _temp_dir: TempDir,
 }
@@ -47,7 +51,7 @@ impl TestNode {
         let config = NodeStateConfig::new(temp_dir.path());
         let state = NodeState::open(config).unwrap();
 
-        let (_, public_key) = generate_identity();
+        let (private_key, public_key) = generate_identity();
         let peer_id = peer_id_from_public_key(&public_key);
 
         let mock_settle = MockSettlement::new();
@@ -59,6 +63,8 @@ impl TestNode {
         Self {
             ops,
             peer_id,
+            private_key,
+            public_key,
             mock_settle,
             _temp_dir: temp_dir,
         }
@@ -77,6 +83,7 @@ fn current_timestamp() -> u64 {
 }
 
 fn create_payment(
+    payer: &TestNode,
     amount: u64,
     recipient: PeerId,
     query_hash: Hash,
@@ -85,7 +92,7 @@ fn create_payment(
 ) -> nodalync_types::Payment {
     // Use a random nonce to ensure unique payment IDs for repeated queries
     let nonce: u64 = rand::random();
-    nodalync_types::Payment::new(
+    let mut payment = nodalync_types::Payment::new(
         content_hash(
             &[
                 query_hash.0.as_slice(),
@@ -101,21 +108,33 @@ fn create_payment(
         provenance,
         current_timestamp(),
         Signature::from_bytes([0u8; 64]),
-    )
+    );
+    payment.signature = nodalync_crypto::sign(
+        &payer.private_key,
+        &nodalync_valid::construct_payment_message(&payment),
+    );
+    payment
 }
 
 /// Open a payment channel between two nodes.
 /// Returns the channel_id.
-fn open_channel_between(
-    owner: &mut TestNode,
-    requester_peer_id: &PeerId,
-    channel_name: &str,
-) -> Hash {
+fn open_channel_between(owner: &mut TestNode, requester: &TestNode, channel_name: &str) -> Hash {
+    owner
+        .ops
+        .state
+        .peers
+        .upsert(&PeerInfo::new(
+            requester.peer_id,
+            requester.public_key,
+            vec![],
+            current_timestamp(),
+        ))
+        .unwrap();
     let channel_id = content_hash(channel_name.as_bytes());
     // Accept the channel from the requester's perspective (they deposited funds)
     owner
         .ops
-        .accept_payment_channel(&channel_id, requester_peer_id, 10_000, 20_000)
+        .accept_payment_channel(&channel_id, &requester.peer_id, 10_000, 20_000)
         .unwrap();
     channel_id
 }
@@ -165,9 +184,10 @@ async fn test_e2e_simple_l0_publish_query_settle() {
     // Here we simulate by calling Alice's handler directly
 
     // Open a payment channel between Bob and Alice (required for paid content)
-    let channel_id = open_channel_between(&mut alice, &bob.peer_id(), "bob-alice-channel");
+    let channel_id = open_channel_between(&mut alice, &bob, "bob-alice-channel");
 
     let payment = create_payment(
+        &bob,
         100,
         manifest.owner,
         hash,
@@ -308,9 +328,10 @@ async fn test_e2e_multihop_provenance_distribution() {
 
     // === CAROL: Query Bob's L3 ===
     // Open a payment channel between Carol and Bob (required for paid content)
-    let channel_id = open_channel_between(&mut bob, &carol.peer_id(), "carol-bob-channel");
+    let channel_id = open_channel_between(&mut bob, &carol, "carol-bob-channel");
 
     let payment = create_payment(
+        &carol,
         100,
         bob.peer_id(),
         l3_hash,
@@ -396,12 +417,13 @@ async fn test_e2e_batch_settlement() {
     let manifest = alice.ops.get_content_manifest(&hash).unwrap().unwrap();
 
     // Open payment channels for Bob and Carol
-    let bob_channel = open_channel_between(&mut alice, &bob.peer_id(), "bob-batch-channel");
-    let carol_channel = open_channel_between(&mut alice, &carol.peer_id(), "carol-batch-channel");
+    let bob_channel = open_channel_between(&mut alice, &bob, "bob-batch-channel");
+    let carol_channel = open_channel_between(&mut alice, &carol, "carol-batch-channel");
 
     // Bob queries 3 times (with incrementing nonces)
     for nonce in 1..=3 {
         let payment = create_payment(
+            &bob,
             10,
             manifest.owner,
             hash,
@@ -425,6 +447,7 @@ async fn test_e2e_batch_settlement() {
     // Carol queries 2 times (with incrementing nonces)
     for nonce in 1..=2 {
         let payment = create_payment(
+            &carol,
             10,
             manifest.owner,
             hash,
@@ -499,10 +522,11 @@ async fn test_e2e_economics_tracking() {
     assert_eq!(manifest_before.economics.total_revenue, 0);
 
     // Open a payment channel for Bob
-    let channel_id = open_channel_between(&mut alice, &bob.peer_id(), "bob-economics-channel");
+    let channel_id = open_channel_between(&mut alice, &bob, "bob-economics-channel");
 
     // Query content
     let payment = create_payment(
+        &bob,
         100,
         manifest_before.owner,
         hash,
@@ -544,7 +568,7 @@ async fn test_e2e_access_control() {
 
     // Bob tries to query (no channel needed - will fail at access check first)
     let dummy_channel = content_hash(b"dummy-channel");
-    let payment = create_payment(100, alice.peer_id(), hash, dummy_channel, vec![]);
+    let payment = create_payment(&bob, 100, alice.peer_id(), hash, dummy_channel, vec![]);
     let request = QueryRequestPayload {
         hash,
         query: None,
@@ -586,6 +610,7 @@ async fn test_e2e_payment_validation() {
     let manifest = alice.ops.get_content_manifest(&hash).unwrap().unwrap();
     let dummy_channel = content_hash(b"dummy-payment-channel");
     let payment = create_payment(
+        &bob,
         100, // Only 100, needs 1000
         manifest.owner,
         hash,

@@ -47,25 +47,6 @@ fn register_peer(ops: &mut DefaultNodeOperations, peer_id: &PeerId, public_key: 
     ops.state.peers.upsert(&peer_info).unwrap();
 }
 
-fn create_test_payment(
-    amount: u64,
-    recipient: PeerId,
-    query_hash: Hash,
-    channel_id: Hash,
-    provenance: Vec<ProvenanceEntry>,
-) -> Payment {
-    Payment::new(
-        content_hash(b"payment"),
-        channel_id,
-        amount,
-        recipient,
-        query_hash,
-        provenance,
-        current_timestamp(),
-        Signature::from_bytes([0u8; 64]),
-    )
-}
-
 fn create_signed_payment(
     amount: u64,
     recipient: PeerId,
@@ -472,9 +453,10 @@ async fn test_payment_record_has_real_signature() {
     let (node_private_key, _) = generate_identity();
     ops.set_private_key(node_private_key);
 
-    // Create peer (unknown — soft-fail allows query processing)
-    let (_, pubkey) = generate_identity();
+    // Register the payer so its payment can be authenticated
+    let (payer_key, pubkey) = generate_identity();
     let requester = peer_id_from_public_key(&pubkey);
+    register_peer(&mut ops, &requester, &pubkey);
 
     // Create and publish paid content
     let content = b"Content for real signature test";
@@ -491,12 +473,13 @@ async fn test_payment_record_has_real_signature() {
 
     let manifest = ops.get_content_manifest(&hash).unwrap().unwrap();
 
-    let payment = create_test_payment(
+    let payment = create_signed_payment(
         100,
         manifest.owner,
         hash,
         channel_id,
         manifest.provenance.root_l0l1.clone(),
+        &payer_key,
     );
 
     let request = QueryRequestPayload {
@@ -540,8 +523,9 @@ async fn test_receipt_has_real_signature() {
     ops.set_private_key(node_private_key);
 
     // Create peer
-    let (_, pubkey) = generate_identity();
+    let (payer_key, pubkey) = generate_identity();
     let requester = peer_id_from_public_key(&pubkey);
+    register_peer(&mut ops, &requester, &pubkey);
 
     // Create and publish paid content
     let content = b"Content for receipt signature test";
@@ -558,12 +542,13 @@ async fn test_receipt_has_real_signature() {
 
     let manifest = ops.get_content_manifest(&hash).unwrap().unwrap();
 
-    let payment = create_test_payment(
+    let payment = create_signed_payment(
         100,
         manifest.owner,
         hash,
         channel_id,
         manifest.provenance.root_l0l1.clone(),
+        &payer_key,
     );
 
     let request = QueryRequestPayload {
