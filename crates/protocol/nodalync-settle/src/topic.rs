@@ -475,11 +475,7 @@ mod manager {
             }
 
             let total_revenue = message_count * fee_per_message;
-            let avg_fee = if message_count > 0 {
-                total_revenue / message_count
-            } else {
-                0
-            };
+            let avg_fee = total_revenue.checked_div(message_count).unwrap_or(0);
 
             Ok(RevenueSummary {
                 total_revenue,

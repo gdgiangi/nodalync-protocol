@@ -84,7 +84,7 @@ pub fn distribute_revenue(
         .collect();
 
     // Sort by recipient for deterministic output
-    distributions.sort_by(|a, b| a.recipient.0.cmp(&b.recipient.0));
+    distributions.sort_by_key(|distribution| distribution.recipient.0);
 
     distributions
 }

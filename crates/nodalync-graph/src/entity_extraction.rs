@@ -825,19 +825,21 @@ fn extract_prose_only(content: &str) -> String {
 mod tests {
     use super::*;
 
+    // All people, organizations, and metadata below are synthetic fixtures.
+
     #[test]
     fn test_parse_frontmatter() {
         let content = r#"---
 type: person
-created: 2025-12-26
+created: 2024-01-01
 tags:
   - example-organization
-  - cofounder
+  - test-role
 related:
   - "[[Example Organization]]"
   - "[[Nodalync]]"
 org: "[[Example Organization]]"
-role: CEO & Co-founder
+role: Test Role & Coordinator
 status: active
 ---
 
@@ -847,7 +849,7 @@ Some body text."#;
         let fm = parse_frontmatter(content).unwrap();
         assert_eq!(fm.note_type.as_deref(), Some("person"));
         assert_eq!(fm.status.as_deref(), Some("active"));
-        assert_eq!(fm.role.as_deref(), Some("CEO & Co-founder"));
+        assert_eq!(fm.role.as_deref(), Some("Test Role & Coordinator"));
         assert_eq!(fm.org.as_deref(), Some("[[Example Organization]]"));
 
         let related = fm.related.unwrap();
@@ -885,9 +887,12 @@ Also check [[Nodalync]] again.
 
     #[test]
     fn test_entity_from_node_path() {
-        let vault = Path::new("C:\\vault");
-        let file = Path::new("C:\\vault\\Nodes\\People\\Example Test Person.md");
-        let result = entity_from_node_path(file, vault);
+        let vault = Path::new("vault");
+        let file = vault
+            .join("Nodes")
+            .join("People")
+            .join("Example Test Person.md");
+        let result = entity_from_node_path(&file, vault);
         assert!(result.is_some());
         let (label, etype) = result.unwrap();
         assert_eq!(label, "Example Test Person");
@@ -907,9 +912,12 @@ Also check [[Nodalync]] again.
     fn test_relationships_from_frontmatter() {
         let fm = Frontmatter {
             note_type: Some("person".to_string()),
-            related: Some(vec!["[[Example Organization]]".to_string(), "[[Nodalync]]".to_string()]),
+            related: Some(vec![
+                "[[Example Organization]]".to_string(),
+                "[[Nodalync]]".to_string(),
+            ]),
             org: Some("[[Example Organization]]".to_string()),
-            role: Some("CEO".to_string()),
+            role: Some("Test Role".to_string()),
             ..Default::default()
         };
 
