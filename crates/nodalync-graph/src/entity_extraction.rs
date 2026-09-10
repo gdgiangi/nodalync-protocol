@@ -825,50 +825,52 @@ fn extract_prose_only(content: &str) -> String {
 mod tests {
     use super::*;
 
+    // All people, organizations, and metadata below are synthetic fixtures.
+
     #[test]
     fn test_parse_frontmatter() {
         let content = r#"---
 type: person
-created: 2025-12-26
+created: 2024-01-01
 tags:
-  - leedana
-  - cofounder
+  - example-organization
+  - test-role
 related:
-  - "[[Leedana]]"
+  - "[[Example Organization]]"
   - "[[Nodalync]]"
-org: "[[Leedana]]"
-role: CEO & Co-founder
+org: "[[Example Organization]]"
+role: Test Role & Coordinator
 status: active
 ---
 
-# Hassan El Rakhawy
+# Example Test Person
 Some body text."#;
 
         let fm = parse_frontmatter(content).unwrap();
         assert_eq!(fm.note_type.as_deref(), Some("person"));
         assert_eq!(fm.status.as_deref(), Some("active"));
-        assert_eq!(fm.role.as_deref(), Some("CEO & Co-founder"));
-        assert_eq!(fm.org.as_deref(), Some("[[Leedana]]"));
+        assert_eq!(fm.role.as_deref(), Some("Test Role & Coordinator"));
+        assert_eq!(fm.org.as_deref(), Some("[[Example Organization]]"));
 
         let related = fm.related.unwrap();
         assert_eq!(related.len(), 2);
         assert!(
-            related.contains(&"\"[[Leedana]]\"".to_string())
-                || related.contains(&"[[Leedana]]".to_string())
+            related.contains(&"\"[[Example Organization]]\"".to_string())
+                || related.contains(&"[[Example Organization]]".to_string())
         );
     }
 
     #[test]
     fn test_extract_wiki_links() {
         let content = r#"
-Working with [[Hassan El Rakhawy]] on [[Leedana]] platform.
+Working with [[Example Test Person]] on [[Example Organization]] platform.
 See [[Nodalync|the protocol]] for details.
 Also check [[Nodalync]] again.
 "#;
         let links = extract_wiki_links(content);
         assert_eq!(links.len(), 3); // Nodalync deduped
-        assert_eq!(links[0].0, "Hassan El Rakhawy");
-        assert_eq!(links[1].0, "Leedana");
+        assert_eq!(links[0].0, "Example Test Person");
+        assert_eq!(links[1].0, "Example Organization");
         assert_eq!(links[2].0, "Nodalync");
         assert_eq!(links[2].1.as_deref(), Some("the protocol"));
     }
@@ -876,8 +878,8 @@ Also check [[Nodalync]] again.
     #[test]
     fn test_strip_wikilink() {
         assert_eq!(
-            strip_wikilink("\"[[Leedana]]\""),
-            Some("Leedana".to_string())
+            strip_wikilink("\"[[Example Organization]]\""),
+            Some("Example Organization".to_string())
         );
         assert_eq!(strip_wikilink("[[Foo|Bar]]"), Some("Foo".to_string()));
         assert_eq!(strip_wikilink("plain text"), Some("plain text".to_string()));
@@ -889,11 +891,11 @@ Also check [[Nodalync]] again.
         let file = vault
             .join("Nodes")
             .join("People")
-            .join("Hassan El Rakhawy.md");
+            .join("Example Test Person.md");
         let result = entity_from_node_path(&file, vault);
         assert!(result.is_some());
         let (label, etype) = result.unwrap();
-        assert_eq!(label, "Hassan El Rakhawy");
+        assert_eq!(label, "Example Test Person");
         assert_eq!(etype, "Person");
     }
 
@@ -910,17 +912,20 @@ Also check [[Nodalync]] again.
     fn test_relationships_from_frontmatter() {
         let fm = Frontmatter {
             note_type: Some("person".to_string()),
-            related: Some(vec!["[[Leedana]]".to_string(), "[[Nodalync]]".to_string()]),
-            org: Some("[[Leedana]]".to_string()),
-            role: Some("CEO".to_string()),
+            related: Some(vec![
+                "[[Example Organization]]".to_string(),
+                "[[Nodalync]]".to_string(),
+            ]),
+            org: Some("[[Example Organization]]".to_string()),
+            role: Some("Test Role".to_string()),
             ..Default::default()
         };
 
-        let rels = relationships_from_frontmatter("Hassan El Rakhawy", &fm);
+        let rels = relationships_from_frontmatter("Example Test Person", &fm);
         assert_eq!(rels.len(), 3); // 2 relatedTo + 1 worksFor
         assert!(rels
             .iter()
-            .any(|r| r.predicate == "worksFor" && r.object_label == "Leedana"));
+            .any(|r| r.predicate == "worksFor" && r.object_label == "Example Organization"));
     }
 
     #[test]

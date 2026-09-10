@@ -1,6 +1,4 @@
 # Logistics AI Business Strategy
-## Source: Gabe + Claude conversation, Feb 16 2026
-## Captured: Feb 18 2026
 
 ## Core Philosophy
 The biggest problems aren't caused by bad people — they're caused by coordination systems built for scarcity applied in an era where intelligence/information/decision-making are becoming abundant. AI can make high-quality decision-making nearly free. Strategy: build tools giving small actors large-institution capabilities, make them open, make them so economically useful people adopt out of self-interest.
@@ -71,7 +69,7 @@ A dispatcher at a 30-truck carrier opens Slack on Tuesday morning:
 ## Agriculture Expansion (Later)
 - Same pattern: small CEA operators (aquaponics, vertical farms, sandponics)
 - Agent architecture: crop planning, resource optimization, market timing, compliance
-- Leedana experience = unfakeable credibility + seed knowledge for the network
+- Domain experience provides credibility and seed knowledge for the network
 - Company isn't logistics or agriculture — it's the first apps proving Nodalync works
 
 ## 18-Month Roadmap
@@ -80,12 +78,7 @@ A dispatcher at a 30-truck carrier opens Slack on Tuesday morning:
 - **Months 9-14:** Productize deployment, hire 1-2, revenue sustains team (20-30 customers)
 - **Months 15-18:** Decision — deeper in logistics or expand to agriculture. Nodalync knowledge marketplace turns on.
 
-## Jermell's Role
-- Sales agent in transportation logistics with leads
-- Company Blueprint doc: incoming/Company-Blueprint.docx (10 sections)
-- Sales Guide doc: incoming/Sales-Guide-Jermell.docx (9 sections)
-- Both artifacts saved Feb 18
-
-## Key Artifacts
-- `incoming/Company-Blueprint.docx` — central reference (thesis, product, architecture, roadmap, team, metrics)
-- `incoming/Sales-Guide-Jermell.docx` — sales training guide (pitch, qualifying, objections, pricing, competitive positioning)
+## Sales Role
+- Develop transportation logistics leads
+- Maintain a company blueprint covering the thesis, product, architecture, roadmap, team, and metrics
+- Maintain a sales guide covering the pitch, qualification, objections, pricing, and competitive positioning
