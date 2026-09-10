@@ -10,6 +10,15 @@ pub type McpResult<T> = Result<T, McpError>;
 /// Error types for MCP server operations.
 #[derive(Debug, Error)]
 pub enum McpError {
+    /// Price exceeds the per-query allowance (default or explicit).
+    #[error("query allowance exceeded: content costs {cost} tinybars but the query limit is {limit} tinybars")]
+    QueryBudgetExceeded {
+        /// Cost of the requested query.
+        cost: Amount,
+        /// Per-query spending limit.
+        limit: Amount,
+    },
+
     /// Budget exceeded - query would cost more than remaining budget.
     #[error("budget exceeded: query costs {cost} tinybars but only {remaining} remaining")]
     BudgetExceeded {
@@ -84,6 +93,7 @@ impl McpError {
     /// Maps MCP errors to the appropriate `ErrorCode` from spec Appendix C.
     pub fn error_code(&self) -> ErrorCode {
         match self {
+            Self::QueryBudgetExceeded { .. } => ErrorCode::InsufficientBalance,
             Self::BudgetExceeded { .. } => ErrorCode::InsufficientBalance,
             Self::NotFound(_) => ErrorCode::NotFound,
             Self::InvalidHash(_) => ErrorCode::InvalidHash,
