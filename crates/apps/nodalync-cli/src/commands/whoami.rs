@@ -1,10 +1,9 @@
 //! Show identity information command.
 
 use crate::config::CliConfig;
-use crate::context::{get_libp2p_peer_id, NodeContext};
+use crate::context::{decrypt_identity, get_libp2p_peer_id, NodeContext};
 use crate::error::CliResult;
 use crate::output::{OutputFormat, Render, WhoamiOutput};
-use crate::prompt::get_identity_password;
 
 /// Execute the whoami command.
 pub fn whoami(config: CliConfig, format: OutputFormat) -> CliResult<String> {
@@ -14,14 +13,7 @@ pub fn whoami(config: CliConfig, format: OutputFormat) -> CliResult<String> {
     let public_key = ctx.ops.state.identity.public_key()?;
 
     // Get libp2p peer ID (requires decrypting the private key)
-    let password = get_identity_password()?;
-    let (private_key, _) = ctx.ops.state.identity.load(&password).map_err(|e| {
-        if matches!(e, nodalync_store::StoreError::Encryption(_)) {
-            crate::error::CliError::User(e.to_string())
-        } else {
-            crate::error::CliError::from(e)
-        }
-    })?;
+    let (private_key, _) = decrypt_identity(&ctx.ops.state)?;
     let libp2p_peer_id = get_libp2p_peer_id(&private_key)?;
 
     let output = WhoamiOutput {
@@ -132,12 +124,7 @@ mod tests {
 
         // Verify our CLI mapping: Encryption errors become CliError::User, not
         // CliError::IdentityNotInitialized
-        let cli_err: crate::error::CliError =
-            if matches!(err, nodalync_store::StoreError::Encryption(_)) {
-                crate::error::CliError::User(err.to_string())
-            } else {
-                crate::error::CliError::from(err)
-            };
+        let cli_err = crate::context::identity_load_error(err);
         assert!(
             !cli_err.to_string().contains("Identity not initialized"),
             "CLI error should NOT say 'Identity not initialized', got: {}",

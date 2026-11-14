@@ -188,94 +188,9 @@ pub fn decode_message(bytes: &[u8]) -> Result<Message, DecodeError> {
         });
     }
 
-    let mut cursor = 0;
-
-    // Magic byte
-    let magic = bytes[cursor];
-    cursor += 1;
-    if magic != PROTOCOL_MAGIC {
-        return Err(DecodeError::InvalidMagic {
-            expected: PROTOCOL_MAGIC,
-            got: magic,
-        });
-    }
-
-    // Version
-    let version = bytes[cursor];
-    cursor += 1;
-    if version != PROTOCOL_VERSION {
-        return Err(DecodeError::InvalidVersion {
-            expected: PROTOCOL_VERSION,
-            got: version,
-        });
-    }
-
-    // Message type (big-endian)
-    let type_bytes: [u8; 2] =
-        bytes[cursor..cursor + 2]
-            .try_into()
-            .map_err(|_| DecodeError::TruncatedMessage {
-                expected: cursor + 2,
-                got: bytes.len(),
-            })?;
-    cursor += 2;
-    let message_type = MessageType::from_u16(u16::from_be_bytes(type_bytes))?;
-
-    // Timestamp (big-endian)
-    let ts_bytes: [u8; 8] =
-        bytes[cursor..cursor + 8]
-            .try_into()
-            .map_err(|_| DecodeError::TruncatedMessage {
-                expected: cursor + 8,
-                got: bytes.len(),
-            })?;
-    cursor += 8;
-    let timestamp = u64::from_be_bytes(ts_bytes);
-
-    // Sender peer ID (20 bytes)
-    let sender_bytes: [u8; 20] =
-        bytes[cursor..cursor + 20]
-            .try_into()
-            .map_err(|_| DecodeError::TruncatedMessage {
-                expected: cursor + 20,
-                got: bytes.len(),
-            })?;
-    cursor += 20;
-    let sender = PeerId::from_bytes(sender_bytes);
-
-    // Payload length (big-endian)
-    let len_bytes: [u8; 4] =
-        bytes[cursor..cursor + 4]
-            .try_into()
-            .map_err(|_| DecodeError::TruncatedMessage {
-                expected: cursor + 4,
-                got: bytes.len(),
-            })?;
-    cursor += 4;
-    let payload_len = u32::from_be_bytes(len_bytes) as usize;
-
-    // Check we have enough bytes for payload + signature
-    let expected_total = cursor + payload_len + 64;
-    if bytes.len() < expected_total {
-        return Err(DecodeError::TruncatedMessage {
-            expected: expected_total,
-            got: bytes.len(),
-        });
-    }
-
-    // Payload
-    let payload = bytes[cursor..cursor + payload_len].to_vec();
-    cursor += payload_len;
-
-    // Signature
-    let sig_bytes: [u8; 64] =
-        bytes[cursor..cursor + 64]
-            .try_into()
-            .map_err(|_| DecodeError::TruncatedMessage {
-                expected: cursor + 64,
-                got: bytes.len(),
-            })?;
-    let signature = Signature::from_bytes(sig_bytes);
+    let mut reader = ByteReader::new(bytes);
+    let (version, message_type, timestamp, sender) = read_header(&mut reader)?;
+    let (payload, signature) = read_payload_and_signature(&mut reader)?;
 
     // Compute message ID as hash of the header + payload
     let id = compute_message_id(version, message_type, &payload);
@@ -289,6 +204,88 @@ pub fn decode_message(bytes: &[u8]) -> Result<Message, DecodeError> {
         payload,
         signature,
     })
+}
+
+/// A cursor over an encoded message that reports a short read as `TruncatedMessage`.
+struct ByteReader<'a> {
+    bytes: &'a [u8],
+    cursor: usize,
+}
+
+impl<'a> ByteReader<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, cursor: 0 }
+    }
+
+    /// Read the next `len` bytes.
+    fn take(&mut self, len: usize) -> Result<&'a [u8], DecodeError> {
+        let end = self.cursor + len;
+        let slice = self
+            .bytes
+            .get(self.cursor..end)
+            .ok_or(DecodeError::TruncatedMessage {
+                expected: end,
+                got: self.bytes.len(),
+            })?;
+        self.cursor = end;
+        Ok(slice)
+    }
+
+    /// Read the next `N` bytes as a fixed-size array.
+    fn take_array<const N: usize>(&mut self) -> Result<[u8; N], DecodeError> {
+        let mut array = [0u8; N];
+        array.copy_from_slice(self.take(N)?);
+        Ok(array)
+    }
+}
+
+/// Read the magic byte and the version, rejecting any other protocol or version.
+fn read_magic_and_version(reader: &mut ByteReader<'_>) -> Result<u8, DecodeError> {
+    let [magic] = reader.take_array::<1>()?;
+    if magic != PROTOCOL_MAGIC {
+        return Err(DecodeError::InvalidMagic {
+            expected: PROTOCOL_MAGIC,
+            got: magic,
+        });
+    }
+
+    let [version] = reader.take_array::<1>()?;
+    if version != PROTOCOL_VERSION {
+        return Err(DecodeError::InvalidVersion {
+            expected: PROTOCOL_VERSION,
+            got: version,
+        });
+    }
+    Ok(version)
+}
+
+/// Read the fixed header: version, message type, timestamp and sender (all big-endian).
+fn read_header(reader: &mut ByteReader<'_>) -> Result<(u8, MessageType, u64, PeerId), DecodeError> {
+    let version = read_magic_and_version(reader)?;
+    let message_type = MessageType::from_u16(u16::from_be_bytes(reader.take_array()?))?;
+    let timestamp = u64::from_be_bytes(reader.take_array()?);
+    let sender = PeerId::from_bytes(reader.take_array()?);
+    Ok((version, message_type, timestamp, sender))
+}
+
+/// Read the payload length, the payload and the trailing 64-byte signature.
+fn read_payload_and_signature(
+    reader: &mut ByteReader<'_>,
+) -> Result<(Vec<u8>, Signature), DecodeError> {
+    let payload_len = u32::from_be_bytes(reader.take_array()?) as usize;
+
+    // Check we have enough bytes for payload + signature
+    let expected_total = reader.cursor + payload_len + 64;
+    if reader.bytes.len() < expected_total {
+        return Err(DecodeError::TruncatedMessage {
+            expected: expected_total,
+            got: reader.bytes.len(),
+        });
+    }
+
+    let payload = reader.take(payload_len)?.to_vec();
+    let signature = Signature::from_bytes(reader.take_array()?);
+    Ok((payload, signature))
 }
 
 /// Compute a message ID from its components.
@@ -467,6 +464,29 @@ mod tests {
         assert_eq!(decoded.message_type, msg.message_type);
         assert_eq!(decoded.payload, msg.payload);
         assert_eq!(decoded.signature, msg.signature);
+        assert_eq!(decoded.timestamp, msg.timestamp);
+        assert_eq!(decoded.sender, msg.sender);
+        assert_eq!(decoded.id, msg.id);
+    }
+
+    #[test]
+    fn test_decode_payload_longer_than_message_reports_expected_total() {
+        // Header declares a 10-byte payload, but only the 64-byte signature follows.
+        let mut bytes = vec![0x00, 0x01]; // magic, version
+        bytes.extend_from_slice(&[0x07, 0x00]); // type
+        bytes.extend_from_slice(&[0u8; 8]); // timestamp
+        bytes.extend_from_slice(&[0u8; 20]); // sender
+        bytes.extend_from_slice(&10u32.to_be_bytes()); // length
+        bytes.extend_from_slice(&[0u8; 64]); // signature
+
+        let result = decode_message(&bytes);
+        assert!(matches!(
+            result,
+            Err(DecodeError::TruncatedMessage {
+                expected: 110,
+                got: 100
+            })
+        ));
     }
 
     #[test]

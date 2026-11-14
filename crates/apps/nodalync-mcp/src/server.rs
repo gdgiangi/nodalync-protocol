@@ -17,7 +17,7 @@ use tracing::{debug, info, warn};
 use nodalync_crypto::{
     content_hash, peer_id_from_public_key, PeerId as NodalyncPeerId, UNKNOWN_PEER_ID,
 };
-use nodalync_net::{Multiaddr, Network, NetworkConfig, NetworkNode, PeerId as LibP2pPeerId};
+use nodalync_net::{Multiaddr, Network, NetworkNode, PeerId as LibP2pPeerId};
 use nodalync_ops::DefaultNodeOperations;
 use nodalync_store::{
     ChannelStore, ContentStore, ManifestFilter, ManifestStore, NodeState, NodeStateConfig,
@@ -26,6 +26,7 @@ use nodalync_types::{ContentType, Visibility};
 
 use crate::budget::{hbar_to_tinybars, tinybars_to_hbar, BudgetTracker};
 use crate::error::McpError as NodalyncMcpError;
+use crate::startup;
 use crate::tools::{
     hash_to_string, string_to_hash, ChannelCloseResult, ChannelInfo, CloseAllChannelsOutput,
     CloseChannelInput, ContentEarnings, DeleteContentInput, DeleteContentOutput, DepositHbarInput,
@@ -144,126 +145,13 @@ impl NodalyncMcpServer {
         let (private_key, public_key, peer_id) = load_identity(&state, &config)?;
 
         // Optionally create network
-        let network = if config.enable_network {
-            info!("Initializing network for MCP server...");
-
-            let net_config = build_network_config(&config, &private_key, &public_key)?;
-            let libp2p_keypair = to_libp2p_keypair(&private_key)?;
-
-            let node = NetworkNode::with_keypair(
-                private_key.clone(),
-                public_key,
-                libp2p_keypair,
-                net_config,
-            )
-            .await?;
-
-            // Subscribe to announcements
-            if let Err(e) = node.subscribe_announcements().await {
-                warn!("Failed to subscribe to announcements: {}", e);
-            }
-
-            // Bootstrap with timeout
-            info!("Bootstrapping to network...");
-            match tokio::time::timeout(Duration::from_secs(15), node.bootstrap()).await {
-                Ok(Ok(())) => {
-                    info!(
-                        "Bootstrap complete, connected to {} peer(s)",
-                        node.connected_peers().len()
-                    );
-                }
-                Ok(Err(e)) => {
-                    warn!(
-                        "Bootstrap failed: {} - continuing with limited connectivity",
-                        e
-                    );
-                }
-                Err(_) => {
-                    warn!("Bootstrap timed out - continuing with limited connectivity");
-                }
-            }
-
-            Some(Arc::new(node))
-        } else {
-            None
-        };
+        let network = startup::start_network(&config, &private_key, public_key).await?;
 
         // Create Hedera settlement if configured
-        let settlement: Option<Arc<dyn nodalync_settle::Settlement>> =
-            if let Some(ref hedera) = config.hedera {
-                info!(
-                    account_id = %hedera.account_id,
-                    contract_id = %hedera.contract_id,
-                    network = %hedera.network,
-                    "Initializing Hedera settlement..."
-                );
-
-                #[cfg(feature = "hedera-sdk")]
-                {
-                    // Parse network
-                    let network = match hedera.network.to_lowercase().as_str() {
-                        "mainnet" => nodalync_settle::HederaNetwork::Mainnet,
-                        "previewnet" => nodalync_settle::HederaNetwork::Previewnet,
-                        _ => nodalync_settle::HederaNetwork::Testnet,
-                    };
-
-                    // Create Hedera config
-                    let hedera_config = nodalync_settle::HederaConfig {
-                        network,
-                        account_id: hedera.account_id.clone(),
-                        private_key_path: hedera.private_key_path.clone(),
-                        contract_id: hedera.contract_id.clone(),
-                        gas: nodalync_settle::GasConfig::default(),
-                        retry: nodalync_settle::RetryConfig::default(),
-                    };
-
-                    // Initialize real Hedera settlement
-                    let settlement = nodalync_settle::HederaSettlement::new(hedera_config)
-                        .await
-                        .map_err(|e| {
-                            std::io::Error::other(format!(
-                                "Failed to initialize Hedera settlement: {}",
-                                e
-                            ))
-                        })?;
-
-                    info!("Hedera settlement initialized successfully");
-                    Some(Arc::new(settlement) as Arc<dyn nodalync_settle::Settlement>)
-                }
-
-                #[cfg(not(feature = "hedera-sdk"))]
-                {
-                    return Err(Box::new(std::io::Error::other(
-                        "Hedera settlement requires the 'hedera-sdk' feature. \
-                         Build with: cargo build --features hedera-sdk",
-                    )));
-                }
-            } else {
-                None
-            };
+        let settlement = startup::create_settlement(config.hedera.as_ref()).await?;
 
         // Create operations with network and/or settlement
-        let mut ops = match (&network, &settlement) {
-            (Some(net), Some(settle)) => {
-                DefaultNodeOperations::with_defaults_network_and_settlement(
-                    state,
-                    peer_id,
-                    Arc::clone(net) as Arc<dyn nodalync_net::Network>,
-                    Arc::clone(settle),
-                )
-            }
-            (Some(net), None) => DefaultNodeOperations::with_defaults_and_network(
-                state,
-                peer_id,
-                Arc::clone(net) as Arc<dyn nodalync_net::Network>,
-            ),
-            (None, Some(settle)) => DefaultNodeOperations::with_defaults_and_settlement(
-                state,
-                peer_id,
-                Arc::clone(settle),
-            ),
-            (None, None) => DefaultNodeOperations::with_defaults(state, peer_id),
-        };
+        let mut ops = startup::build_ops(state, peer_id, network.as_ref(), settlement.as_ref());
 
         // Set the private key for signing payments
         ops.set_private_key(private_key);
@@ -271,89 +159,9 @@ impl NodalyncMcpServer {
         // Wrap ops in Arc<Mutex> for sharing
         let ops = Arc::new(Mutex::new(ops));
 
-        // Spawn background event processor if network is enabled
+        // Spawn background event processor, cleanup and settlement if network is enabled
         if let Some(ref net) = network {
-            let ops_clone = Arc::clone(&ops);
-            let network_clone = Arc::clone(net);
-
-            tokio::spawn(async move {
-                info!("MCP event processor started");
-                loop {
-                    match network_clone.next_event().await {
-                        Ok(event) => {
-                            let mut ops_guard = ops_clone.lock().await;
-                            if let Err(e) = ops_guard.handle_network_event(event).await {
-                                warn!("MCP event handler error: {}", e);
-                            }
-                        }
-                        Err(e) => {
-                            warn!("MCP network event error: {} - stopping event processor", e);
-                            break;
-                        }
-                    }
-                }
-            });
-
-            // Spawn background cleanup task for old announcements
-            let ops_cleanup = Arc::clone(&ops);
-            tokio::spawn(async move {
-                // Cleanup announcements older than 7 days
-                const ANNOUNCEMENT_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
-                // Run cleanup every hour
-                const CLEANUP_INTERVAL_SECONDS: u64 = 60 * 60;
-
-                loop {
-                    tokio::time::sleep(Duration::from_secs(CLEANUP_INTERVAL_SECONDS)).await;
-
-                    let ops_guard = ops_cleanup.lock().await;
-                    let deleted = ops_guard
-                        .state
-                        .cleanup_old_announcements(ANNOUNCEMENT_TTL_SECONDS);
-                    if deleted > 0 {
-                        info!(deleted = deleted, "Cleaned up old announcements");
-                    }
-                    drop(ops_guard);
-                }
-            });
-
-            // Spawn background settlement task to periodically settle channels
-            let ops_settlement = Arc::clone(&ops);
-            tokio::spawn(async move {
-                // Settlement interval: 5 minutes
-                const SETTLEMENT_INTERVAL_SECONDS: u64 = 5 * 60;
-
-                loop {
-                    tokio::time::sleep(Duration::from_secs(SETTLEMENT_INTERVAL_SECONDS)).await;
-
-                    let mut ops_guard = ops_settlement.lock().await;
-
-                    // Check if there are any channels that need settlement
-                    let channels = ops_guard.state.channels.list_open().unwrap_or_default();
-                    if channels.is_empty() {
-                        continue;
-                    }
-
-                    // Trigger settlement batch - this settles channels that have
-                    // exceeded the threshold (100 HBAR) or time limit (1 hour)
-                    match ops_guard.trigger_settlement_batch().await {
-                        Ok(Some(batch_id)) => {
-                            info!(
-                                batch_id = %batch_id,
-                                "Background settlement batch submitted"
-                            );
-                        }
-                        Ok(None) => {
-                            // No settlement needed (threshold not reached)
-                            debug!("Background settlement check: no settlement needed");
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "Background settlement batch failed");
-                        }
-                    }
-
-                    drop(ops_guard);
-                }
-            });
+            startup::spawn_background_tasks(&ops, net);
         }
 
         // Create budget tracker
@@ -491,293 +299,7 @@ impl NodalyncMcpServer {
         Parameters(input): Parameters<QueryKnowledgeInput>,
     ) -> Result<CallToolResult, McpError> {
         debug!(query = %input.query, "Processing query_knowledge request");
-
-        // Parse query as hash
-        let hash = match string_to_hash(&input.query) {
-            Ok(h) => h,
-            Err(e) => {
-                return Ok(tool_error(&NodalyncMcpError::InvalidHash(e)));
-            }
-        };
-
-        // Track all payment operations for the response
-        let mut payment_details = PaymentDetails {
-            channel_opened: false,
-            channel_id: None,
-            channel_tx_id: None,
-            deposit_tx_id: None,
-            deposit_amount_hbar: None,
-            provider_peer_id: None,
-            payment_receipt_id: None,
-            hedera_account_balance_hbar: None,
-        };
-
-        // Get preview to check price and find provider
-        let mut ops = self.ops.lock().await;
-        let preview = match ops.preview_content(&hash).await {
-            Ok(p) => p,
-            Err(e) => {
-                warn!(hash = %hash_to_string(&hash), error = %e, "Content not found");
-                return Ok(tool_error(&NodalyncMcpError::Ops(e)));
-            }
-        };
-
-        let price = preview.manifest.economics.price;
-        let price_hbar = tinybars_to_hbar(price);
-
-        // Check per-query budget limit
-        let max_budget = input
-            .budget_hbar
-            .map(hbar_to_tinybars)
-            .unwrap_or(self.budget.remaining());
-        if price > max_budget {
-            return Ok(tool_error(&NodalyncMcpError::BudgetExceeded {
-                cost: price,
-                remaining: max_budget,
-            }));
-        }
-
-        // Check session budget
-        if !self.budget.can_afford(price) {
-            return Ok(tool_error(&NodalyncMcpError::BudgetExceeded {
-                cost: price,
-                remaining: self.budget.remaining(),
-            }));
-        }
-
-        // === AUTO-DEPOSIT IF NEEDED ===
-        // For paid content, ensure we have enough in settlement contract
-        if price > 0 {
-            if let Some(ref settlement) = self.settlement {
-                // Check current balance
-                if let Ok(balance) = settlement.get_balance().await {
-                    // Minimum deposit: max of (price * 10, 1 HBAR) to avoid frequent deposits
-                    let min_required = (price * 10).max(hbar_to_tinybars(1.0));
-                    if balance < min_required {
-                        let deposit_amount = hbar_to_tinybars(10.0); // Deposit 10 HBAR
-                        info!(
-                            current_balance_hbar = tinybars_to_hbar(balance),
-                            deposit_hbar = 10.0,
-                            "Auto-depositing HBAR for payment operations"
-                        );
-
-                        match settlement.deposit(deposit_amount).await {
-                            Ok(tx_id) => {
-                                info!(tx_id = %tx_id, "Auto-deposit successful");
-                                payment_details.deposit_tx_id = Some(tx_id.to_string());
-                                payment_details.deposit_amount_hbar = Some(10.0);
-                            }
-                            Err(e) => {
-                                warn!(error = %e, "Auto-deposit failed, continuing anyway");
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // === AUTO-OPEN PAYMENT CHANNEL IF NEEDED ===
-        if price > 0 {
-            let libp2p_peer_opt = preview
-                .provider_peer_id
-                .as_ref()
-                .and_then(|s| s.parse::<LibP2pPeerId>().ok());
-
-            if let Some(libp2p_peer) = libp2p_peer_opt {
-                // Check if we have an existing channel
-                let existing_nodalync_id = self
-                    .network
-                    .as_ref()
-                    .and_then(|n| n.nodalync_peer_id(&libp2p_peer));
-
-                let has_channel = existing_nodalync_id
-                    .map(|id| ops.has_open_channel(&id).unwrap_or(false))
-                    .unwrap_or(false);
-
-                if !has_channel {
-                    // Open channel with on-chain funding
-                    let channel_deposit = hbar_to_tinybars(1.0);
-                    info!(
-                        provider_libp2p = %libp2p_peer,
-                        deposit_hbar = 1.0,
-                        "Auto-opening payment channel"
-                    );
-
-                    match ops
-                        .open_payment_channel_to_libp2p(libp2p_peer, channel_deposit)
-                        .await
-                    {
-                        Ok((channel, remote_nodalync_id)) => {
-                            info!(
-                                channel_id = %hash_to_string(&channel.channel_id),
-                                provider = %peer_id_to_string(&remote_nodalync_id),
-                                "Payment channel opened successfully"
-                            );
-                            payment_details.channel_opened = true;
-                            payment_details.channel_id = Some(hash_to_string(&channel.channel_id));
-                            payment_details.provider_peer_id =
-                                Some(peer_id_to_string(&remote_nodalync_id));
-
-                            // Get on-chain tx ID if available
-                            if let Some(tx_id) = channel.funding_tx_id {
-                                payment_details.channel_tx_id = Some(tx_id);
-                            }
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "Failed to open payment channel");
-                        }
-                    }
-                } else {
-                    payment_details.provider_peer_id =
-                        existing_nodalync_id.map(|p| peer_id_to_string(&p));
-                }
-            } else if preview.manifest.owner != UNKNOWN_PEER_ID {
-                // Fallback to Nodalync peer ID
-                let peer = preview.manifest.owner;
-                payment_details.provider_peer_id = Some(peer_id_to_string(&peer));
-
-                if !ops.has_open_channel(&peer).unwrap_or(false) {
-                    let channel_deposit = hbar_to_tinybars(1.0);
-
-                    match ops.open_payment_channel(&peer, channel_deposit).await {
-                        Ok(channel) => {
-                            payment_details.channel_opened = true;
-                            payment_details.channel_id = Some(hash_to_string(&channel.channel_id));
-                            if let Some(tx_id) = channel.funding_tx_id {
-                                payment_details.channel_tx_id = Some(tx_id);
-                            }
-                            tokio::time::sleep(Duration::from_millis(500)).await;
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "Failed to open payment channel");
-                        }
-                    }
-                }
-            }
-        }
-
-        // === RESERVE BUDGET AND EXECUTE QUERY ===
-        if price > 0 && self.budget.spend(price).is_none() {
-            return Ok(tool_error(&NodalyncMcpError::BudgetExceeded {
-                cost: price,
-                remaining: self.budget.remaining(),
-            }));
-        }
-
-        // Execute query with automatic retry on channel requirement
-        let response = match ops.query_content(&hash, price, None).await {
-            Ok(r) => r,
-            Err(nodalync_ops::OpsError::ChannelRequiredWithPeerInfo {
-                nodalync_peer_id,
-                libp2p_peer_id,
-            }) => {
-                info!("Server requires payment channel - auto-opening and retrying");
-                let channel_deposit = hbar_to_tinybars(1.0);
-
-                // Try libp2p peer ID first
-                if let Some(ref libp2p_str) = libp2p_peer_id {
-                    if let Ok(libp2p_peer) = libp2p_str.parse::<LibP2pPeerId>() {
-                        if let Ok((channel, remote_id)) = ops
-                            .open_payment_channel_to_libp2p(libp2p_peer, channel_deposit)
-                            .await
-                        {
-                            payment_details.channel_opened = true;
-                            payment_details.channel_id = Some(hash_to_string(&channel.channel_id));
-                            payment_details.provider_peer_id = Some(peer_id_to_string(&remote_id));
-                            if let Some(tx_id) = channel.funding_tx_id {
-                                payment_details.channel_tx_id = Some(tx_id);
-                            }
-                        }
-                    }
-                } else if let Some(ref nodalync_id) = nodalync_peer_id {
-                    if let Ok(channel) =
-                        ops.open_payment_channel(nodalync_id, channel_deposit).await
-                    {
-                        payment_details.channel_opened = true;
-                        payment_details.channel_id = Some(hash_to_string(&channel.channel_id));
-                        payment_details.provider_peer_id = Some(peer_id_to_string(nodalync_id));
-                        if let Some(tx_id) = channel.funding_tx_id {
-                            payment_details.channel_tx_id = Some(tx_id);
-                        }
-                        tokio::time::sleep(Duration::from_millis(500)).await;
-                    }
-                }
-
-                // Retry query
-                match ops.query_content(&hash, price, None).await {
-                    Ok(r) => r,
-                    Err(e) => {
-                        if price > 0 {
-                            self.budget.refund(price);
-                        }
-                        return Ok(tool_error(&NodalyncMcpError::Ops(e)));
-                    }
-                }
-            }
-            Err(e) => {
-                if price > 0 {
-                    self.budget.refund(price);
-                }
-                return Ok(tool_error(&NodalyncMcpError::Ops(e)));
-            }
-        };
-
-        // Record payment receipt
-        payment_details.payment_receipt_id = Some(hash_to_string(&response.receipt.payment_id));
-
-        // Get updated Hedera account balance (live on-chain balance)
-        if let Some(ref settlement) = self.settlement {
-            if let Ok(balance) = settlement.get_account_balance().await {
-                payment_details.hedera_account_balance_hbar = Some(tinybars_to_hbar(balance));
-            }
-        }
-
-        // Build output
-        let content_str = String::from_utf8_lossy(&response.content).to_string();
-        let sources: Vec<String> = response
-            .manifest
-            .provenance
-            .root_l0l1
-            .iter()
-            .map(|e| hash_to_string(&e.hash))
-            .collect();
-
-        let mut provenance: Vec<String> = sources.clone();
-        for h in &response.manifest.provenance.derived_from {
-            let hash_str = hash_to_string(h);
-            if !provenance.contains(&hash_str) {
-                provenance.push(hash_str);
-            }
-        }
-
-        // Only include payment details if there was a cost
-        let payment = if price > 0 {
-            Some(payment_details)
-        } else {
-            None
-        };
-
-        let output = QueryKnowledgeOutput {
-            content: content_str,
-            hash: hash_to_string(&response.manifest.hash),
-            sources,
-            provenance,
-            cost_hbar: price_hbar,
-            remaining_budget_hbar: self.budget.remaining_hbar(),
-            payment,
-        };
-
-        info!(
-            hash = %hash_to_string(&hash),
-            cost_hbar = price_hbar,
-            remaining_hbar = self.budget.remaining_hbar(),
-            "Query completed successfully"
-        );
-
-        let json = serde_json::to_string_pretty(&output)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        tool_outcome(self.run_query_knowledge(&input).await)
     }
 
     /// List available knowledge sources.
@@ -799,110 +321,18 @@ impl NodalyncMcpServer {
 
         let mut sources: Vec<SourceInfo> = Vec::new();
         let mut seen_hashes = std::collections::HashSet::new();
+        let topic = input.topic.as_deref();
 
         // 1. If network enabled, do a live peer search first (this also caches results)
         if include_network && ops.has_network() {
-            let query = input.topic.as_deref().unwrap_or("");
-            if let Ok(results) = ops.search_network(query, None, limit).await {
-                for r in results {
-                    if seen_hashes.insert(r.hash) {
-                        let preview = if !r.l1_summary.preview_mentions.is_empty() {
-                            r.l1_summary
-                                .preview_mentions
-                                .iter()
-                                .take(2)
-                                .map(|m| m.content.clone())
-                                .collect::<Vec<_>>()
-                                .join("; ")
-                        } else {
-                            r.l1_summary.summary.clone()
-                        };
-
-                        sources.push(SourceInfo {
-                            hash: hash_to_string(&r.hash),
-                            title: r.title.clone(),
-                            price_hbar: tinybars_to_hbar(r.price),
-                            preview,
-                            topics: r.l1_summary.primary_topics.clone(),
-                            peer_id: r.publisher_peer_id.clone(),
-                        });
-                    }
-                }
-            }
+            add_network_sources(&mut ops, topic, limit, &mut seen_hashes, &mut sources).await;
         } else {
             // 2. Local-only: Get local manifests
-            let filter = ManifestFilter::new()
-                .with_visibility(Visibility::Shared)
-                .limit(limit);
-
-            if let Ok(manifests) = ops.state.manifests.list(filter) {
-                for m in manifests {
-                    if seen_hashes.insert(m.hash) {
-                        // Apply topic filter if provided
-                        let matches_topic = if let Some(ref topic) = input.topic {
-                            let topic_lower = topic.to_lowercase();
-                            m.metadata.title.to_lowercase().contains(&topic_lower)
-                                || m.metadata
-                                    .tags
-                                    .iter()
-                                    .any(|t| t.to_lowercase().contains(&topic_lower))
-                                || m.metadata
-                                    .description
-                                    .as_ref()
-                                    .is_some_and(|d| d.to_lowercase().contains(&topic_lower))
-                        } else {
-                            true
-                        };
-
-                        if matches_topic {
-                            let preview = m.metadata.description.clone().unwrap_or_else(|| {
-                                format!("{} bytes of content", m.metadata.content_size)
-                            });
-
-                            // For local manifests, use the owner as peer_id
-                            let owner_peer_id = peer_id_to_string(&m.owner);
-                            sources.push(SourceInfo {
-                                hash: hash_to_string(&m.hash),
-                                title: m.metadata.title.clone(),
-                                price_hbar: tinybars_to_hbar(m.economics.price),
-                                preview,
-                                topics: m.metadata.tags.clone(),
-                                peer_id: Some(owner_peer_id),
-                            });
-                        }
-                    }
-                }
-            }
+            add_local_sources(&ops, topic, limit, &mut seen_hashes, &mut sources);
 
             // 3. Include cached network announcements if requested (but no live peers)
             if include_network {
-                let query = input.topic.as_deref().unwrap_or("");
-                let announcements = ops.state.search_announcements(query, None, limit);
-
-                for announce in announcements {
-                    if seen_hashes.insert(announce.hash) {
-                        let preview = if !announce.l1_summary.preview_mentions.is_empty() {
-                            announce
-                                .l1_summary
-                                .preview_mentions
-                                .iter()
-                                .map(|m| m.content.clone())
-                                .collect::<Vec<_>>()
-                                .join("; ")
-                        } else {
-                            format!("{} mentions extracted", announce.l1_summary.mention_count)
-                        };
-
-                        sources.push(SourceInfo {
-                            hash: hash_to_string(&announce.hash),
-                            title: announce.title.clone(),
-                            price_hbar: tinybars_to_hbar(announce.price),
-                            preview,
-                            topics: vec![],
-                            peer_id: announce.publisher_peer_id.clone(),
-                        });
-                    }
-                }
+                add_cached_announcement_sources(&ops, topic, limit, &mut seen_hashes, &mut sources);
             }
         }
 
@@ -922,10 +352,7 @@ impl NodalyncMcpServer {
             "Listed sources"
         );
 
-        let json = serde_json::to_string_pretty(&output)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        json_result(&output)
     }
 
     /// Search the Nodalync network for knowledge sources.
@@ -1204,135 +631,7 @@ impl NodalyncMcpServer {
         &self,
         Parameters(input): Parameters<OpenChannelInput>,
     ) -> Result<CallToolResult, McpError> {
-        // Validate minimum deposit (100 HBAR = 10,000,000,000 tinybars)
-        const MIN_DEPOSIT_HBAR: f64 = 100.0;
-        if input.deposit_hbar < MIN_DEPOSIT_HBAR {
-            warn!(
-                deposit = input.deposit_hbar,
-                minimum = MIN_DEPOSIT_HBAR,
-                "Deposit below minimum"
-            );
-            return Ok(tool_error(&NodalyncMcpError::Internal(format!(
-                "Deposit {} HBAR is below minimum of {} HBAR. Payment channels require at least 100 HBAR deposit.",
-                input.deposit_hbar, MIN_DEPOSIT_HBAR
-            ))));
-        }
-
-        let deposit_tinybars = hbar_to_tinybars(input.deposit_hbar);
-        let mut ops = self.ops.lock().await;
-
-        // Check if network is available
-        if !ops.has_network() {
-            warn!("Cannot open channel: network not available");
-            return Ok(tool_error(&NodalyncMcpError::Internal(
-                "Network not available. Ensure MCP server is started with --enable-network"
-                    .to_string(),
-            )));
-        }
-
-        // Try to parse as libp2p peer ID first (starts with "12D3Koo" or similar)
-        if let Ok(libp2p_peer) = input.peer_id.parse::<LibP2pPeerId>() {
-            info!(
-                libp2p_peer = %libp2p_peer,
-                deposit_hbar = input.deposit_hbar,
-                "Opening channel via libp2p peer ID"
-            );
-
-            match ops
-                .open_payment_channel_to_libp2p(libp2p_peer, deposit_tinybars)
-                .await
-            {
-                Ok((channel, remote_nodalync_id)) => {
-                    let output = OpenChannelOutput {
-                        channel_id: hash_to_string(&channel.channel_id),
-                        transaction_id: None, // MVP: local only
-                        balance_tinybars: channel.my_balance,
-                        peer_id: peer_id_to_string(&remote_nodalync_id),
-                    };
-
-                    info!(
-                        channel_id = %output.channel_id,
-                        remote_nodalync_id = %output.peer_id,
-                        deposit_hbar = input.deposit_hbar,
-                        "Channel opened successfully via libp2p"
-                    );
-
-                    let json = serde_json::to_string_pretty(&output)
-                        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-                    return Ok(CallToolResult::success(vec![Content::text(json)]));
-                }
-                Err(e) => {
-                    let error_str = e.to_string();
-                    warn!(error = %e, "Failed to open channel via libp2p");
-
-                    // Provide helpful recovery suggestions
-                    let message = if error_str.contains("already exists") {
-                        "Channel already exists with this peer. This can happen when local and remote state are out of sync. \
-                         Try using `reset_channels` to clear local state, then query content again - channels will re-open automatically.".to_string()
-                    } else {
-                        format!("Failed to open channel: {}. Check that the peer is connected and reachable.", e)
-                    };
-
-                    return Ok(tool_error(&NodalyncMcpError::Internal(message)));
-                }
-            }
-        }
-
-        // Try to parse as Nodalync peer ID (20 bytes base58, starts with "ndl")
-        let peer_bytes = match bs58::decode(&input.peer_id).into_vec() {
-            Ok(bytes) => bytes,
-            Err(_) => {
-                return Ok(tool_error(&NodalyncMcpError::InvalidHash(
-                    "Invalid peer ID format. Use the peer_id from list_sources (starts with 12D3Koo).".to_string()
-                )));
-            }
-        };
-
-        if peer_bytes.len() != 20 {
-            return Ok(tool_error(&NodalyncMcpError::InvalidHash(
-                format!("Invalid peer ID. Expected libp2p peer ID (from list_sources, starts with 12D3Koo) or Nodalync peer ID (20 bytes). Got {} bytes.", peer_bytes.len())
-            )));
-        }
-
-        let mut peer_arr = [0u8; 20];
-        peer_arr.copy_from_slice(&peer_bytes);
-        let peer_id = nodalync_crypto::PeerId(peer_arr);
-
-        info!(
-            nodalync_peer = %peer_id_to_string(&peer_id),
-            deposit_hbar = input.deposit_hbar,
-            "Opening channel via Nodalync peer ID"
-        );
-
-        match ops.open_payment_channel(&peer_id, deposit_tinybars).await {
-            Ok(channel) => {
-                let output = OpenChannelOutput {
-                    channel_id: hash_to_string(&channel.channel_id),
-                    transaction_id: None, // MVP: local only
-                    balance_tinybars: channel.my_balance,
-                    peer_id: input.peer_id,
-                };
-
-                info!(
-                    channel_id = %output.channel_id,
-                    deposit_hbar = input.deposit_hbar,
-                    "Channel opened successfully"
-                );
-
-                let json = serde_json::to_string_pretty(&output)
-                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-                Ok(CallToolResult::success(vec![Content::text(json)]))
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to open channel via Nodalync peer ID");
-                Ok(tool_error(&NodalyncMcpError::Internal(format!(
-                    "Failed to open channel: {}. Check that the peer is connected.",
-                    e
-                ))))
-            }
-        }
+        tool_outcome(self.run_open_channel(input).await)
     }
 
     /// Close a payment channel and settle on-chain.
@@ -1347,206 +646,7 @@ impl NodalyncMcpServer {
         &self,
         Parameters(input): Parameters<CloseChannelInput>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::tools::CloseChannelOutput;
-        use nodalync_ops::CloseResult;
-
-        // Parse peer ID - accept both libp2p (12D3KooW...) and Nodalync (ndl...) formats
-        let peer_id = if input.peer_id.starts_with("12D3KooW") {
-            // libp2p peer ID - look up Nodalync peer ID from network
-            let Some(ref network) = self.network else {
-                return Ok(tool_error(&NodalyncMcpError::Internal(
-                    "Network not available. Cannot look up Nodalync peer ID from libp2p ID."
-                        .to_string(),
-                )));
-            };
-
-            let libp2p_peer: LibP2pPeerId = input
-                .peer_id
-                .parse()
-                .map_err(|_| McpError::internal_error("Invalid libp2p peer ID format", None))?;
-
-            // Look up the Nodalync peer ID
-            match network.nodalync_peer_id(&libp2p_peer) {
-                Some(nodalync_id) => nodalync_id,
-                None => {
-                    return Ok(tool_error(&NodalyncMcpError::InvalidHash(
-                        "No Nodalync peer ID mapping found for this libp2p peer. \
-                         The peer may not have an open channel with you."
-                            .to_string(),
-                    )));
-                }
-            }
-        } else {
-            // Nodalync peer ID (ndl...)
-            let peer_bytes = match bs58::decode(&input.peer_id).into_vec() {
-                Ok(bytes) => bytes,
-                Err(_) => {
-                    return Ok(tool_error(&NodalyncMcpError::InvalidHash(
-                        "Invalid peer ID format. Use the peer_id from status or channel details."
-                            .to_string(),
-                    )));
-                }
-            };
-
-            if peer_bytes.len() != 20 {
-                return Ok(tool_error(&NodalyncMcpError::InvalidHash(format!(
-                    "Invalid peer ID. Expected Nodalync peer ID (20 bytes base58, starts with 'ndl') \
-                     or libp2p peer ID (starts with '12D3KooW'). Got {} bytes.",
-                    peer_bytes.len()
-                ))));
-            }
-
-            let mut peer_arr = [0u8; 20];
-            peer_arr.copy_from_slice(&peer_bytes);
-            nodalync_crypto::PeerId(peer_arr)
-        };
-
-        let mut ops = self.ops.lock().await;
-
-        // Get channel info before closing
-        let channel_info =
-            ops.state.channels.get(&peer_id).map_err(|e| {
-                McpError::internal_error(format!("Failed to get channel: {}", e), None)
-            })?;
-
-        let Some(channel) = channel_info else {
-            return Ok(tool_error(&NodalyncMcpError::Internal(
-                "No channel exists with this peer.".to_string(),
-            )));
-        };
-
-        let final_balance = channel.my_balance;
-
-        info!(
-            peer_id = %peer_id_to_string(&peer_id),
-            balance_tinybars = final_balance,
-            "Closing payment channel"
-        );
-
-        // Get the private key for signing
-        let Some(private_key) = ops.private_key().cloned() else {
-            return Ok(tool_error(&NodalyncMcpError::Internal(
-                "Private key not available. Cannot sign channel close.".to_string(),
-            )));
-        };
-
-        // Attempt cooperative close with proper signature
-        let result = ops.close_payment_channel(&peer_id, &private_key).await;
-        drop(ops); // Release lock before async Hedera calls
-
-        // Get updated Hedera account balance
-        let hedera_balance = if let Some(ref settlement) = self.settlement {
-            settlement
-                .get_account_balance()
-                .await
-                .ok()
-                .map(tinybars_to_hbar)
-        } else {
-            None
-        };
-
-        match result {
-            Ok(CloseResult::Success {
-                transaction_id,
-                final_balances,
-            }) => {
-                let output = CloseChannelOutput {
-                    success: true,
-                    close_method: "cooperative".to_string(),
-                    transaction_id: Some(transaction_id),
-                    final_balance_tinybars: final_balances.0,
-                    peer_id: input.peer_id.clone(),
-                    hedera_account_balance_hbar: hedera_balance,
-                };
-
-                info!(
-                    peer_id = %input.peer_id,
-                    close_method = "cooperative",
-                    tx_id = ?output.transaction_id,
-                    "Channel closed successfully"
-                );
-
-                let json = serde_json::to_string_pretty(&output)
-                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-                Ok(CallToolResult::success(vec![Content::text(json)]))
-            }
-            Ok(CloseResult::SuccessOffChain { final_balances }) => {
-                let output = CloseChannelOutput {
-                    success: true,
-                    close_method: "off_chain".to_string(),
-                    transaction_id: None,
-                    final_balance_tinybars: final_balances.0,
-                    peer_id: input.peer_id.clone(),
-                    hedera_account_balance_hbar: hedera_balance,
-                };
-
-                info!(
-                    peer_id = %input.peer_id,
-                    close_method = "off_chain",
-                    "Channel closed off-chain"
-                );
-
-                let json = serde_json::to_string_pretty(&output)
-                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-                Ok(CallToolResult::success(vec![Content::text(json)]))
-            }
-            Ok(CloseResult::PeerUnresponsive { .. }) => {
-                // Peer didn't respond - initiate dispute
-                info!(
-                    peer_id = %input.peer_id,
-                    "Peer unresponsive, initiating dispute"
-                );
-
-                let mut ops = self.ops.lock().await;
-                match ops.dispute_payment_channel(&peer_id, &private_key).await {
-                    Ok(tx_id) => {
-                        let output = CloseChannelOutput {
-                            success: true,
-                            close_method: "dispute_initiated".to_string(),
-                            transaction_id: Some(tx_id),
-                            final_balance_tinybars: final_balance,
-                            peer_id: input.peer_id.clone(),
-                            hedera_account_balance_hbar: hedera_balance,
-                        };
-
-                        info!(
-                            peer_id = %input.peer_id,
-                            close_method = "dispute_initiated",
-                            tx_id = ?output.transaction_id,
-                            "Dispute initiated - settlement in 24 hours"
-                        );
-
-                        let json = serde_json::to_string_pretty(&output)
-                            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-                        Ok(CallToolResult::success(vec![Content::text(json)]))
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Failed to initiate dispute");
-                        Ok(tool_error(&NodalyncMcpError::Internal(format!(
-                            "Peer unresponsive and dispute failed: {}",
-                            e
-                        ))))
-                    }
-                }
-            }
-            Ok(CloseResult::OnChainFailed { error }) => {
-                warn!(error = %error, "On-chain close failed");
-                Ok(tool_error(&NodalyncMcpError::Internal(format!(
-                    "On-chain settlement failed: {}",
-                    error
-                ))))
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to close channel");
-                Ok(tool_error(&NodalyncMcpError::Internal(format!(
-                    "Failed to close channel: {}",
-                    e
-                ))))
-            }
-        }
+        tool_outcome(self.run_close_channel(input).await)
     }
 
     /// Close all open payment channels.
@@ -1557,216 +657,7 @@ impl NodalyncMcpServer {
         description = "Close all open payment channels and settle balances on Hedera. Attempts cooperative close first; if a peer is unresponsive, automatically initiates a dispute to ensure payment. Use this before ending a session to settle all pending payments."
     )]
     async fn close_all_channels(&self) -> Result<CallToolResult, McpError> {
-        let mut results: Vec<ChannelCloseResult> = Vec::new();
-        let mut channels_closed = 0u32;
-        let mut disputes_initiated = 0u32;
-        let mut channels_failed = 0u32;
-
-        // Get list of open channels and private key
-        let (channels, private_key) = {
-            let ops = self.ops.lock().await;
-            let channels = ops.state.channels.list_open().unwrap_or_default();
-            let private_key = ops.private_key().cloned();
-            (channels, private_key)
-        };
-
-        let Some(private_key) = private_key else {
-            return Ok(tool_error(&NodalyncMcpError::Internal(
-                "Private key not available. Cannot sign channel closes.".to_string(),
-            )));
-        };
-
-        let channels_processed = channels.len() as u32;
-
-        info!(
-            channels_count = channels_processed,
-            "Closing all payment channels"
-        );
-
-        // Close each channel
-        for (peer_id, channel) in channels {
-            let peer_id_str = peer_id_to_string(&peer_id);
-            let _final_balance = channel.my_balance;
-            let was_funded_on_chain = channel.funding_tx_id.is_some();
-
-            // Try cooperative close with timeout
-            let close_result = {
-                let mut ops = self.ops.lock().await;
-                tokio::time::timeout(
-                    Duration::from_secs(5),
-                    ops.close_payment_channel(&peer_id, &private_key),
-                )
-                .await
-            };
-
-            match close_result {
-                Ok(Ok(nodalync_ops::CloseResult::Success { transaction_id, .. })) => {
-                    results.push(ChannelCloseResult {
-                        peer_id: peer_id_str.clone(),
-                        success: true,
-                        close_method: "cooperative".to_string(),
-                        transaction_id: Some(transaction_id),
-                        error: None,
-                    });
-                    channels_closed += 1;
-                    info!(peer_id = %peer_id_str, "Channel closed cooperatively");
-                }
-                Ok(Ok(nodalync_ops::CloseResult::SuccessOffChain { .. })) => {
-                    results.push(ChannelCloseResult {
-                        peer_id: peer_id_str.clone(),
-                        success: true,
-                        close_method: "off_chain".to_string(),
-                        transaction_id: None,
-                        error: None,
-                    });
-                    channels_closed += 1;
-                    info!(peer_id = %peer_id_str, "Channel closed off-chain");
-                }
-                Ok(Ok(nodalync_ops::CloseResult::PeerUnresponsive { .. }))
-                | Ok(Err(_))
-                | Err(_) => {
-                    // Peer unresponsive or error - initiate dispute
-                    let dispute_result = {
-                        let mut ops = self.ops.lock().await;
-                        ops.dispute_payment_channel(&peer_id, &private_key).await
-                    };
-
-                    match dispute_result {
-                        Ok(tx_id) => {
-                            results.push(ChannelCloseResult {
-                                peer_id: peer_id_str.clone(),
-                                success: true,
-                                close_method: "dispute_initiated".to_string(),
-                                transaction_id: Some(tx_id),
-                                error: None,
-                            });
-                            disputes_initiated += 1;
-                            info!(
-                                peer_id = %peer_id_str,
-                                "Dispute initiated for unresponsive peer"
-                            );
-                        }
-                        Err(e) => {
-                            // If the channel was never funded on-chain, just remove it
-                            if !was_funded_on_chain {
-                                let mut ops = self.ops.lock().await;
-                                let _ = ops.state.channels.delete(&peer_id);
-                                results.push(ChannelCloseResult {
-                                    peer_id: peer_id_str.clone(),
-                                    success: true,
-                                    close_method: "cleared_unfunded".to_string(),
-                                    transaction_id: None,
-                                    error: None,
-                                });
-                                channels_closed += 1;
-                                info!(
-                                    peer_id = %peer_id_str,
-                                    "Cleared unfunded channel from local state"
-                                );
-                            } else {
-                                results.push(ChannelCloseResult {
-                                    peer_id: peer_id_str.clone(),
-                                    success: false,
-                                    close_method: "failed".to_string(),
-                                    transaction_id: None,
-                                    error: Some(e.to_string()),
-                                });
-                                channels_failed += 1;
-                                warn!(
-                                    peer_id = %peer_id_str,
-                                    error = %e,
-                                    "Failed to close or dispute channel"
-                                );
-                            }
-                        }
-                    }
-                }
-                Ok(Ok(nodalync_ops::CloseResult::OnChainFailed { error })) => {
-                    // On-chain failed - try dispute
-                    let dispute_result = {
-                        let mut ops = self.ops.lock().await;
-                        ops.dispute_payment_channel(&peer_id, &private_key).await
-                    };
-
-                    match dispute_result {
-                        Ok(tx_id) => {
-                            results.push(ChannelCloseResult {
-                                peer_id: peer_id_str.clone(),
-                                success: true,
-                                close_method: "dispute_initiated".to_string(),
-                                transaction_id: Some(tx_id),
-                                error: None,
-                            });
-                            disputes_initiated += 1;
-                        }
-                        Err(e) => {
-                            // If the channel was never funded on-chain, just remove it
-                            if !was_funded_on_chain {
-                                let mut ops = self.ops.lock().await;
-                                let _ = ops.state.channels.delete(&peer_id);
-                                results.push(ChannelCloseResult {
-                                    peer_id: peer_id_str.clone(),
-                                    success: true,
-                                    close_method: "cleared_unfunded".to_string(),
-                                    transaction_id: None,
-                                    error: None,
-                                });
-                                channels_closed += 1;
-                                info!(
-                                    peer_id = %peer_id_str,
-                                    "Cleared unfunded channel from local state"
-                                );
-                            } else {
-                                results.push(ChannelCloseResult {
-                                    peer_id: peer_id_str.clone(),
-                                    success: false,
-                                    close_method: "failed".to_string(),
-                                    transaction_id: None,
-                                    error: Some(format!(
-                                        "On-chain close failed: {}. Dispute also failed: {}",
-                                        error, e
-                                    )),
-                                });
-                                channels_failed += 1;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Get updated Hedera balance
-        let hedera_balance = if let Some(ref settlement) = self.settlement {
-            settlement
-                .get_account_balance()
-                .await
-                .ok()
-                .map(tinybars_to_hbar)
-        } else {
-            None
-        };
-
-        let output = CloseAllChannelsOutput {
-            channels_processed,
-            channels_closed,
-            disputes_initiated,
-            channels_failed,
-            results,
-            hedera_account_balance_hbar: hedera_balance,
-        };
-
-        info!(
-            processed = channels_processed,
-            closed = channels_closed,
-            disputes = disputes_initiated,
-            failed = channels_failed,
-            "Close all channels complete"
-        );
-
-        let json = serde_json::to_string_pretty(&output)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        tool_outcome(self.run_close_all_channels().await)
     }
 
     /// Publish new content to the Nodalync network.
@@ -1780,93 +671,7 @@ impl NodalyncMcpServer {
         Parameters(input): Parameters<PublishContentInput>,
     ) -> Result<CallToolResult, McpError> {
         debug!(title = %input.title, "Processing publish_content request");
-
-        // Validate content
-        if input.content.is_empty() {
-            return Ok(tool_error(&NodalyncMcpError::EmptyContent));
-        }
-        if input.content.len() > MAX_CONTENT_SIZE {
-            return Ok(tool_error(&NodalyncMcpError::ContentTooLarge {
-                size: input.content.len(),
-                max: MAX_CONTENT_SIZE,
-            }));
-        }
-
-        // Parse visibility
-        let visibility = match parse_visibility(&input.visibility) {
-            Some(v) => v,
-            None => {
-                return Ok(tool_error(&NodalyncMcpError::Internal(format!(
-                    "Invalid visibility '{}'. Use 'private', 'unlisted', or 'shared'.",
-                    input.visibility
-                ))));
-            }
-        };
-
-        let content_bytes = input.content.as_bytes();
-        let size_bytes = content_bytes.len();
-
-        // Check for duplicates
-        let computed_hash = content_hash(content_bytes);
-        let mut ops = self.ops.lock().await;
-
-        if let Ok(Some(_)) = ops.get_content_manifest(&computed_hash) {
-            return Ok(tool_error(&NodalyncMcpError::ContentAlreadyExists(
-                hash_to_string(&computed_hash),
-            )));
-        }
-
-        // Build metadata
-        let mut metadata = nodalync_types::Metadata::new(input.title.clone(), size_bytes as u64);
-        if let Some(desc) = input.description {
-            metadata = metadata.with_description(desc);
-        }
-        if let Some(mime) = input.mime_type {
-            metadata = metadata.with_mime_type(mime);
-        }
-        if let Some(tags) = input.tags {
-            metadata = metadata.with_tags(tags);
-        }
-
-        // Create content
-        let hash = ops
-            .create_content(content_bytes, metadata)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        // Extract L1 summary
-        let l1_summary = ops
-            .extract_l1_summary(&hash)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        // Publish
-        let price = input.price_hbar.map(hbar_to_tinybars).unwrap_or(0);
-
-        ops.publish_content(&hash, visibility, price)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        let output = PublishContentOutput {
-            hash: hash_to_string(&hash),
-            title: input.title,
-            content_type: "L0".to_string(),
-            visibility: format!("{:?}", visibility),
-            price_hbar: tinybars_to_hbar(price),
-            size_bytes,
-            mentions_extracted: l1_summary.mention_count,
-            topics: l1_summary.primary_topics,
-        };
-
-        info!(
-            hash = %output.hash,
-            title = %output.title,
-            visibility = %output.visibility,
-            "Content published"
-        );
-
-        let json = serde_json::to_string_pretty(&output)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        tool_outcome(self.run_publish_content(input).await)
     }
 
     /// Preview content metadata without paying.
@@ -1939,114 +744,7 @@ impl NodalyncMcpServer {
         Parameters(input): Parameters<SynthesizeContentInput>,
     ) -> Result<CallToolResult, McpError> {
         debug!(title = %input.title, sources = ?input.sources, "Processing synthesize_content request");
-
-        // Validate content
-        if input.content.is_empty() {
-            return Ok(tool_error(&NodalyncMcpError::EmptyContent));
-        }
-        if input.content.len() > MAX_CONTENT_SIZE {
-            return Ok(tool_error(&NodalyncMcpError::ContentTooLarge {
-                size: input.content.len(),
-                max: MAX_CONTENT_SIZE,
-            }));
-        }
-        if input.sources.is_empty() {
-            return Ok(tool_error(&NodalyncMcpError::Internal(
-                "At least one source hash is required for synthesis.".to_string(),
-            )));
-        }
-
-        // Parse source hashes
-        let mut source_hashes = Vec::new();
-        for s in &input.sources {
-            match string_to_hash(s) {
-                Ok(h) => source_hashes.push(h),
-                Err(e) => {
-                    return Ok(tool_error(&NodalyncMcpError::InvalidHash(format!(
-                        "Invalid source hash '{}': {}",
-                        s, e
-                    ))));
-                }
-            }
-        }
-
-        let content_bytes = input.content.as_bytes();
-        let size_bytes = content_bytes.len();
-
-        // Build metadata
-        let mut metadata = nodalync_types::Metadata::new(input.title.clone(), size_bytes as u64);
-        if let Some(desc) = input.description {
-            metadata = metadata.with_description(desc);
-        }
-
-        let mut ops = self.ops.lock().await;
-
-        // Derive content
-        let hash = ops
-            .derive_content(&source_hashes, content_bytes, metadata)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        // Get manifest for provenance info
-        let manifest = ops
-            .get_content_manifest(&hash)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| {
-                McpError::internal_error("Failed to retrieve manifest after derive", None)
-            })?;
-
-        let provenance_depth = manifest.provenance.depth;
-        let root_source_count = manifest.provenance.root_l0l1.len();
-
-        // Optionally publish
-        let published = input.publish.unwrap_or(false);
-        let mut vis_str = None;
-        let mut price_out = None;
-
-        if published {
-            let visibility = match parse_visibility(&input.visibility) {
-                Some(v) => v,
-                None => {
-                    return Ok(tool_error(&NodalyncMcpError::Internal(format!(
-                        "Invalid visibility '{}'. Use 'private', 'unlisted', or 'shared'.",
-                        input.visibility
-                    ))));
-                }
-            };
-
-            let price = input.price_hbar.map(hbar_to_tinybars).unwrap_or(0);
-
-            ops.publish_content(&hash, visibility, price)
-                .await
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-            vis_str = Some(format!("{:?}", visibility));
-            price_out = Some(tinybars_to_hbar(price));
-        }
-
-        let output = SynthesizeContentOutput {
-            hash: hash_to_string(&hash),
-            title: input.title,
-            content_type: "L3".to_string(),
-            sources: input.sources,
-            provenance_depth,
-            root_source_count,
-            published,
-            visibility: vis_str,
-            price_hbar: price_out,
-        };
-
-        info!(
-            hash = %output.hash,
-            sources = output.sources.len(),
-            provenance_depth = provenance_depth,
-            published = published,
-            "Content synthesized"
-        );
-
-        let json = serde_json::to_string_pretty(&output)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        tool_outcome(self.run_synthesize_content(input).await)
     }
 
     /// Update existing content with a new version.
@@ -2060,94 +758,7 @@ impl NodalyncMcpServer {
         Parameters(input): Parameters<UpdateContentInput>,
     ) -> Result<CallToolResult, McpError> {
         debug!(previous_hash = %input.previous_hash, "Processing update_content request");
-
-        // Validate
-        if input.content.is_empty() {
-            return Ok(tool_error(&NodalyncMcpError::EmptyContent));
-        }
-        if input.content.len() > MAX_CONTENT_SIZE {
-            return Ok(tool_error(&NodalyncMcpError::ContentTooLarge {
-                size: input.content.len(),
-                max: MAX_CONTENT_SIZE,
-            }));
-        }
-
-        let old_hash = match string_to_hash(&input.previous_hash) {
-            Ok(h) => h,
-            Err(e) => return Ok(tool_error(&NodalyncMcpError::InvalidHash(e))),
-        };
-
-        let mut ops = self.ops.lock().await;
-
-        // Load old manifest for metadata inheritance
-        let old_manifest = match ops.get_content_manifest(&old_hash) {
-            Ok(Some(m)) => m,
-            Ok(None) => {
-                return Ok(tool_error(&NodalyncMcpError::NotFound(format!(
-                    "Previous version {} not found",
-                    input.previous_hash
-                ))));
-            }
-            Err(e) => return Ok(tool_error(&NodalyncMcpError::Ops(e))),
-        };
-
-        let content_bytes = input.content.as_bytes();
-        let size_bytes = content_bytes.len();
-
-        // Build metadata, inheriting from previous version
-        let title = input
-            .title
-            .unwrap_or_else(|| old_manifest.metadata.title.clone());
-        let mut metadata = nodalync_types::Metadata::new(title.clone(), size_bytes as u64);
-
-        // Inherit or override description
-        let description = input
-            .description
-            .or_else(|| old_manifest.metadata.description.clone());
-        if let Some(desc) = description {
-            metadata = metadata.with_description(desc);
-        }
-
-        // Inherit mime_type and tags
-        if let Some(mime) = &old_manifest.metadata.mime_type {
-            metadata = metadata.with_mime_type(mime.clone());
-        }
-        if !old_manifest.metadata.tags.is_empty() {
-            metadata = metadata.with_tags(old_manifest.metadata.tags.clone());
-        }
-
-        // Create new version
-        let new_hash = ops
-            .update_content(&old_hash, content_bytes, metadata)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        // Get new manifest for version info
-        let new_manifest = ops
-            .get_content_manifest(&new_hash)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| {
-                McpError::internal_error("Failed to retrieve manifest after update", None)
-            })?;
-
-        let output = UpdateContentOutput {
-            hash: hash_to_string(&new_hash),
-            previous_hash: input.previous_hash,
-            version_number: new_manifest.version.number,
-            title,
-            size_bytes,
-            visibility: format!("{:?}", new_manifest.visibility),
-        };
-
-        info!(
-            hash = %output.hash,
-            version = output.version_number,
-            "Content updated"
-        );
-
-        let json = serde_json::to_string_pretty(&output)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        tool_outcome(self.run_update_content(input).await)
     }
 
     /// Delete content and set visibility to Offline.
@@ -2162,60 +773,7 @@ impl NodalyncMcpServer {
         Parameters(input): Parameters<DeleteContentInput>,
     ) -> Result<CallToolResult, McpError> {
         debug!(hash = %input.hash, "Processing delete_content request");
-
-        let hash = match string_to_hash(&input.hash) {
-            Ok(h) => h,
-            Err(e) => return Ok(tool_error(&NodalyncMcpError::InvalidHash(e))),
-        };
-
-        let mut ops = self.ops.lock().await;
-
-        // Load manifest and verify ownership
-        let mut manifest = match ops.get_content_manifest(&hash) {
-            Ok(Some(m)) => m,
-            Ok(None) => {
-                return Ok(tool_error(&NodalyncMcpError::NotFound(hash_to_string(
-                    &hash,
-                ))));
-            }
-            Err(e) => return Ok(tool_error(&NodalyncMcpError::Ops(e))),
-        };
-
-        let our_peer_id = ops.peer_id();
-        if manifest.owner != our_peer_id {
-            return Ok(tool_error(&NodalyncMcpError::Internal(
-                "Cannot delete content you don't own.".to_string(),
-            )));
-        }
-
-        let title = manifest.metadata.title.clone();
-
-        // Delete content bytes
-        ops.state
-            .content
-            .delete(&hash)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        // Update manifest visibility to Offline
-        manifest.visibility = Visibility::Offline;
-        ops.state
-            .manifests
-            .update(&manifest)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        let output = DeleteContentOutput {
-            hash: hash_to_string(&hash),
-            title,
-            content_removed: true,
-            visibility: "Offline".to_string(),
-        };
-
-        info!(hash = %output.hash, "Content deleted");
-
-        let json = serde_json::to_string_pretty(&output)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        tool_outcome(self.run_delete_content(input).await)
     }
 
     /// Change content visibility.
@@ -2357,75 +915,1704 @@ impl NodalyncMcpServer {
     ) -> Result<CallToolResult, McpError> {
         debug!(limit = ?input.limit, content_type = ?input.content_type, "Processing get_earnings request");
 
-        let limit = input.limit.unwrap_or(20).min(100);
-        let ops = self.ops.lock().await;
-
-        let peer_id = ops.peer_id();
-        let mut filter = ManifestFilter::new().with_owner(peer_id).limit(limit);
-
-        if let Some(ref ct_str) = input.content_type {
-            if let Some(ct) = parse_content_type(ct_str) {
-                filter = filter.with_content_type(ct);
-            } else {
-                return Ok(tool_error(&NodalyncMcpError::Internal(format!(
-                    "Invalid content type '{}'. Use L0, L1, L2, or L3.",
-                    ct_str
-                ))));
-            }
-        }
-
-        let manifests = ops
-            .state
-            .manifests
-            .list(filter)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        let mut items: Vec<ContentEarnings> = Vec::new();
-        let mut total_revenue: u64 = 0;
-        let mut total_queries: u64 = 0;
-
-        for m in manifests {
-            if m.economics.total_queries > 0 || m.economics.total_revenue > 0 {
-                total_revenue += m.economics.total_revenue;
-                total_queries += m.economics.total_queries;
-
-                items.push(ContentEarnings {
-                    hash: hash_to_string(&m.hash),
-                    title: m.metadata.title.clone(),
-                    content_type: format!("{:?}", m.content_type),
-                    total_queries: m.economics.total_queries,
-                    total_revenue_hbar: tinybars_to_hbar(m.economics.total_revenue),
-                    price_hbar: tinybars_to_hbar(m.economics.price),
-                    visibility: format!("{:?}", m.visibility),
-                });
-            }
-        }
-
-        let content_count = items.len() as u32;
-
-        let output = GetEarningsOutput {
-            items,
-            total_revenue_hbar: tinybars_to_hbar(total_revenue),
-            total_queries,
-            content_count,
-        };
-
-        info!(
-            content_count = content_count,
-            total_queries = total_queries,
-            total_revenue_hbar = output.total_revenue_hbar,
-            "Earnings retrieved"
-        );
-
-        let json = serde_json::to_string_pretty(&output)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        tool_outcome(self.run_get_earnings(input).await)
     }
 }
 
 /// Knowledge resource URI prefix.
 const KNOWLEDGE_URI_PREFIX: &str = "knowledge://";
+
+/// Steps of the `query_knowledge` tool. Each returns the tool's error response
+/// (`Err(CallToolResult)`) when the query cannot go on.
+impl NodalyncMcpServer {
+    /// Look up the content, pay for it as needed and query it.
+    async fn run_query_knowledge(
+        &self,
+        input: &QueryKnowledgeInput,
+    ) -> Result<QueryKnowledgeOutput, CallToolResult> {
+        // Parse query as hash
+        let hash = string_to_hash(&input.query)
+            .map_err(|e| tool_error(&NodalyncMcpError::InvalidHash(e)))?;
+
+        // Track all payment operations for the response
+        let mut payment_details = empty_payment_details();
+
+        // Get preview to check price and find provider
+        let mut ops = self.ops.lock().await;
+        let preview = ops.preview_content(&hash).await.map_err(|e| {
+            warn!(hash = %hash_to_string(&hash), error = %e, "Content not found");
+            tool_error(&NodalyncMcpError::Ops(e))
+        })?;
+        let price = preview.manifest.economics.price;
+
+        self.prepare_query_payment(&mut ops, &preview, input.budget_hbar, &mut payment_details)
+            .await?;
+
+        // Execute query with automatic retry on channel requirement
+        let response = self
+            .execute_query(&mut ops, &hash, price, &mut payment_details)
+            .await?;
+
+        // Record payment receipt
+        payment_details.payment_receipt_id = Some(hash_to_string(&response.receipt.payment_id));
+
+        // Get updated Hedera account balance (live on-chain balance)
+        self.record_account_balance(&mut payment_details).await;
+
+        let output = build_query_output(
+            response,
+            price,
+            payment_details,
+            self.budget.remaining_hbar(),
+        );
+        info!(
+            hash = %hash_to_string(&hash),
+            cost_hbar = output.cost_hbar,
+            remaining_hbar = self.budget.remaining_hbar(),
+            "Query completed successfully"
+        );
+        Ok(output)
+    }
+
+    /// Check the budgets, then for paid content: auto-deposit, auto-open a payment
+    /// channel with the provider, and reserve the price from the session budget.
+    async fn prepare_query_payment(
+        &self,
+        ops: &mut DefaultNodeOperations,
+        preview: &nodalync_ops::PreviewResponse,
+        budget_hbar: Option<f64>,
+        payment_details: &mut PaymentDetails,
+    ) -> Result<(), CallToolResult> {
+        let price = preview.manifest.economics.price;
+        self.check_query_budget(price, budget_hbar)?;
+        if price == 0 {
+            return Ok(());
+        }
+
+        // === AUTO-DEPOSIT IF NEEDED ===
+        self.auto_deposit_for_query(price, payment_details).await;
+
+        // === AUTO-OPEN PAYMENT CHANNEL IF NEEDED ===
+        self.ensure_provider_channel(ops, preview, payment_details)
+            .await;
+
+        // === RESERVE BUDGET ===
+        self.reserve_budget(price)
+    }
+
+    /// The price must fit the per-query limit (the session's remaining budget by
+    /// default) and the session budget.
+    fn check_query_budget(
+        &self,
+        price: u64,
+        budget_hbar: Option<f64>,
+    ) -> Result<(), CallToolResult> {
+        // Check per-query budget limit
+        let max_budget = budget_hbar
+            .map(hbar_to_tinybars)
+            .unwrap_or(self.budget.remaining());
+        if price > max_budget {
+            return Err(tool_error(&NodalyncMcpError::BudgetExceeded {
+                cost: price,
+                remaining: max_budget,
+            }));
+        }
+
+        // Check session budget
+        if !self.budget.can_afford(price) {
+            return Err(tool_error(&NodalyncMcpError::BudgetExceeded {
+                cost: price,
+                remaining: self.budget.remaining(),
+            }));
+        }
+        Ok(())
+    }
+
+    /// Spend `price` from the session budget, failing if it no longer fits.
+    fn reserve_budget(&self, price: u64) -> Result<(), CallToolResult> {
+        if self.budget.spend(price).is_none() {
+            return Err(tool_error(&NodalyncMcpError::BudgetExceeded {
+                cost: price,
+                remaining: self.budget.remaining(),
+            }));
+        }
+        Ok(())
+    }
+
+    /// For paid content, ensure we have enough in the settlement contract: deposit
+    /// 10 HBAR when the balance is below max(price × 10, 1 HBAR). A failed deposit is logged.
+    async fn auto_deposit_for_query(&self, price: u64, payment_details: &mut PaymentDetails) {
+        let Some(ref settlement) = self.settlement else {
+            return;
+        };
+        // Check current balance
+        let Ok(balance) = settlement.get_balance().await else {
+            return;
+        };
+        // Minimum deposit: max of (price * 10, 1 HBAR) to avoid frequent deposits
+        let min_required = (price * 10).max(hbar_to_tinybars(1.0));
+        if balance >= min_required {
+            return;
+        }
+
+        let deposit_amount = hbar_to_tinybars(10.0); // Deposit 10 HBAR
+        info!(
+            current_balance_hbar = tinybars_to_hbar(balance),
+            deposit_hbar = 10.0,
+            "Auto-depositing HBAR for payment operations"
+        );
+
+        match settlement.deposit(deposit_amount).await {
+            Ok(tx_id) => {
+                info!(tx_id = %tx_id, "Auto-deposit successful");
+                payment_details.deposit_tx_id = Some(tx_id.to_string());
+                payment_details.deposit_amount_hbar = Some(10.0);
+            }
+            Err(e) => {
+                warn!(error = %e, "Auto-deposit failed, continuing anyway");
+            }
+        }
+    }
+
+    /// Open a payment channel with the content's provider unless one is open: by the
+    /// provider's libp2p peer ID when the preview has one, else by the owner's Nodalync
+    /// peer ID when it is known.
+    async fn ensure_provider_channel(
+        &self,
+        ops: &mut DefaultNodeOperations,
+        preview: &nodalync_ops::PreviewResponse,
+        payment_details: &mut PaymentDetails,
+    ) {
+        let libp2p_peer_opt = preview
+            .provider_peer_id
+            .as_ref()
+            .and_then(|s| s.parse::<LibP2pPeerId>().ok());
+
+        if let Some(libp2p_peer) = libp2p_peer_opt {
+            self.ensure_libp2p_channel(ops, libp2p_peer, payment_details)
+                .await;
+        } else if preview.manifest.owner != UNKNOWN_PEER_ID {
+            // Fallback to Nodalync peer ID
+            ensure_direct_channel(ops, preview.manifest.owner, payment_details).await;
+        }
+    }
+
+    /// Open a channel with a provider known by libp2p peer ID, unless one is open.
+    async fn ensure_libp2p_channel(
+        &self,
+        ops: &mut DefaultNodeOperations,
+        libp2p_peer: LibP2pPeerId,
+        payment_details: &mut PaymentDetails,
+    ) {
+        // Check if we have an existing channel
+        let existing_nodalync_id = self
+            .network
+            .as_ref()
+            .and_then(|n| n.nodalync_peer_id(&libp2p_peer));
+
+        let has_channel = existing_nodalync_id
+            .map(|id| ops.has_open_channel(&id).unwrap_or(false))
+            .unwrap_or(false);
+
+        if has_channel {
+            payment_details.provider_peer_id = existing_nodalync_id.map(|p| peer_id_to_string(&p));
+            return;
+        }
+
+        // Open channel with on-chain funding
+        let channel_deposit = hbar_to_tinybars(1.0);
+        info!(
+            provider_libp2p = %libp2p_peer,
+            deposit_hbar = 1.0,
+            "Auto-opening payment channel"
+        );
+
+        match ops
+            .open_payment_channel_to_libp2p(libp2p_peer, channel_deposit)
+            .await
+        {
+            Ok((channel, remote_nodalync_id)) => {
+                info!(
+                    channel_id = %hash_to_string(&channel.channel_id),
+                    provider = %peer_id_to_string(&remote_nodalync_id),
+                    "Payment channel opened successfully"
+                );
+                record_opened_channel(payment_details, &channel, Some(&remote_nodalync_id));
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to open payment channel");
+            }
+        }
+    }
+
+    /// Query the content. If the provider requires a payment channel, open one with
+    /// the peer it names and retry once. A failed query refunds the reserved price.
+    async fn execute_query(
+        &self,
+        ops: &mut DefaultNodeOperations,
+        hash: &nodalync_crypto::Hash,
+        price: u64,
+        payment_details: &mut PaymentDetails,
+    ) -> Result<nodalync_ops::QueryResponse, CallToolResult> {
+        match ops.query_content(hash, price, None).await {
+            Ok(r) => Ok(r),
+            Err(nodalync_ops::OpsError::ChannelRequiredWithPeerInfo {
+                nodalync_peer_id,
+                libp2p_peer_id,
+            }) => {
+                info!("Server requires payment channel - auto-opening and retrying");
+                open_required_channel(ops, nodalync_peer_id, libp2p_peer_id, payment_details).await;
+
+                // Retry query
+                ops.query_content(hash, price, None)
+                    .await
+                    .map_err(|e| self.refund_query(price, e))
+            }
+            Err(e) => Err(self.refund_query(price, e)),
+        }
+    }
+
+    /// Refund a paid query's reserved price and return the error response for `e`.
+    fn refund_query(&self, price: u64, e: nodalync_ops::OpsError) -> CallToolResult {
+        self.refund_paid(price);
+        tool_error(&NodalyncMcpError::Ops(e))
+    }
+
+    /// Record the live Hedera account balance, when settlement is configured and it can be read.
+    async fn record_account_balance(&self, payment_details: &mut PaymentDetails) {
+        if let Some(ref settlement) = self.settlement {
+            if let Ok(balance) = settlement.get_account_balance().await {
+                payment_details.hedera_account_balance_hbar = Some(tinybars_to_hbar(balance));
+            }
+        }
+    }
+}
+
+/// Payment details before any payment operation has happened.
+fn empty_payment_details() -> PaymentDetails {
+    PaymentDetails {
+        channel_opened: false,
+        channel_id: None,
+        channel_tx_id: None,
+        deposit_tx_id: None,
+        deposit_amount_hbar: None,
+        provider_peer_id: None,
+        payment_receipt_id: None,
+        hedera_account_balance_hbar: None,
+    }
+}
+
+/// Record a newly opened channel (and the provider, when given) in the payment details.
+fn record_opened_channel(
+    payment_details: &mut PaymentDetails,
+    channel: &nodalync_types::Channel,
+    provider: Option<&NodalyncPeerId>,
+) {
+    payment_details.channel_opened = true;
+    payment_details.channel_id = Some(hash_to_string(&channel.channel_id));
+    if let Some(provider) = provider {
+        payment_details.provider_peer_id = Some(peer_id_to_string(provider));
+    }
+    // Get on-chain tx ID if available
+    if let Some(tx_id) = &channel.funding_tx_id {
+        payment_details.channel_tx_id = Some(tx_id.clone());
+    }
+}
+
+/// Open a channel with a provider known by Nodalync peer ID, unless one is open.
+async fn ensure_direct_channel(
+    ops: &mut DefaultNodeOperations,
+    peer: NodalyncPeerId,
+    payment_details: &mut PaymentDetails,
+) {
+    payment_details.provider_peer_id = Some(peer_id_to_string(&peer));
+    if ops.has_open_channel(&peer).unwrap_or(false) {
+        return;
+    }
+
+    let channel_deposit = hbar_to_tinybars(1.0);
+    match ops.open_payment_channel(&peer, channel_deposit).await {
+        Ok(channel) => {
+            record_opened_channel(payment_details, &channel, None);
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to open payment channel");
+        }
+    }
+}
+
+/// Open the channel a provider asked for: by libp2p peer ID when given (a failure is
+/// ignored), else by Nodalync peer ID.
+async fn open_required_channel(
+    ops: &mut DefaultNodeOperations,
+    nodalync_peer_id: Option<NodalyncPeerId>,
+    libp2p_peer_id: Option<String>,
+    payment_details: &mut PaymentDetails,
+) {
+    let channel_deposit = hbar_to_tinybars(1.0);
+
+    // Try libp2p peer ID first
+    if let Some(libp2p_str) = &libp2p_peer_id {
+        let Ok(libp2p_peer) = libp2p_str.parse::<LibP2pPeerId>() else {
+            return;
+        };
+        if let Ok((channel, remote_id)) = ops
+            .open_payment_channel_to_libp2p(libp2p_peer, channel_deposit)
+            .await
+        {
+            record_opened_channel(payment_details, &channel, Some(&remote_id));
+        }
+    } else if let Some(nodalync_id) = &nodalync_peer_id {
+        if let Ok(channel) = ops.open_payment_channel(nodalync_id, channel_deposit).await {
+            record_opened_channel(payment_details, &channel, Some(nodalync_id));
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    }
+}
+
+/// The tool output for a completed query: content, its root sources, its full
+/// provenance (roots, then derived-from hashes not already listed), and payment
+/// details when it cost anything.
+fn build_query_output(
+    response: nodalync_ops::QueryResponse,
+    price: u64,
+    payment_details: PaymentDetails,
+    remaining_budget_hbar: f64,
+) -> QueryKnowledgeOutput {
+    let sources: Vec<String> = response
+        .manifest
+        .provenance
+        .root_l0l1
+        .iter()
+        .map(|e| hash_to_string(&e.hash))
+        .collect();
+
+    let mut provenance: Vec<String> = sources.clone();
+    for h in &response.manifest.provenance.derived_from {
+        let hash_str = hash_to_string(h);
+        if !provenance.contains(&hash_str) {
+            provenance.push(hash_str);
+        }
+    }
+
+    QueryKnowledgeOutput {
+        content: String::from_utf8_lossy(&response.content).to_string(),
+        hash: hash_to_string(&response.manifest.hash),
+        sources,
+        provenance,
+        cost_hbar: tinybars_to_hbar(price),
+        remaining_budget_hbar,
+        // Only include payment details if there was a cost
+        payment: (price > 0).then_some(payment_details),
+    }
+}
+
+/// Add sources found by a live network search (which also caches the results).
+async fn add_network_sources(
+    ops: &mut DefaultNodeOperations,
+    topic: Option<&str>,
+    limit: u32,
+    seen_hashes: &mut std::collections::HashSet<nodalync_crypto::Hash>,
+    sources: &mut Vec<SourceInfo>,
+) {
+    let query = topic.unwrap_or("");
+    let Ok(results) = ops.search_network(query, None, limit).await else {
+        return;
+    };
+    for r in results {
+        if seen_hashes.insert(r.hash) {
+            sources.push(SourceInfo {
+                hash: hash_to_string(&r.hash),
+                title: r.title.clone(),
+                price_hbar: tinybars_to_hbar(r.price),
+                preview: network_result_preview(&r.l1_summary),
+                topics: r.l1_summary.primary_topics.clone(),
+                peer_id: r.publisher_peer_id.clone(),
+            });
+        }
+    }
+}
+
+/// A network result's preview: its first two mentions, else its summary text.
+fn network_result_preview(l1_summary: &nodalync_types::L1Summary) -> String {
+    if l1_summary.preview_mentions.is_empty() {
+        return l1_summary.summary.clone();
+    }
+    l1_summary
+        .preview_mentions
+        .iter()
+        .take(2)
+        .map(|m| m.content.clone())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Add shared local manifests that match `topic` (every manifest when there is none).
+fn add_local_sources(
+    ops: &DefaultNodeOperations,
+    topic: Option<&str>,
+    limit: u32,
+    seen_hashes: &mut std::collections::HashSet<nodalync_crypto::Hash>,
+    sources: &mut Vec<SourceInfo>,
+) {
+    let filter = ManifestFilter::new()
+        .with_visibility(Visibility::Shared)
+        .limit(limit);
+
+    let Ok(manifests) = ops.state.manifests.list(filter) else {
+        return;
+    };
+    for m in manifests {
+        // Apply topic filter if provided
+        if seen_hashes.insert(m.hash) && manifest_matches_topic(&m, topic) {
+            sources.push(local_source(&m));
+        }
+    }
+}
+
+/// Whether a manifest's title, tags or description contain `topic` (case-insensitive).
+/// With no topic, every manifest matches.
+fn manifest_matches_topic(m: &nodalync_types::Manifest, topic: Option<&str>) -> bool {
+    let Some(topic) = topic else {
+        return true;
+    };
+    let topic_lower = topic.to_lowercase();
+    m.metadata.title.to_lowercase().contains(&topic_lower)
+        || m.metadata
+            .tags
+            .iter()
+            .any(|t| t.to_lowercase().contains(&topic_lower))
+        || m.metadata
+            .description
+            .as_ref()
+            .is_some_and(|d| d.to_lowercase().contains(&topic_lower))
+}
+
+/// A source for a local manifest; its owner is the peer to query.
+fn local_source(m: &nodalync_types::Manifest) -> SourceInfo {
+    let preview = m
+        .metadata
+        .description
+        .clone()
+        .unwrap_or_else(|| format!("{} bytes of content", m.metadata.content_size));
+
+    // For local manifests, use the owner as peer_id
+    SourceInfo {
+        hash: hash_to_string(&m.hash),
+        title: m.metadata.title.clone(),
+        price_hbar: tinybars_to_hbar(m.economics.price),
+        preview,
+        topics: m.metadata.tags.clone(),
+        peer_id: Some(peer_id_to_string(&m.owner)),
+    }
+}
+
+/// Add cached network announcements matching `topic`.
+fn add_cached_announcement_sources(
+    ops: &DefaultNodeOperations,
+    topic: Option<&str>,
+    limit: u32,
+    seen_hashes: &mut std::collections::HashSet<nodalync_crypto::Hash>,
+    sources: &mut Vec<SourceInfo>,
+) {
+    let query = topic.unwrap_or("");
+    let announcements = ops.state.search_announcements(query, None, limit);
+
+    for announce in announcements {
+        if seen_hashes.insert(announce.hash) {
+            sources.push(SourceInfo {
+                hash: hash_to_string(&announce.hash),
+                title: announce.title.clone(),
+                price_hbar: tinybars_to_hbar(announce.price),
+                preview: announcement_preview(&announce.l1_summary),
+                topics: vec![],
+                peer_id: announce.publisher_peer_id.clone(),
+            });
+        }
+    }
+}
+
+/// A cached announcement's preview: all its previewed mentions, else its mention count.
+fn announcement_preview(l1_summary: &nodalync_types::L1Summary) -> String {
+    if l1_summary.preview_mentions.is_empty() {
+        return format!("{} mentions extracted", l1_summary.mention_count);
+    }
+    l1_summary
+        .preview_mentions
+        .iter()
+        .map(|m| m.content.clone())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Steps of the `open_channel` tool.
+impl NodalyncMcpServer {
+    /// Open a channel with a peer given by libp2p peer ID (preferred) or Nodalync peer ID.
+    async fn run_open_channel(
+        &self,
+        input: OpenChannelInput,
+    ) -> Result<OpenChannelOutput, CallToolResult> {
+        check_channel_deposit(input.deposit_hbar)?;
+
+        let deposit_tinybars = hbar_to_tinybars(input.deposit_hbar);
+        let mut ops = self.ops.lock().await;
+
+        // Check if network is available
+        if !ops.has_network() {
+            warn!("Cannot open channel: network not available");
+            return Err(tool_error(&NodalyncMcpError::Internal(
+                "Network not available. Ensure MCP server is started with --enable-network"
+                    .to_string(),
+            )));
+        }
+
+        // Try to parse as libp2p peer ID first (starts with "12D3Koo" or similar)
+        if let Ok(libp2p_peer) = input.peer_id.parse::<LibP2pPeerId>() {
+            return open_channel_via_libp2p(&mut ops, libp2p_peer, &input, deposit_tinybars).await;
+        }
+
+        // Try to parse as Nodalync peer ID (20 bytes base58, starts with "ndl")
+        let peer_id = parse_nodalync_peer_id(
+            &input.peer_id,
+            "Invalid peer ID format. Use the peer_id from list_sources (starts with 12D3Koo).",
+            |len| {
+                format!("Invalid peer ID. Expected libp2p peer ID (from list_sources, starts with 12D3Koo) or Nodalync peer ID (20 bytes). Got {} bytes.", len)
+            },
+        )?;
+        open_channel_via_nodalync(&mut ops, peer_id, input, deposit_tinybars).await
+    }
+}
+
+/// Steps of the `close_channel` and `close_all_channels` tools.
+impl NodalyncMcpServer {
+    /// Close the channel with one peer: cooperatively, else by dispute when the peer
+    /// is unresponsive.
+    async fn run_close_channel(
+        &self,
+        input: CloseChannelInput,
+    ) -> Result<crate::tools::CloseChannelOutput, ToolExit> {
+        // Parse peer ID - accept both libp2p (12D3KooW...) and Nodalync (ndl...) formats
+        let peer_id = self.resolve_channel_peer(&input.peer_id)?;
+
+        let mut ops = self.ops.lock().await;
+
+        // Get channel info before closing
+        let channel = ops
+            .state
+            .channels
+            .get(&peer_id)
+            .map_err(|e| McpError::internal_error(format!("Failed to get channel: {}", e), None))?
+            .ok_or_else(|| {
+                tool_error(&NodalyncMcpError::Internal(
+                    "No channel exists with this peer.".to_string(),
+                ))
+            })?;
+
+        let final_balance = channel.my_balance;
+
+        info!(
+            peer_id = %peer_id_to_string(&peer_id),
+            balance_tinybars = final_balance,
+            "Closing payment channel"
+        );
+
+        // Get the private key for signing
+        let private_key = ops.private_key().cloned().ok_or_else(|| {
+            tool_error(&NodalyncMcpError::Internal(
+                "Private key not available. Cannot sign channel close.".to_string(),
+            ))
+        })?;
+
+        // Attempt cooperative close with proper signature
+        let result = ops.close_payment_channel(&peer_id, &private_key).await;
+        drop(ops); // Release lock before async Hedera calls
+
+        // Get updated Hedera account balance
+        let hedera_balance = self.hedera_balance_hbar().await;
+
+        let closed = ClosedChannel {
+            peer_id,
+            peer_id_str: input.peer_id,
+            final_balance,
+            hedera_balance,
+        };
+        self.close_channel_output(result, closed, &private_key)
+            .await
+    }
+
+    /// The Nodalync peer ID for a peer given by libp2p peer ID (looked up through the
+    /// network) or by Nodalync peer ID.
+    fn resolve_channel_peer(&self, peer_id: &str) -> Result<NodalyncPeerId, ToolExit> {
+        if !peer_id.starts_with("12D3KooW") {
+            // Nodalync peer ID (ndl...)
+            return Ok(parse_nodalync_peer_id(
+                peer_id,
+                "Invalid peer ID format. Use the peer_id from status or channel details.",
+                |len| {
+                    format!(
+                        "Invalid peer ID. Expected Nodalync peer ID (20 bytes base58, starts with 'ndl') \
+                         or libp2p peer ID (starts with '12D3KooW'). Got {} bytes.",
+                        len
+                    )
+                },
+            )?);
+        }
+
+        // libp2p peer ID - look up Nodalync peer ID from network
+        let Some(ref network) = self.network else {
+            return Err(tool_error(&NodalyncMcpError::Internal(
+                "Network not available. Cannot look up Nodalync peer ID from libp2p ID."
+                    .to_string(),
+            ))
+            .into());
+        };
+
+        let libp2p_peer: LibP2pPeerId = peer_id
+            .parse()
+            .map_err(|_| McpError::internal_error("Invalid libp2p peer ID format", None))?;
+
+        // Look up the Nodalync peer ID
+        network.nodalync_peer_id(&libp2p_peer).ok_or_else(|| {
+            tool_error(&NodalyncMcpError::InvalidHash(
+                "No Nodalync peer ID mapping found for this libp2p peer. \
+                 The peer may not have an open channel with you."
+                    .to_string(),
+            ))
+            .into()
+        })
+    }
+
+    /// The tool output for a close attempt; an unresponsive peer gets a dispute.
+    async fn close_channel_output(
+        &self,
+        result: nodalync_ops::OpsResult<nodalync_ops::CloseResult>,
+        closed: ClosedChannel,
+        private_key: &nodalync_crypto::PrivateKey,
+    ) -> Result<crate::tools::CloseChannelOutput, ToolExit> {
+        use nodalync_ops::CloseResult;
+
+        match result {
+            Ok(CloseResult::Success {
+                transaction_id,
+                final_balances,
+            }) => {
+                let output = closed.output("cooperative", Some(transaction_id), final_balances.0);
+                info!(
+                    peer_id = %closed.peer_id_str,
+                    close_method = "cooperative",
+                    tx_id = ?output.transaction_id,
+                    "Channel closed successfully"
+                );
+                Ok(output)
+            }
+            Ok(CloseResult::SuccessOffChain { final_balances }) => {
+                info!(
+                    peer_id = %closed.peer_id_str,
+                    close_method = "off_chain",
+                    "Channel closed off-chain"
+                );
+                Ok(closed.output("off_chain", None, final_balances.0))
+            }
+            Ok(CloseResult::PeerUnresponsive { .. }) => {
+                self.dispute_unresponsive_peer(closed, private_key).await
+            }
+            Ok(CloseResult::OnChainFailed { error }) => {
+                warn!(error = %error, "On-chain close failed");
+                Err(tool_error(&NodalyncMcpError::Internal(format!(
+                    "On-chain settlement failed: {}",
+                    error
+                )))
+                .into())
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to close channel");
+                Err(tool_error(&NodalyncMcpError::Internal(format!(
+                    "Failed to close channel: {}",
+                    e
+                )))
+                .into())
+            }
+        }
+    }
+
+    /// Peer didn't respond - initiate dispute.
+    async fn dispute_unresponsive_peer(
+        &self,
+        closed: ClosedChannel,
+        private_key: &nodalync_crypto::PrivateKey,
+    ) -> Result<crate::tools::CloseChannelOutput, ToolExit> {
+        info!(
+            peer_id = %closed.peer_id_str,
+            "Peer unresponsive, initiating dispute"
+        );
+
+        let mut ops = self.ops.lock().await;
+        match ops
+            .dispute_payment_channel(&closed.peer_id, private_key)
+            .await
+        {
+            Ok(tx_id) => {
+                let output = closed.output("dispute_initiated", Some(tx_id), closed.final_balance);
+                info!(
+                    peer_id = %closed.peer_id_str,
+                    close_method = "dispute_initiated",
+                    tx_id = ?output.transaction_id,
+                    "Dispute initiated - settlement in 24 hours"
+                );
+                Ok(output)
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to initiate dispute");
+                Err(tool_error(&NodalyncMcpError::Internal(format!(
+                    "Peer unresponsive and dispute failed: {}",
+                    e
+                )))
+                .into())
+            }
+        }
+    }
+
+    /// Close every open channel, disputing for unresponsive peers.
+    async fn run_close_all_channels(&self) -> Result<CloseAllChannelsOutput, ToolExit> {
+        // Get list of open channels and private key
+        let (channels, private_key) = {
+            let ops = self.ops.lock().await;
+            let channels = ops.state.channels.list_open().unwrap_or_default();
+            let private_key = ops.private_key().cloned();
+            (channels, private_key)
+        };
+
+        let private_key = private_key.ok_or_else(|| {
+            tool_error(&NodalyncMcpError::Internal(
+                "Private key not available. Cannot sign channel closes.".to_string(),
+            ))
+        })?;
+
+        let channels_processed = channels.len() as u32;
+
+        info!(
+            channels_count = channels_processed,
+            "Closing all payment channels"
+        );
+
+        // Close each channel
+        let mut tally = CloseTally::default();
+        for (peer_id, channel) in channels {
+            let was_funded_on_chain = channel.funding_tx_id.is_some();
+            let result = self
+                .close_one_channel(&peer_id, was_funded_on_chain, &private_key)
+                .await;
+            tally.record(result);
+        }
+
+        // Get updated Hedera balance
+        let hedera_balance = self.hedera_balance_hbar().await;
+
+        let output = CloseAllChannelsOutput {
+            channels_processed,
+            channels_closed: tally.closed,
+            disputes_initiated: tally.disputes,
+            channels_failed: tally.failed,
+            results: tally.results,
+            hedera_account_balance_hbar: hedera_balance,
+        };
+
+        info!(
+            processed = channels_processed,
+            closed = output.channels_closed,
+            disputes = output.disputes_initiated,
+            failed = output.channels_failed,
+            "Close all channels complete"
+        );
+        Ok(output)
+    }
+
+    /// Close one channel cooperatively (5 second timeout); if that does not succeed,
+    /// dispute it, or clear it if it was never funded on-chain.
+    async fn close_one_channel(
+        &self,
+        peer_id: &NodalyncPeerId,
+        was_funded_on_chain: bool,
+        private_key: &nodalync_crypto::PrivateKey,
+    ) -> ChannelCloseResult {
+        let peer_id_str = peer_id_to_string(peer_id);
+
+        // Try cooperative close with timeout
+        let close_result = {
+            let mut ops = self.ops.lock().await;
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                ops.close_payment_channel(peer_id, private_key),
+            )
+            .await
+        };
+
+        match close_result {
+            Ok(Ok(nodalync_ops::CloseResult::Success { transaction_id, .. })) => {
+                info!(peer_id = %peer_id_str, "Channel closed cooperatively");
+                close_entry(&peer_id_str, "cooperative", Some(transaction_id), None)
+            }
+            Ok(Ok(nodalync_ops::CloseResult::SuccessOffChain { .. })) => {
+                info!(peer_id = %peer_id_str, "Channel closed off-chain");
+                close_entry(&peer_id_str, "off_chain", None, None)
+            }
+            Ok(Ok(nodalync_ops::CloseResult::OnChainFailed { error })) => {
+                // On-chain failed - try dispute
+                self.dispute_or_clear(peer_id, was_funded_on_chain, private_key, Some(error))
+                    .await
+            }
+            // Peer unresponsive or error - initiate dispute
+            _ => {
+                self.dispute_or_clear(peer_id, was_funded_on_chain, private_key, None)
+                    .await
+            }
+        }
+    }
+
+    /// Dispute a channel that did not close. If the dispute fails and the channel was
+    /// never funded on-chain, just remove it from local state.
+    ///
+    /// `on_chain_error` is the on-chain close failure, when that is why it did not close.
+    async fn dispute_or_clear(
+        &self,
+        peer_id: &NodalyncPeerId,
+        was_funded_on_chain: bool,
+        private_key: &nodalync_crypto::PrivateKey,
+        on_chain_error: Option<String>,
+    ) -> ChannelCloseResult {
+        let peer_id_str = peer_id_to_string(peer_id);
+        let dispute_result = {
+            let mut ops = self.ops.lock().await;
+            ops.dispute_payment_channel(peer_id, private_key).await
+        };
+
+        match dispute_result {
+            Ok(tx_id) => {
+                if on_chain_error.is_none() {
+                    info!(
+                        peer_id = %peer_id_str,
+                        "Dispute initiated for unresponsive peer"
+                    );
+                }
+                close_entry(&peer_id_str, "dispute_initiated", Some(tx_id), None)
+            }
+            // If the channel was never funded on-chain, just remove it
+            Err(_) if !was_funded_on_chain => {
+                let mut ops = self.ops.lock().await;
+                let _ = ops.state.channels.delete(peer_id);
+                info!(
+                    peer_id = %peer_id_str,
+                    "Cleared unfunded channel from local state"
+                );
+                close_entry(&peer_id_str, "cleared_unfunded", None, None)
+            }
+            Err(e) => {
+                let error = match on_chain_error {
+                    Some(error) => format!(
+                        "On-chain close failed: {}. Dispute also failed: {}",
+                        error, e
+                    ),
+                    None => {
+                        warn!(
+                            peer_id = %peer_id_str,
+                            error = %e,
+                            "Failed to close or dispute channel"
+                        );
+                        e.to_string()
+                    }
+                };
+                close_entry(&peer_id_str, "failed", None, Some(error))
+            }
+        }
+    }
+
+    /// The live Hedera account balance in HBAR, when settlement is configured and it can be read.
+    async fn hedera_balance_hbar(&self) -> Option<f64> {
+        let settlement = self.settlement.as_ref()?;
+        settlement
+            .get_account_balance()
+            .await
+            .ok()
+            .map(tinybars_to_hbar)
+    }
+}
+
+/// A channel being closed by the `close_channel` tool.
+struct ClosedChannel {
+    peer_id: NodalyncPeerId,
+    /// The peer ID as the caller gave it.
+    peer_id_str: String,
+    /// Our balance before closing.
+    final_balance: u64,
+    hedera_balance: Option<f64>,
+}
+
+impl ClosedChannel {
+    fn output(
+        &self,
+        close_method: &str,
+        transaction_id: Option<String>,
+        final_balance_tinybars: u64,
+    ) -> crate::tools::CloseChannelOutput {
+        crate::tools::CloseChannelOutput {
+            success: true,
+            close_method: close_method.to_string(),
+            transaction_id,
+            final_balance_tinybars,
+            peer_id: self.peer_id_str.clone(),
+            hedera_account_balance_hbar: self.hedera_balance,
+        }
+    }
+}
+
+/// One channel's result in `close_all_channels`; it succeeded unless the method is "failed".
+fn close_entry(
+    peer_id: &str,
+    close_method: &str,
+    transaction_id: Option<String>,
+    error: Option<String>,
+) -> ChannelCloseResult {
+    ChannelCloseResult {
+        peer_id: peer_id.to_string(),
+        success: close_method != "failed",
+        close_method: close_method.to_string(),
+        transaction_id,
+        error,
+    }
+}
+
+/// Counts of `close_all_channels` results by outcome.
+#[derive(Default)]
+struct CloseTally {
+    results: Vec<ChannelCloseResult>,
+    closed: u32,
+    disputes: u32,
+    failed: u32,
+}
+
+impl CloseTally {
+    fn record(&mut self, result: ChannelCloseResult) {
+        match result.close_method.as_str() {
+            "dispute_initiated" => self.disputes += 1,
+            "failed" => self.failed += 1,
+            _ => self.closed += 1,
+        }
+        self.results.push(result);
+    }
+}
+
+/// Why a tool step stopped early: an error result for the caller, or a protocol error.
+enum ToolExit {
+    Result(CallToolResult),
+    Protocol(McpError),
+}
+
+impl From<CallToolResult> for ToolExit {
+    fn from(result: CallToolResult) -> Self {
+        ToolExit::Result(result)
+    }
+}
+
+impl From<McpError> for ToolExit {
+    fn from(error: McpError) -> Self {
+        ToolExit::Protocol(error)
+    }
+}
+
+/// Steps of the content tools: publish, synthesize, update and delete.
+impl NodalyncMcpServer {
+    /// Create L0 content, extract its L1 summary and publish it.
+    async fn run_publish_content(
+        &self,
+        input: PublishContentInput,
+    ) -> Result<PublishContentOutput, ToolExit> {
+        // Validate content
+        check_content_size(&input.content)?;
+
+        // Parse visibility
+        let visibility = parse_visibility_input(&input.visibility)?;
+
+        let content_bytes = input.content.as_bytes();
+        let size_bytes = content_bytes.len();
+
+        // Check for duplicates
+        let mut ops = self.ops.lock().await;
+        ensure_new_content(&ops, &content_hash(content_bytes))?;
+
+        // Build metadata
+        let metadata = publish_metadata(
+            &input.title,
+            size_bytes,
+            input.description,
+            input.mime_type,
+            input.tags,
+        );
+
+        // Create content and extract L1 summary
+        let (hash, l1_summary) = create_and_extract(&mut ops, content_bytes, metadata)?;
+
+        // Publish
+        let price = input.price_hbar.map(hbar_to_tinybars).unwrap_or(0);
+
+        ops.publish_content(&hash, visibility, price)
+            .await
+            .map_err(internal_error)?;
+
+        let output = PublishContentOutput {
+            hash: hash_to_string(&hash),
+            title: input.title,
+            content_type: "L0".to_string(),
+            visibility: format!("{:?}", visibility),
+            price_hbar: tinybars_to_hbar(price),
+            size_bytes,
+            mentions_extracted: l1_summary.mention_count,
+            topics: l1_summary.primary_topics,
+        };
+
+        info!(
+            hash = %output.hash,
+            title = %output.title,
+            visibility = %output.visibility,
+            "Content published"
+        );
+        Ok(output)
+    }
+
+    /// Derive L3 content from its sources and optionally publish it.
+    async fn run_synthesize_content(
+        &self,
+        input: SynthesizeContentInput,
+    ) -> Result<SynthesizeContentOutput, ToolExit> {
+        // Validate content
+        check_synthesis_input(&input)?;
+
+        // Parse source hashes
+        let source_hashes = parse_source_hashes(&input.sources)?;
+
+        let content_bytes = input.content.as_bytes();
+
+        // Build metadata
+        let metadata = publish_metadata(
+            &input.title,
+            content_bytes.len(),
+            input.description.clone(),
+            None,
+            None,
+        );
+
+        let mut ops = self.ops.lock().await;
+
+        // Derive content
+        let hash = ops
+            .derive_content(&source_hashes, content_bytes, metadata)
+            .map_err(internal_error)?;
+
+        // Get manifest for provenance info
+        let manifest = stored_manifest(&ops, &hash, "Failed to retrieve manifest after derive")?;
+
+        // Optionally publish
+        let publication = publish_synthesis(&mut ops, &hash, &input).await?;
+
+        let output = SynthesizeContentOutput {
+            hash: hash_to_string(&hash),
+            title: input.title,
+            content_type: "L3".to_string(),
+            sources: input.sources,
+            provenance_depth: manifest.provenance.depth,
+            root_source_count: manifest.provenance.root_l0l1.len(),
+            published: publication.is_some(),
+            visibility: publication
+                .as_ref()
+                .map(|(visibility, _)| visibility.clone()),
+            price_hbar: publication.map(|(_, price)| price),
+        };
+
+        info!(
+            hash = %output.hash,
+            sources = output.sources.len(),
+            provenance_depth = output.provenance_depth,
+            published = output.published,
+            "Content synthesized"
+        );
+        Ok(output)
+    }
+
+    /// Create a new version of content, inheriting metadata not overridden.
+    async fn run_update_content(
+        &self,
+        input: UpdateContentInput,
+    ) -> Result<UpdateContentOutput, ToolExit> {
+        // Validate
+        check_content_size(&input.content)?;
+
+        let old_hash = string_to_hash(&input.previous_hash)
+            .map_err(|e| tool_error(&NodalyncMcpError::InvalidHash(e)))?;
+
+        let mut ops = self.ops.lock().await;
+
+        // Load old manifest for metadata inheritance
+        let old_manifest = manifest_or_error(
+            &ops,
+            &old_hash,
+            NodalyncMcpError::NotFound(format!(
+                "Previous version {} not found",
+                input.previous_hash
+            )),
+        )?;
+
+        let content_bytes = input.content.as_bytes();
+        let size_bytes = content_bytes.len();
+
+        // Build metadata, inheriting from previous version
+        let (metadata, title) =
+            inherited_metadata(&old_manifest, input.title, input.description, size_bytes);
+
+        // Create new version
+        let new_hash = ops
+            .update_content(&old_hash, content_bytes, metadata)
+            .map_err(internal_error)?;
+
+        // Get new manifest for version info
+        let new_manifest =
+            stored_manifest(&ops, &new_hash, "Failed to retrieve manifest after update")?;
+
+        let output = UpdateContentOutput {
+            hash: hash_to_string(&new_hash),
+            previous_hash: input.previous_hash,
+            version_number: new_manifest.version.number,
+            title,
+            size_bytes,
+            visibility: format!("{:?}", new_manifest.visibility),
+        };
+
+        info!(
+            hash = %output.hash,
+            version = output.version_number,
+            "Content updated"
+        );
+        Ok(output)
+    }
+
+    /// Remove our content's bytes and mark its manifest Offline.
+    async fn run_delete_content(
+        &self,
+        input: DeleteContentInput,
+    ) -> Result<DeleteContentOutput, ToolExit> {
+        let hash = string_to_hash(&input.hash)
+            .map_err(|e| tool_error(&NodalyncMcpError::InvalidHash(e)))?;
+
+        let mut ops = self.ops.lock().await;
+
+        // Load manifest and verify ownership
+        let mut manifest = manifest_or_error(
+            &ops,
+            &hash,
+            NodalyncMcpError::NotFound(hash_to_string(&hash)),
+        )?;
+
+        if manifest.owner != ops.peer_id() {
+            return Err(tool_error(&NodalyncMcpError::Internal(
+                "Cannot delete content you don't own.".to_string(),
+            ))
+            .into());
+        }
+
+        // Delete content bytes
+        ops.state.content.delete(&hash).map_err(internal_error)?;
+
+        // Update manifest visibility to Offline
+        manifest.visibility = Visibility::Offline;
+        ops.state
+            .manifests
+            .update(&manifest)
+            .map_err(internal_error)?;
+
+        let output = DeleteContentOutput {
+            hash: hash_to_string(&hash),
+            title: manifest.metadata.title.clone(),
+            content_removed: true,
+            visibility: "Offline".to_string(),
+        };
+
+        info!(hash = %output.hash, "Content deleted");
+        Ok(output)
+    }
+}
+
+/// An internal (protocol-level) error carrying `e`'s message.
+fn internal_error(e: impl std::fmt::Display) -> McpError {
+    McpError::internal_error(e.to_string(), None)
+}
+
+/// Content must be non-empty and at most MAX_CONTENT_SIZE bytes.
+fn check_content_size(content: &str) -> Result<(), CallToolResult> {
+    if content.is_empty() {
+        return Err(tool_error(&NodalyncMcpError::EmptyContent));
+    }
+    if content.len() > MAX_CONTENT_SIZE {
+        return Err(tool_error(&NodalyncMcpError::ContentTooLarge {
+            size: content.len(),
+            max: MAX_CONTENT_SIZE,
+        }));
+    }
+    Ok(())
+}
+
+/// Synthesis needs valid content and at least one source.
+fn check_synthesis_input(input: &SynthesizeContentInput) -> Result<(), CallToolResult> {
+    check_content_size(&input.content)?;
+    if input.sources.is_empty() {
+        return Err(tool_error(&NodalyncMcpError::Internal(
+            "At least one source hash is required for synthesis.".to_string(),
+        )));
+    }
+    Ok(())
+}
+
+/// Parse a visibility argument ('private', 'unlisted' or 'shared').
+fn parse_visibility_input(visibility: &str) -> Result<Visibility, CallToolResult> {
+    parse_visibility(visibility).ok_or_else(|| {
+        tool_error(&NodalyncMcpError::Internal(format!(
+            "Invalid visibility '{}'. Use 'private', 'unlisted', or 'shared'.",
+            visibility
+        )))
+    })
+}
+
+/// Parse each source hash, naming the first invalid one.
+fn parse_source_hashes(sources: &[String]) -> Result<Vec<nodalync_crypto::Hash>, CallToolResult> {
+    sources
+        .iter()
+        .map(|s| {
+            string_to_hash(s).map_err(|e| {
+                tool_error(&NodalyncMcpError::InvalidHash(format!(
+                    "Invalid source hash '{}': {}",
+                    s, e
+                )))
+            })
+        })
+        .collect()
+}
+
+/// Refuse content that already has a manifest here.
+fn ensure_new_content(
+    ops: &DefaultNodeOperations,
+    hash: &nodalync_crypto::Hash,
+) -> Result<(), CallToolResult> {
+    if let Ok(Some(_)) = ops.get_content_manifest(hash) {
+        return Err(tool_error(&NodalyncMcpError::ContentAlreadyExists(
+            hash_to_string(hash),
+        )));
+    }
+    Ok(())
+}
+
+/// Metadata for new content, with the optional description, MIME type and tags.
+fn publish_metadata(
+    title: &str,
+    size_bytes: usize,
+    description: Option<String>,
+    mime_type: Option<String>,
+    tags: Option<Vec<String>>,
+) -> nodalync_types::Metadata {
+    let mut metadata = nodalync_types::Metadata::new(title.to_string(), size_bytes as u64);
+    if let Some(desc) = description {
+        metadata = metadata.with_description(desc);
+    }
+    if let Some(mime) = mime_type {
+        metadata = metadata.with_mime_type(mime);
+    }
+    if let Some(tags) = tags {
+        metadata = metadata.with_tags(tags);
+    }
+    metadata
+}
+
+/// Metadata for a new version: the title and description given, else the previous
+/// version's; the previous MIME type and tags. Returns the metadata and its title.
+fn inherited_metadata(
+    old_manifest: &nodalync_types::Manifest,
+    title: Option<String>,
+    description: Option<String>,
+    size_bytes: usize,
+) -> (nodalync_types::Metadata, String) {
+    let title = title.unwrap_or_else(|| old_manifest.metadata.title.clone());
+    let mut metadata = nodalync_types::Metadata::new(title.clone(), size_bytes as u64);
+
+    // Inherit or override description
+    let description = description.or_else(|| old_manifest.metadata.description.clone());
+    if let Some(desc) = description {
+        metadata = metadata.with_description(desc);
+    }
+
+    // Inherit mime_type and tags
+    if let Some(mime) = &old_manifest.metadata.mime_type {
+        metadata = metadata.with_mime_type(mime.clone());
+    }
+    if !old_manifest.metadata.tags.is_empty() {
+        metadata = metadata.with_tags(old_manifest.metadata.tags.clone());
+    }
+    (metadata, title)
+}
+
+/// Create content and extract its L1 summary.
+fn create_and_extract(
+    ops: &mut DefaultNodeOperations,
+    content: &[u8],
+    metadata: nodalync_types::Metadata,
+) -> Result<(nodalync_crypto::Hash, nodalync_types::L1Summary), McpError> {
+    let hash = ops
+        .create_content(content, metadata)
+        .map_err(internal_error)?;
+    let l1_summary = ops.extract_l1_summary(&hash).map_err(internal_error)?;
+    Ok((hash, l1_summary))
+}
+
+/// The manifest just stored for `hash`; its absence is an internal error (`missing`).
+fn stored_manifest(
+    ops: &DefaultNodeOperations,
+    hash: &nodalync_crypto::Hash,
+    missing: &'static str,
+) -> Result<nodalync_types::Manifest, McpError> {
+    ops.get_content_manifest(hash)
+        .map_err(internal_error)?
+        .ok_or_else(|| McpError::internal_error(missing, None))
+}
+
+/// The manifest for `hash`, or the tool error `not_found` when there is none.
+fn manifest_or_error(
+    ops: &DefaultNodeOperations,
+    hash: &nodalync_crypto::Hash,
+    not_found: NodalyncMcpError,
+) -> Result<nodalync_types::Manifest, CallToolResult> {
+    match ops.get_content_manifest(hash) {
+        Ok(Some(m)) => Ok(m),
+        Ok(None) => Err(tool_error(&not_found)),
+        Err(e) => Err(tool_error(&NodalyncMcpError::Ops(e))),
+    }
+}
+
+/// Publish synthesized content when asked. Returns its visibility (as text) and price
+/// in HBAR when published.
+async fn publish_synthesis(
+    ops: &mut DefaultNodeOperations,
+    hash: &nodalync_crypto::Hash,
+    input: &SynthesizeContentInput,
+) -> Result<Option<(String, f64)>, ToolExit> {
+    if !input.publish.unwrap_or(false) {
+        return Ok(None);
+    }
+    let visibility = parse_visibility_input(&input.visibility)?;
+    let price = input.price_hbar.map(hbar_to_tinybars).unwrap_or(0);
+
+    ops.publish_content(hash, visibility, price)
+        .await
+        .map_err(internal_error)?;
+
+    Ok(Some((format!("{:?}", visibility), tinybars_to_hbar(price))))
+}
+
+/// Steps of the `get_earnings` tool and of reading `knowledge://` resources.
+impl NodalyncMcpServer {
+    /// Earnings of our content that has been queried or has earned anything.
+    async fn run_get_earnings(
+        &self,
+        input: GetEarningsInput,
+    ) -> Result<GetEarningsOutput, ToolExit> {
+        let limit = input.limit.unwrap_or(20).min(100);
+        let ops = self.ops.lock().await;
+
+        let filter = earnings_filter(ops.peer_id(), limit, input.content_type.as_deref())?;
+        let manifests = ops.state.manifests.list(filter).map_err(internal_error)?;
+
+        let output = summarize_earnings(manifests);
+        info!(
+            content_count = output.content_count,
+            total_queries = output.total_queries,
+            total_revenue_hbar = output.total_revenue_hbar,
+            "Earnings retrieved"
+        );
+        Ok(output)
+    }
+
+    /// Read a `knowledge://<hash>` resource: query the content, paying from the budget.
+    async fn read_knowledge_resource(&self, uri: &str) -> Result<ReadResourceResult, McpError> {
+        debug!(uri = %uri, "Reading knowledge resource");
+        let hash = parse_knowledge_uri(uri)?;
+
+        // Get content preview to check price
+        let mut ops = self.ops.lock().await;
+        let preview = ops
+            .preview_content(&hash)
+            .await
+            .map_err(|e| McpError::invalid_params(format!("Content not found: {}", e), None))?;
+
+        let price = preview.manifest.economics.price;
+
+        // Reserve budget before query
+        self.reserve_resource_budget(price)?;
+
+        // Execute query
+        let response = ops.query_content(&hash, price, None).await.map_err(|e| {
+            // Refund on failure
+            self.refund_paid(price);
+            McpError::internal_error(format!("Query failed: {}", e), None)
+        })?;
+
+        let content_str = String::from_utf8_lossy(&response.content).to_string();
+
+        info!(
+            uri = %uri,
+            cost_hbar = tinybars_to_hbar(price),
+            remaining_hbar = self.budget.remaining_hbar(),
+            "Resource read successfully"
+        );
+
+        Ok(ReadResourceResult {
+            contents: vec![ResourceContents::text(content_str, uri.to_string())],
+        })
+    }
+
+    /// Spend a paid resource's price from the budget, failing if it does not fit.
+    fn reserve_resource_budget(&self, price: u64) -> Result<(), McpError> {
+        if price > 0 && self.budget.spend(price).is_none() {
+            return Err(McpError::invalid_request(
+                format!(
+                    "Insufficient budget: content costs {:.6} HBAR but only {:.6} HBAR remaining",
+                    tinybars_to_hbar(price),
+                    self.budget.remaining_hbar()
+                ),
+                None,
+            ));
+        }
+        Ok(())
+    }
+
+    /// Give a paid query's price back to the budget.
+    fn refund_paid(&self, price: u64) {
+        if price > 0 {
+            self.budget.refund(price);
+        }
+    }
+}
+
+/// The hash in a `knowledge://<hash>` URI.
+fn parse_knowledge_uri(uri: &str) -> Result<nodalync_crypto::Hash, McpError> {
+    // Parse knowledge:// URI
+    let hash_str = uri.strip_prefix(KNOWLEDGE_URI_PREFIX).ok_or_else(|| {
+        McpError::invalid_params(
+            format!(
+                "Invalid URI scheme. Expected '{}' prefix, got: {}",
+                KNOWLEDGE_URI_PREFIX, uri
+            ),
+            None,
+        )
+    })?;
+
+    string_to_hash(hash_str)
+        .map_err(|e| McpError::invalid_params(format!("Invalid content hash: {}", e), None))
+}
+
+/// The manifest filter for our content, of one content type when given.
+fn earnings_filter(
+    peer_id: NodalyncPeerId,
+    limit: u32,
+    content_type: Option<&str>,
+) -> Result<ManifestFilter, CallToolResult> {
+    let filter = ManifestFilter::new().with_owner(peer_id).limit(limit);
+    let Some(ct_str) = content_type else {
+        return Ok(filter);
+    };
+    parse_content_type(ct_str)
+        .map(|ct| filter.with_content_type(ct))
+        .ok_or_else(|| {
+            tool_error(&NodalyncMcpError::Internal(format!(
+                "Invalid content type '{}'. Use L0, L1, L2, or L3.",
+                ct_str
+            )))
+        })
+}
+
+/// Earnings of each manifest that has been queried or has earned anything, with totals.
+fn summarize_earnings(manifests: Vec<nodalync_types::Manifest>) -> GetEarningsOutput {
+    let mut items: Vec<ContentEarnings> = Vec::new();
+    let mut total_revenue: u64 = 0;
+    let mut total_queries: u64 = 0;
+
+    for m in manifests {
+        if m.economics.total_queries > 0 || m.economics.total_revenue > 0 {
+            total_revenue += m.economics.total_revenue;
+            total_queries += m.economics.total_queries;
+
+            items.push(ContentEarnings {
+                hash: hash_to_string(&m.hash),
+                title: m.metadata.title.clone(),
+                content_type: format!("{:?}", m.content_type),
+                total_queries: m.economics.total_queries,
+                total_revenue_hbar: tinybars_to_hbar(m.economics.total_revenue),
+                price_hbar: tinybars_to_hbar(m.economics.price),
+                visibility: format!("{:?}", m.visibility),
+            });
+        }
+    }
+
+    GetEarningsOutput {
+        content_count: items.len() as u32,
+        items,
+        total_revenue_hbar: tinybars_to_hbar(total_revenue),
+        total_queries,
+    }
+}
+
+/// Validate minimum deposit (100 HBAR = 10,000,000,000 tinybars).
+fn check_channel_deposit(deposit_hbar: f64) -> Result<(), CallToolResult> {
+    const MIN_DEPOSIT_HBAR: f64 = 100.0;
+    if deposit_hbar < MIN_DEPOSIT_HBAR {
+        warn!(
+            deposit = deposit_hbar,
+            minimum = MIN_DEPOSIT_HBAR,
+            "Deposit below minimum"
+        );
+        return Err(tool_error(&NodalyncMcpError::Internal(format!(
+            "Deposit {} HBAR is below minimum of {} HBAR. Payment channels require at least 100 HBAR deposit.",
+            deposit_hbar, MIN_DEPOSIT_HBAR
+        ))));
+    }
+    Ok(())
+}
+
+/// Parse a base58 Nodalync peer ID (20 bytes), with the caller's error messages
+/// for a string that is not base58 and for a wrong length.
+fn parse_nodalync_peer_id(
+    peer_id: &str,
+    invalid_format: &str,
+    wrong_length: impl Fn(usize) -> String,
+) -> Result<NodalyncPeerId, CallToolResult> {
+    let peer_bytes = bs58::decode(peer_id)
+        .into_vec()
+        .map_err(|_| tool_error(&NodalyncMcpError::InvalidHash(invalid_format.to_string())))?;
+
+    let peer_arr: [u8; 20] = peer_bytes.as_slice().try_into().map_err(|_| {
+        tool_error(&NodalyncMcpError::InvalidHash(wrong_length(
+            peer_bytes.len(),
+        )))
+    })?;
+    Ok(nodalync_crypto::PeerId(peer_arr))
+}
+
+/// Open a channel with a peer known by libp2p peer ID.
+async fn open_channel_via_libp2p(
+    ops: &mut DefaultNodeOperations,
+    libp2p_peer: LibP2pPeerId,
+    input: &OpenChannelInput,
+    deposit_tinybars: u64,
+) -> Result<OpenChannelOutput, CallToolResult> {
+    info!(
+        libp2p_peer = %libp2p_peer,
+        deposit_hbar = input.deposit_hbar,
+        "Opening channel via libp2p peer ID"
+    );
+
+    match ops
+        .open_payment_channel_to_libp2p(libp2p_peer, deposit_tinybars)
+        .await
+    {
+        Ok((channel, remote_nodalync_id)) => {
+            let output = OpenChannelOutput {
+                channel_id: hash_to_string(&channel.channel_id),
+                transaction_id: None, // MVP: local only
+                balance_tinybars: channel.my_balance,
+                peer_id: peer_id_to_string(&remote_nodalync_id),
+            };
+
+            info!(
+                channel_id = %output.channel_id,
+                remote_nodalync_id = %output.peer_id,
+                deposit_hbar = input.deposit_hbar,
+                "Channel opened successfully via libp2p"
+            );
+            Ok(output)
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to open channel via libp2p");
+            Err(tool_error(&NodalyncMcpError::Internal(
+                libp2p_open_failure_message(&e),
+            )))
+        }
+    }
+}
+
+/// A failed libp2p channel open, with a recovery suggestion.
+fn libp2p_open_failure_message(e: &nodalync_ops::OpsError) -> String {
+    if e.to_string().contains("already exists") {
+        "Channel already exists with this peer. This can happen when local and remote state are out of sync. \
+         Try using `reset_channels` to clear local state, then query content again - channels will re-open automatically.".to_string()
+    } else {
+        format!(
+            "Failed to open channel: {}. Check that the peer is connected and reachable.",
+            e
+        )
+    }
+}
+
+/// Open a channel with a peer known by Nodalync peer ID.
+async fn open_channel_via_nodalync(
+    ops: &mut DefaultNodeOperations,
+    peer_id: NodalyncPeerId,
+    input: OpenChannelInput,
+    deposit_tinybars: u64,
+) -> Result<OpenChannelOutput, CallToolResult> {
+    info!(
+        nodalync_peer = %peer_id_to_string(&peer_id),
+        deposit_hbar = input.deposit_hbar,
+        "Opening channel via Nodalync peer ID"
+    );
+
+    match ops.open_payment_channel(&peer_id, deposit_tinybars).await {
+        Ok(channel) => {
+            let output = OpenChannelOutput {
+                channel_id: hash_to_string(&channel.channel_id),
+                transaction_id: None, // MVP: local only
+                balance_tinybars: channel.my_balance,
+                peer_id: input.peer_id,
+            };
+
+            info!(
+                channel_id = %output.channel_id,
+                deposit_hbar = input.deposit_hbar,
+                "Channel opened successfully"
+            );
+            Ok(output)
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to open channel via Nodalync peer ID");
+            Err(tool_error(&NodalyncMcpError::Internal(format!(
+                "Failed to open channel: {}. Check that the peer is connected.",
+                e
+            ))))
+        }
+    }
+}
+
+/// The tool response for a step's outcome: its output as JSON, its error result, or
+/// its protocol error.
+fn tool_outcome<T: serde::Serialize, E: Into<ToolExit>>(
+    outcome: Result<T, E>,
+) -> Result<CallToolResult, McpError> {
+    match outcome.map_err(Into::into) {
+        Ok(output) => json_result(&output),
+        Err(ToolExit::Result(error_result)) => Ok(error_result),
+        Err(ToolExit::Protocol(error)) => Err(error),
+    }
+}
+
+/// A successful tool result holding `output` as pretty-printed JSON.
+fn json_result<T: serde::Serialize>(output: &T) -> Result<CallToolResult, McpError> {
+    let json = serde_json::to_string_pretty(output)
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    Ok(CallToolResult::success(vec![Content::text(json)]))
+}
 
 #[tool_handler]
 impl rmcp::ServerHandler for NodalyncMcpServer {
@@ -2484,75 +2671,7 @@ impl rmcp::ServerHandler for NodalyncMcpServer {
         request: ReadResourceRequestParam,
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<ReadResourceResult, McpError>> + Send + '_ {
-        async move {
-            let uri = &request.uri;
-            debug!(uri = %uri, "Reading knowledge resource");
-
-            // Parse knowledge:// URI
-            let hash_str = uri.strip_prefix(KNOWLEDGE_URI_PREFIX).ok_or_else(|| {
-                McpError::invalid_params(
-                    format!(
-                        "Invalid URI scheme. Expected '{}' prefix, got: {}",
-                        KNOWLEDGE_URI_PREFIX, uri
-                    ),
-                    None,
-                )
-            })?;
-
-            let hash = string_to_hash(hash_str).map_err(|e| {
-                McpError::invalid_params(format!("Invalid content hash: {}", e), None)
-            })?;
-
-            // Get content preview to check price
-            let mut ops = self.ops.lock().await;
-            let preview = ops
-                .preview_content(&hash)
-                .await
-                .map_err(|e| McpError::invalid_params(format!("Content not found: {}", e), None))?;
-
-            let price = preview.manifest.economics.price;
-            let price_hbar = tinybars_to_hbar(price);
-
-            // Reserve budget before query
-            if price > 0 && self.budget.spend(price).is_none() {
-                return Err(McpError::invalid_request(
-                    format!(
-                        "Insufficient budget: content costs {:.6} HBAR but only {:.6} HBAR remaining",
-                        price_hbar,
-                        self.budget.remaining_hbar()
-                    ),
-                    None,
-                ));
-            }
-
-            // Execute query
-            let response = match ops.query_content(&hash, price, None).await {
-                Ok(r) => r,
-                Err(e) => {
-                    // Refund on failure
-                    if price > 0 {
-                        self.budget.refund(price);
-                    }
-                    return Err(McpError::internal_error(
-                        format!("Query failed: {}", e),
-                        None,
-                    ));
-                }
-            };
-
-            let content_str = String::from_utf8_lossy(&response.content).to_string();
-
-            info!(
-                uri = %uri,
-                cost_hbar = price_hbar,
-                remaining_hbar = self.budget.remaining_hbar(),
-                "Resource read successfully"
-            );
-
-            Ok(ReadResourceResult {
-                contents: vec![ResourceContents::text(content_str, uri.clone())],
-            })
-        }
+        async move { self.read_knowledge_resource(&request.uri).await }
     }
 }
 
@@ -2633,71 +2752,30 @@ fn load_identity(
     Ok((private_key, public_key, peer_id))
 }
 
-/// Build network configuration from MCP server config.
-fn build_network_config(
-    config: &McpServerConfig,
-    _private_key: &nodalync_crypto::PrivateKey,
-    _public_key: &nodalync_crypto::PublicKey,
-) -> Result<NetworkConfig, Box<dyn std::error::Error + Send + Sync>> {
-    // Parse bootstrap nodes
-    let mut bootstrap_nodes = Vec::new();
-    for node_str in &config.bootstrap_nodes {
-        if let Some((peer_id, addr)) = parse_bootstrap_address(node_str) {
-            bootstrap_nodes.push((peer_id, addr));
-        } else {
-            warn!("Invalid bootstrap node address: {}", node_str);
-        }
-    }
-
-    // Listen on all interfaces with random port (required for incoming peer connections)
-    // The request/response protocol requires bidirectional connectivity - peers need
-    // to be able to send responses back to us, which requires listening on 0.0.0.0
-    Ok(NetworkConfig {
-        listen_addresses: vec!["/ip4/0.0.0.0/tcp/0".parse()?],
-        bootstrap_nodes,
-        ..Default::default()
-    })
-}
-
 /// Parse a bootstrap address string into peer ID and multiaddr.
 ///
 /// Expected format: /dns4/host/tcp/port/p2p/peer_id or /ip4/addr/tcp/port/p2p/peer_id
-fn parse_bootstrap_address(addr_str: &str) -> Option<(LibP2pPeerId, Multiaddr)> {
+pub(crate) fn parse_bootstrap_address(addr_str: &str) -> Option<(LibP2pPeerId, Multiaddr)> {
     use nodalync_net::multiaddr::Protocol;
 
     let addr: Multiaddr = addr_str.parse().ok()?;
 
-    // Extract peer ID from the address
-    let mut peer_id = None;
-    for proto in addr.iter() {
-        if let Protocol::P2p(pid) = proto {
-            peer_id = Some(pid);
-        }
-    }
-
-    let peer_id = peer_id?;
+    // Extract peer ID from the address (the last /p2p component)
+    let peer_id = addr
+        .iter()
+        .filter_map(|proto| match proto {
+            Protocol::P2p(pid) => Some(pid),
+            _ => None,
+        })
+        .last()?;
 
     // Build address without peer ID for dialing
-    let mut dial_addr = Multiaddr::empty();
-    for proto in addr.iter() {
-        if !matches!(proto, Protocol::P2p(_)) {
-            dial_addr.push(proto);
-        }
-    }
+    let dial_addr: Multiaddr = addr
+        .iter()
+        .filter(|proto| !matches!(proto, Protocol::P2p(_)))
+        .collect();
 
     Some((peer_id, dial_addr))
-}
-
-/// Convert a Nodalync private key to a libp2p keypair.
-fn to_libp2p_keypair(
-    private_key: &nodalync_crypto::PrivateKey,
-) -> Result<nodalync_net::identity::Keypair, Box<dyn std::error::Error + Send + Sync>> {
-    // Create ed25519 secret key from our 32-byte seed
-    let secret =
-        nodalync_net::identity::ed25519::SecretKey::try_from_bytes(private_key.as_bytes().to_vec())
-            .map_err(|e| format!("Failed to create ed25519 secret key: {}", e))?;
-    let keypair = nodalync_net::identity::ed25519::Keypair::from(secret);
-    Ok(nodalync_net::identity::Keypair::from(keypair))
 }
 
 /// Maximum content size (10 MB).
@@ -2748,6 +2826,242 @@ mod tests {
 
         let server = NodalyncMcpServer::new(config).await;
         assert!(server.is_ok());
+    }
+
+    /// Create local content with `price` (tinybars) and return its hash string.
+    async fn create_priced_content(server: &NodalyncMcpServer, price: u64) -> String {
+        let mut ops = server.ops.lock().await;
+        let content = b"Alice Smith measured the effect in Paris.";
+        let hash = ops
+            .create_content(
+                content,
+                nodalync_types::Metadata::new("Doc", content.len() as u64),
+            )
+            .unwrap();
+        ops.set_content_price(&hash, price).unwrap();
+        hash_to_string(&hash)
+    }
+
+    fn result_text(result: &CallToolResult) -> String {
+        serde_json::to_string(&result.content).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_query_knowledge_invalid_hash_is_error() {
+        let temp_dir = TempDir::new().unwrap();
+        let server = NodalyncMcpServer::new(test_config(&temp_dir))
+            .await
+            .unwrap();
+
+        let input = QueryKnowledgeInput {
+            query: "not-a-hash".to_string(),
+            budget_hbar: None,
+        };
+        let result = server.query_knowledge(Parameters(input)).await.unwrap();
+        assert!(result.is_error.unwrap_or(false));
+    }
+
+    #[tokio::test]
+    async fn test_query_knowledge_free_local_content() {
+        let temp_dir = TempDir::new().unwrap();
+        let server = NodalyncMcpServer::new(test_config(&temp_dir))
+            .await
+            .unwrap();
+        let hash = create_priced_content(&server, 0).await;
+
+        let input = QueryKnowledgeInput {
+            query: hash.clone(),
+            budget_hbar: None,
+        };
+        let result = server.query_knowledge(Parameters(input)).await.unwrap();
+
+        assert!(
+            !result.is_error.unwrap_or(false),
+            "{}",
+            result_text(&result)
+        );
+        let text = result_text(&result);
+        assert!(text.contains("Alice Smith measured the effect"));
+        assert!(text.contains(&hash));
+        assert!(
+            !text.contains("payment_receipt_id"),
+            "free query has no payment block"
+        );
+        assert_eq!(server.budget.spent(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_query_knowledge_over_budget_does_not_spend() {
+        let temp_dir = TempDir::new().unwrap();
+        let server = NodalyncMcpServer::new(test_config(&temp_dir))
+            .await
+            .unwrap();
+        // 2 HBAR price against a 1 HBAR session budget
+        let hash = create_priced_content(&server, hbar_to_tinybars(2.0)).await;
+
+        let input = QueryKnowledgeInput {
+            query: hash,
+            budget_hbar: None,
+        };
+        let result = server.query_knowledge(Parameters(input)).await.unwrap();
+
+        assert!(result.is_error.unwrap_or(false));
+        assert!(result_text(&result).to_lowercase().contains("budget"));
+        assert_eq!(server.budget.spent(), 0);
+    }
+
+    #[test]
+    fn test_build_query_output_lists_derived_sources_once() {
+        let root = content_hash(b"root");
+        let derived = content_hash(b"derived");
+        let mut manifest = nodalync_types::Manifest::new_l0(
+            content_hash(b"content"),
+            NodalyncPeerId::from_bytes([1u8; 20]),
+            nodalync_types::Metadata::new("Doc", 7),
+            1,
+        );
+        manifest.provenance.root_l0l1 = vec![nodalync_types::ProvenanceEntry::new(
+            root,
+            UNKNOWN_PEER_ID,
+            Visibility::Shared,
+        )];
+        manifest.provenance.derived_from = vec![root, derived];
+        let response = nodalync_ops::QueryResponse {
+            content: b"content".to_vec(),
+            manifest,
+            receipt: nodalync_wire::PaymentReceipt {
+                payment_id: content_hash(b"pay"),
+                amount: 0,
+                timestamp: 1,
+                channel_nonce: 0,
+                distributor_signature: nodalync_crypto::Signature::from_bytes([0u8; 64]),
+            },
+        };
+
+        let output = build_query_output(response, 0, empty_payment_details(), 1.0);
+
+        assert_eq!(output.sources, vec![hash_to_string(&root)]);
+        assert_eq!(
+            output.provenance,
+            vec![hash_to_string(&root), hash_to_string(&derived)]
+        );
+        assert!(output.payment.is_none());
+        assert_eq!(output.content, "content");
+    }
+
+    #[test]
+    fn test_close_tally_counts_by_outcome() {
+        let mut tally = CloseTally::default();
+        tally.record(close_entry("a", "cooperative", Some("tx".into()), None));
+        tally.record(close_entry("b", "cleared_unfunded", None, None));
+        tally.record(close_entry(
+            "c",
+            "dispute_initiated",
+            Some("tx2".into()),
+            None,
+        ));
+        tally.record(close_entry("d", "failed", None, Some("boom".into())));
+
+        assert_eq!((tally.closed, tally.disputes, tally.failed), (2, 1, 1));
+        assert!(tally.results[1].success);
+        assert!(!tally.results[3].success);
+        assert_eq!(tally.results[3].error.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn test_parse_knowledge_uri() {
+        let hash = content_hash(b"resource");
+        let uri = format!("{}{}", KNOWLEDGE_URI_PREFIX, hash_to_string(&hash));
+        assert_eq!(parse_knowledge_uri(&uri).unwrap(), hash);
+        assert!(parse_knowledge_uri("http://example.com").is_err());
+        assert!(parse_knowledge_uri("knowledge://not-a-hash").is_err());
+    }
+
+    #[test]
+    fn test_content_size_and_visibility_checks() {
+        assert!(check_content_size("").is_err());
+        assert!(check_content_size(&"x".repeat(MAX_CONTENT_SIZE + 1)).is_err());
+        assert!(check_content_size("ok").is_ok());
+        assert_eq!(
+            parse_visibility_input("shared").unwrap(),
+            Visibility::Shared
+        );
+        assert!(parse_visibility_input("everyone").is_err());
+        assert!(earnings_filter(NodalyncPeerId::from_bytes([1u8; 20]), 10, Some("L9")).is_err());
+        assert!(earnings_filter(NodalyncPeerId::from_bytes([1u8; 20]), 10, Some("L1")).is_ok());
+    }
+
+    #[test]
+    fn test_peer_id_parse_errors_keep_each_tool_message() {
+        let open = parse_nodalync_peer_id("0OIl", "bad format (open)", |n| format!("{} bytes", n));
+        assert!(result_text(&open.unwrap_err()).contains("bad format (open)"));
+        let short = bs58::encode([1u8; 5]).into_string();
+        let close = parse_nodalync_peer_id(&short, "fmt", |n| format!("got {} bytes", n));
+        assert!(result_text(&close.unwrap_err()).contains("got 5 bytes"));
+        let valid = bs58::encode([7u8; 20]).into_string();
+        assert_eq!(
+            parse_nodalync_peer_id(&valid, "fmt", |n| n.to_string()).unwrap(),
+            NodalyncPeerId::from_bytes([7u8; 20])
+        );
+    }
+
+    #[tokio::test]
+    async fn test_publish_update_delete_flow() {
+        let temp_dir = TempDir::new().unwrap();
+        let server = NodalyncMcpServer::new(test_config(&temp_dir))
+            .await
+            .unwrap();
+
+        let publish = PublishContentInput {
+            content: "Bob Jones observed the results in Rome.".to_string(),
+            title: "Original".to_string(),
+            description: Some("first".to_string()),
+            price_hbar: None,
+            visibility: "shared".to_string(),
+            mime_type: Some("text/plain".to_string()),
+            tags: Some(vec!["science".to_string()]),
+        };
+        let result = server
+            .publish_content(Parameters(publish.clone()))
+            .await
+            .unwrap();
+        assert!(
+            !result.is_error.unwrap_or(false),
+            "{}",
+            result_text(&result)
+        );
+        let hash = hash_to_string(&content_hash(publish.content.as_bytes()));
+
+        // Publishing the same content again is refused.
+        let again = server.publish_content(Parameters(publish)).await.unwrap();
+        assert!(again.is_error.unwrap_or(false));
+
+        let update = UpdateContentInput {
+            previous_hash: hash.clone(),
+            content: "Bob Jones observed new results in Rome.".to_string(),
+            title: None,
+            description: None,
+        };
+        let result = server.update_content(Parameters(update)).await.unwrap();
+        let text = result_text(&result);
+        assert!(!result.is_error.unwrap_or(false), "{}", text);
+        assert!(text.contains("Original"), "title is inherited: {}", text);
+
+        let delete = DeleteContentInput { hash: hash.clone() };
+        let result = server.delete_content(Parameters(delete)).await.unwrap();
+        assert!(
+            !result.is_error.unwrap_or(false),
+            "{}",
+            result_text(&result)
+        );
+        let manifest = server
+            .ops
+            .lock()
+            .await
+            .get_content_manifest(&string_to_hash(&hash).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(manifest.visibility, Visibility::Offline);
     }
 
     #[tokio::test]

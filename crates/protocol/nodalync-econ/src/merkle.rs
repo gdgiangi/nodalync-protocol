@@ -97,21 +97,25 @@ pub fn compute_merkle_root(entries: &[SettlementEntry]) -> Hash {
 
     // Build tree bottom-up
     while hashes.len() > 1 {
-        let mut next_level = Vec::new();
-
-        for chunk in hashes.chunks(2) {
-            if chunk.len() == 2 {
-                next_level.push(hash_pair(&chunk[0], &chunk[1]));
-            } else {
-                // Odd element gets promoted directly
-                next_level.push(chunk[0]);
-            }
-        }
-
-        hashes = next_level;
+        hashes = next_merkle_level(&hashes);
     }
 
     hashes.pop().unwrap()
+}
+
+/// Hash adjacent pairs of one tree level into the level above it.
+/// An odd element at the end is promoted unchanged.
+fn next_merkle_level(hashes: &[Hash]) -> Vec<Hash> {
+    let mut next_level = Vec::with_capacity(hashes.len().div_ceil(2));
+    for chunk in hashes.chunks(2) {
+        if chunk.len() == 2 {
+            next_level.push(hash_pair(&chunk[0], &chunk[1]));
+        } else {
+            // Odd element gets promoted directly
+            next_level.push(chunk[0]);
+        }
+    }
+    next_level
 }
 
 /// Compute the batch ID from settlement entries.
@@ -169,7 +173,6 @@ impl MerkleProof {
 /// # Errors
 /// * `EconError::EmptyEntries` if entries is empty
 /// * `EconError::IndexOutOfBounds` if index >= entries.len()
-#[allow(clippy::manual_is_multiple_of)]
 pub fn create_merkle_proof(entries: &[SettlementEntry], index: usize) -> EconResult<MerkleProof> {
     if entries.is_empty() {
         return Err(EconError::EmptyEntries);
@@ -196,34 +199,29 @@ pub fn create_merkle_proof(entries: &[SettlementEntry], index: usize) -> EconRes
 
     // Build proof by traversing up the tree
     while hashes.len() > 1 {
-        let is_right_sibling = current_index % 2 == 0;
-        let sibling_index = if is_right_sibling {
-            current_index + 1
-        } else {
-            current_index - 1
-        };
+        let (sibling_index, is_right_sibling) = sibling_position(current_index);
 
         // Get sibling if it exists
-        if sibling_index < hashes.len() {
-            siblings.push(hashes[sibling_index]);
+        if let Some(sibling) = hashes.get(sibling_index) {
+            siblings.push(*sibling);
             path.push(is_right_sibling); // true if sibling is to the right
         }
 
-        // Build next level
-        let mut next_level = Vec::new();
-        for chunk in hashes.chunks(2) {
-            if chunk.len() == 2 {
-                next_level.push(hash_pair(&chunk[0], &chunk[1]));
-            } else {
-                next_level.push(chunk[0]);
-            }
-        }
-
-        hashes = next_level;
+        hashes = next_merkle_level(&hashes);
         current_index /= 2;
     }
 
     Ok(MerkleProof::new(siblings, path))
+}
+
+/// The index of a node's sibling within its level, and whether that sibling is to the right.
+#[allow(clippy::manual_is_multiple_of)]
+fn sibling_position(index: usize) -> (usize, bool) {
+    if index % 2 == 0 {
+        (index + 1, true)
+    } else {
+        (index - 1, false)
+    }
 }
 
 /// Verify a merkle proof for a settlement entry.

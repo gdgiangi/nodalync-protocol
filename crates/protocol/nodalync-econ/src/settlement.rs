@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use nodalync_crypto::{Hash, PeerId, Timestamp};
 use nodalync_types::{
-    Amount, Payment, SettlementBatch, SettlementEntry, SETTLEMENT_BATCH_INTERVAL_MS,
+    Amount, Distribution, Payment, SettlementBatch, SettlementEntry, SETTLEMENT_BATCH_INTERVAL_MS,
     SETTLEMENT_BATCH_THRESHOLD,
 };
 
@@ -69,19 +69,7 @@ pub fn create_settlement_batch(payments: &[Payment]) -> SettlementBatch {
 
         for dist in distributions {
             let entry = by_recipient.entry(dist.recipient).or_default();
-
-            // Aggregate amount
-            entry.0 += dist.amount;
-
-            // Add source hash if not already present
-            if dist.source_hash != Hash([0u8; 32]) && !entry.1.contains(&dist.source_hash) {
-                entry.1.push(dist.source_hash);
-            }
-
-            // Add payment ID if not already present
-            if !entry.2.contains(&payment.id) {
-                entry.2.push(payment.id);
-            }
+            add_distribution(entry, &dist, &payment.id);
         }
     }
 
@@ -101,6 +89,27 @@ pub fn create_settlement_batch(payments: &[Payment]) -> SettlementBatch {
     let merkle_root = compute_merkle_root(&entries);
 
     SettlementBatch::new(batch_id, entries, merkle_root)
+}
+
+/// Fold one revenue distribution into a recipient's running
+/// (amount, provenance_hashes, payment_ids) aggregate.
+fn add_distribution(
+    entry: &mut (Amount, Vec<Hash>, Vec<Hash>),
+    dist: &Distribution,
+    payment_id: &Hash,
+) {
+    // Aggregate amount
+    entry.0 += dist.amount;
+
+    // Add source hash if not already present
+    if dist.source_hash != Hash([0u8; 32]) && !entry.1.contains(&dist.source_hash) {
+        entry.1.push(dist.source_hash);
+    }
+
+    // Add payment ID if not already present
+    if !entry.2.contains(payment_id) {
+        entry.2.push(*payment_id);
+    }
 }
 
 /// Calculate the total pending amount from a slice of payments.

@@ -3,7 +3,7 @@
 //! This module implements content creation, update, derive, and reference operations
 //! as specified in Protocol Specification §7.1.
 
-use nodalync_crypto::{content_hash, Hash, Timestamp};
+use nodalync_crypto::{content_hash, Hash, PeerId, Timestamp};
 use nodalync_store::{CacheStore, ContentStore, ManifestStore, ProvenanceGraph};
 use nodalync_types::{ContentType, Manifest, Metadata, Provenance, Version, Visibility};
 use nodalync_valid::Validator;
@@ -68,12 +68,8 @@ where
         self.validator.validate_version(&manifest, None)?;
         self.validator.validate_provenance(&manifest, &[])?;
 
-        // 7. Store content and manifest
-        self.state.content.store_verified(&hash, content)?;
-        self.state.manifests.store(&manifest)?;
-
-        // Also add to provenance graph
-        self.state.provenance.add(&hash, &[])?;
+        // 7. Store content and manifest, and add to provenance graph
+        self.store_new_content(&hash, content, &manifest, &[])?;
 
         Ok(hash)
     }
@@ -117,20 +113,7 @@ where
         let new_version = Version::new_from_previous(&old_manifest.version, *old_hash, timestamp);
 
         // Inherit provenance (for L0, create new L0 provenance with same structure)
-        let new_provenance = if old_manifest.content_type == ContentType::L0 {
-            Provenance::new_l0(new_hash, self.peer_id())
-        } else {
-            // For L3, we need to update the provenance to reference the new hash
-            // but keep the same sources
-            let mut prov = old_manifest.provenance.clone();
-            // Update self-reference if present
-            for entry in &mut prov.root_l0l1 {
-                if entry.hash == *old_hash {
-                    entry.hash = new_hash;
-                }
-            }
-            prov
-        };
+        let new_provenance = updated_provenance(&old_manifest, old_hash, new_hash, self.peer_id());
 
         // Create new manifest inheriting visibility
         let new_manifest = Manifest {
@@ -153,12 +136,8 @@ where
         self.validator
             .validate_version(&new_manifest, Some(&old_manifest))?;
 
-        // Store
-        self.state.content.store_verified(&new_hash, new_content)?;
-        self.state.manifests.store(&new_manifest)?;
-
-        // Update provenance graph
-        self.state.provenance.add(&new_hash, &[*old_hash])?;
+        // Store, and update provenance graph
+        self.store_new_content(&new_hash, new_content, &new_manifest, &[*old_hash])?;
 
         Ok(new_hash)
     }
@@ -199,42 +178,10 @@ where
 
         // 1. Verify all sources were queried (in cache or owned)
         // Note: L2 sources are special - they can only be used if owned (never queried)
-        for source_hash in sources {
-            let manifest_opt = self.state.manifests.load(source_hash)?;
-            let is_cached = self.state.cache.is_cached(source_hash);
-            let is_owned = manifest_opt.is_some();
-
-            // Check if this is an L2 source
-            if let Some(ref manifest) = manifest_opt {
-                if manifest.content_type == ContentType::L2 {
-                    // L2 sources must be owned, not queried (L2 is never queryable)
-                    if manifest.owner != self.peer_id() {
-                        return Err(OpsError::AccessDenied);
-                    }
-                    continue; // L2 is valid if owned
-                }
-            }
-
-            if !is_cached && !is_owned {
-                return Err(OpsError::SourceNotQueried(*source_hash));
-            }
-        }
+        self.verify_sources_queried(sources)?;
 
         // 2. Load source manifests
-        let mut source_data: Vec<(Hash, Manifest)> = Vec::new();
-        for source_hash in sources {
-            // Try local manifest first, then check cache
-            if let Some(manifest) = self.state.manifests.load(source_hash)? {
-                source_data.push((*source_hash, manifest));
-            } else if let Some(_cached) = self.state.cache.get(source_hash)? {
-                // For cached content, we'd need to reconstruct the manifest
-                // For MVP, we require sources to have known manifests
-                return Err(OpsError::invalid_operation(format!(
-                    "cached content {} does not have local manifest",
-                    source_hash
-                )));
-            }
-        }
+        let source_data = self.load_source_manifests(sources)?;
 
         // 3-4. Build provenance from sources
         let provenance_sources: Vec<_> = source_data
@@ -266,15 +213,10 @@ where
         };
 
         // 6. Validate provenance
-        let source_manifests: Vec<Manifest> = source_data.iter().map(|(_, m)| m.clone()).collect();
-        self.validator
-            .validate_provenance(&manifest, &source_manifests)?;
-        self.validator.validate_content(insight, &manifest)?;
+        self.validate_derived(&manifest, insight, &source_data)?;
 
         // 7. Store
-        self.state.content.store_verified(&hash, insight)?;
-        self.state.manifests.store(&manifest)?;
-        self.state.provenance.add(&hash, sources)?;
+        self.store_new_content(&hash, insight, &manifest, sources)?;
 
         Ok(hash)
     }
@@ -297,29 +239,7 @@ where
         timestamp: Timestamp,
     ) -> OpsResult<Hash> {
         // 1. Verify L3 was queried (in cache or owned)
-        let cached = self.state.cache.get(l3_hash)?;
-        let owned_manifest = self.state.manifests.load(l3_hash)?;
-
-        let (content, manifest) = if let Some(cached_content) = cached {
-            // Get manifest for cached content
-            if let Some(m) = owned_manifest {
-                (cached_content.content, m)
-            } else {
-                return Err(OpsError::invalid_operation(
-                    "cached L3 must have local manifest for reference",
-                ));
-            }
-        } else if let Some(m) = owned_manifest {
-            // Load owned content
-            let content = self
-                .state
-                .content
-                .load(l3_hash)?
-                .ok_or(OpsError::NotFound(*l3_hash))?;
-            (content, m)
-        } else {
-            return Err(OpsError::SourceNotQueried(*l3_hash));
-        };
+        let (content, manifest) = self.load_l3_for_reference(l3_hash)?;
 
         // 2. Verify content_type is L3
         if manifest.content_type != ContentType::L3 {
@@ -349,12 +269,133 @@ where
         };
 
         // Store as L0
-        self.state.content.store_verified(&new_hash, &content)?;
-        self.state.manifests.store(&new_manifest)?;
-        self.state.provenance.add(&new_hash, &[])?;
+        self.store_new_content(&new_hash, &content, &new_manifest, &[])?;
 
         Ok(new_hash)
     }
+
+    /// Store verified content and its manifest, and record its sources in the provenance graph.
+    fn store_new_content(
+        &mut self,
+        hash: &Hash,
+        content: &[u8],
+        manifest: &Manifest,
+        sources: &[Hash],
+    ) -> OpsResult<()> {
+        self.state.content.store_verified(hash, content)?;
+        self.state.manifests.store(manifest)?;
+        self.state.provenance.add(hash, sources)?;
+        Ok(())
+    }
+
+    /// Check every derive source was queried or is owned.
+    fn verify_sources_queried(&self, sources: &[Hash]) -> OpsResult<()> {
+        for source_hash in sources {
+            self.check_source_queried(source_hash)?;
+        }
+        Ok(())
+    }
+
+    /// A derive source must be owned (any manifest here) or queried (cached).
+    /// An L2 source must be owned by us: L2 is never queryable.
+    fn check_source_queried(&self, source_hash: &Hash) -> OpsResult<()> {
+        match self.state.manifests.load(source_hash)? {
+            // L2 sources must be owned, not queried (L2 is never queryable)
+            Some(manifest) if manifest.content_type == ContentType::L2 => {
+                if manifest.owner != self.peer_id() {
+                    return Err(OpsError::AccessDenied);
+                }
+                Ok(())
+            }
+            Some(_) => Ok(()),
+            None if self.state.cache.is_cached(source_hash) => Ok(()),
+            None => Err(OpsError::SourceNotQueried(*source_hash)),
+        }
+    }
+
+    /// The local manifest of each source. A source that is only cached is an error,
+    /// since its manifest would have to be reconstructed; a source that is neither is skipped.
+    fn load_source_manifests(&self, sources: &[Hash]) -> OpsResult<Vec<(Hash, Manifest)>> {
+        let mut source_data: Vec<(Hash, Manifest)> = Vec::new();
+        for source_hash in sources {
+            // Try local manifest first, then check cache
+            if let Some(manifest) = self.state.manifests.load(source_hash)? {
+                source_data.push((*source_hash, manifest));
+            } else if self.state.cache.get(source_hash)?.is_some() {
+                // For cached content, we'd need to reconstruct the manifest
+                // For MVP, we require sources to have known manifests
+                return Err(OpsError::invalid_operation(format!(
+                    "cached content {} does not have local manifest",
+                    source_hash
+                )));
+            }
+        }
+        Ok(source_data)
+    }
+
+    /// Validate a derived manifest's provenance against its sources, then its content.
+    fn validate_derived(
+        &self,
+        manifest: &Manifest,
+        insight: &[u8],
+        source_data: &[(Hash, Manifest)],
+    ) -> OpsResult<()> {
+        let source_manifests: Vec<Manifest> = source_data.iter().map(|(_, m)| m.clone()).collect();
+        self.validator
+            .validate_provenance(manifest, &source_manifests)?;
+        self.validator.validate_content(insight, manifest)?;
+        Ok(())
+    }
+
+    /// The content and manifest of an L3 to reference: a cached copy (which must also
+    /// have a local manifest) or our own stored content.
+    fn load_l3_for_reference(&self, l3_hash: &Hash) -> OpsResult<(Vec<u8>, Manifest)> {
+        let cached = self.state.cache.get(l3_hash)?;
+        let owned_manifest = self.state.manifests.load(l3_hash)?;
+
+        match (cached, owned_manifest) {
+            // Get manifest for cached content
+            (Some(cached_content), Some(m)) => Ok((cached_content.content, m)),
+            (Some(_), None) => Err(OpsError::invalid_operation(
+                "cached L3 must have local manifest for reference",
+            )),
+            (None, Some(m)) => {
+                // Load owned content
+                let content = self
+                    .state
+                    .content
+                    .load(l3_hash)?
+                    .ok_or(OpsError::NotFound(*l3_hash))?;
+                Ok((content, m))
+            }
+            (None, None) => Err(OpsError::SourceNotQueried(*l3_hash)),
+        }
+    }
+}
+
+/// The provenance for a new version of `old_manifest`.
+///
+/// L0 gets fresh self-referential provenance. Derived content keeps its sources,
+/// with any self-reference to `old_hash` updated to `new_hash`.
+fn updated_provenance(
+    old_manifest: &Manifest,
+    old_hash: &Hash,
+    new_hash: Hash,
+    owner: PeerId,
+) -> Provenance {
+    if old_manifest.content_type == ContentType::L0 {
+        return Provenance::new_l0(new_hash, owner);
+    }
+    // For L3, we need to update the provenance to reference the new hash
+    // but keep the same sources
+    let mut prov = old_manifest.provenance.clone();
+    // Update self-reference if present
+    for entry in &mut prov.root_l0l1 {
+        if entry.hash == *old_hash {
+            entry.hash = new_hash;
+        }
+    }
+    prov
 }
 
 #[cfg(test)]
@@ -456,6 +497,69 @@ mod tests {
 
         let result = ops.derive_content(&[fake_hash], insight, meta);
         assert!(matches!(result, Err(OpsError::SourceNotQueried(_))));
+    }
+
+    #[test]
+    fn test_derive_requires_sources() {
+        let (mut ops, _temp) = create_test_ops();
+        let meta = Metadata::new("Fail", 4);
+        let result = ops.derive_content(&[], b"none", meta);
+        assert!(matches!(result, Err(OpsError::InvalidOperation(_))));
+    }
+
+    #[test]
+    fn test_derive_rejects_l2_source_owned_by_someone_else() {
+        let (mut ops, _temp) = create_test_ops();
+        let source = b"Graph source";
+        let source_hash = ops
+            .create_content(source, Metadata::new("L2", source.len() as u64))
+            .unwrap();
+
+        // Turn the stored manifest into another node's L2.
+        let mut manifest = ops.state.manifests.load(&source_hash).unwrap().unwrap();
+        manifest.content_type = ContentType::L2;
+        manifest.owner = PeerId::from_bytes([9u8; 20]);
+        ops.state.manifests.update(&manifest).unwrap();
+
+        let insight = b"Derived from someone's graph";
+        let result = ops.derive_content(
+            &[source_hash],
+            insight,
+            Metadata::new("L3", insight.len() as u64),
+        );
+        assert!(matches!(result, Err(OpsError::AccessDenied)));
+    }
+
+    #[test]
+    fn test_reference_unknown_content_is_source_not_queried() {
+        let (mut ops, _temp) = create_test_ops();
+        let result = ops.reference_l3_as_l0(&content_hash(b"never seen"));
+        assert!(matches!(result, Err(OpsError::SourceNotQueried(_))));
+    }
+
+    #[test]
+    fn test_updated_provenance_rewrites_l3_self_reference() {
+        let (mut ops, _temp) = create_test_ops();
+        let source = b"Source content";
+        let source_hash = ops
+            .create_content(source, Metadata::new("Source", source.len() as u64))
+            .unwrap();
+        let insight = b"Derived insight";
+        let l3_hash = ops
+            .derive_content(
+                &[source_hash],
+                insight,
+                Metadata::new("L3", insight.len() as u64),
+            )
+            .unwrap();
+        let mut manifest = ops.state.manifests.load(&l3_hash).unwrap().unwrap();
+        manifest.provenance.root_l0l1[0].hash = l3_hash;
+
+        let new_hash = content_hash(b"v2");
+        let provenance = updated_provenance(&manifest, &l3_hash, new_hash, ops.peer_id());
+
+        assert_eq!(provenance.root_l0l1[0].hash, new_hash);
+        assert_eq!(provenance.derived_from, manifest.provenance.derived_from);
     }
 
     #[test]

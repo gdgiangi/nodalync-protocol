@@ -1,7 +1,7 @@
 //! Withdraw tokens command.
 
 use crate::config::{ndl_to_units, CliConfig};
-use crate::context::NodeContext;
+use crate::context::{require_settlement, NodeContext};
 use crate::error::{CliError, CliResult};
 use crate::output::{OutputFormat, Render, TransactionOutput};
 
@@ -18,21 +18,10 @@ pub async fn withdraw(
     let ctx = NodeContext::with_network(config).await?;
 
     // Get settlement (requires Hedera configuration)
-    let settlement = ctx.settlement.as_ref().ok_or_else(|| {
-        CliError::config(
-            "Hedera settlement not configured. Set HEDERA_ACCOUNT_ID, HEDERA_PRIVATE_KEY, \
-             and HEDERA_CONTRACT_ID environment variables.",
-        )
-    })?;
+    let settlement = require_settlement(&ctx)?;
 
     // Check balance first
-    let current_balance = settlement.get_balance().await?;
-    if amount > current_balance {
-        return Err(CliError::InsufficientBalance {
-            required: amount,
-            available: current_balance,
-        });
-    }
+    ensure_withdrawable(settlement.as_ref(), amount).await?;
 
     // Perform withdrawal
     let tx_id = settlement.withdraw(amount).await?;
@@ -48,6 +37,21 @@ pub async fn withdraw(
     };
 
     Ok(output.render(format))
+}
+
+/// The settlement balance must cover `amount`.
+async fn ensure_withdrawable(
+    settlement: &dyn nodalync_settle::Settlement,
+    amount: u64,
+) -> CliResult<()> {
+    let current_balance = settlement.get_balance().await?;
+    if amount > current_balance {
+        return Err(CliError::InsufficientBalance {
+            required: amount,
+            available: current_balance,
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]

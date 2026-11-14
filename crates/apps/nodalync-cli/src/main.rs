@@ -131,9 +131,9 @@ async fn run(cli: Cli) -> CliResult<()> {
     // Dispatch command
     let output = match cli.command {
         // Identity commands
-        Commands::Init { wizard } => commands::init(config, format, wizard)?,
+        Commands::Init { wizard } => commands::init(config, format, wizard),
 
-        Commands::Whoami => commands::whoami(config, format)?,
+        Commands::Whoami => commands::whoami(config, format),
 
         // Content management commands
         Commands::Publish {
@@ -152,7 +152,7 @@ async fn run(cli: Cli) -> CliResult<()> {
                 title,
                 description,
             )
-            .await?
+            .await
         }
 
         Commands::List {
@@ -169,7 +169,7 @@ async fn run(cli: Cli) -> CliResult<()> {
                 limit,
                 network,
             )
-            .await?
+            .await
         }
 
         Commands::Update {
@@ -177,20 +177,20 @@ async fn run(cli: Cli) -> CliResult<()> {
             file,
             title,
             price,
-        } => commands::update(config, format, &hash, &file, title, price)?,
+        } => commands::update(config, format, &hash, &file, title, price),
 
         Commands::Visibility { hash, level } => {
-            commands::visibility(config, format, &hash, level.into()).await?
+            commands::visibility(config, format, &hash, level.into()).await
         }
 
-        Commands::Versions { hash } => commands::versions(config, format, &hash)?,
+        Commands::Versions { hash } => commands::versions(config, format, &hash),
 
-        Commands::Delete { hash, force } => commands::delete(config, format, &hash, force)?,
+        Commands::Delete { hash, force } => commands::delete(config, format, &hash, force),
 
         // Discovery & query commands
-        Commands::Preview { hash } => commands::preview(config, format, &hash).await?,
+        Commands::Preview { hash } => commands::preview(config, format, &hash).await,
 
-        Commands::Query { hash, output } => commands::query(config, format, &hash, output).await?,
+        Commands::Query { hash, output } => commands::query(config, format, &hash, output).await,
 
         // Synthesis commands
         Commands::Synthesize {
@@ -199,58 +199,54 @@ async fn run(cli: Cli) -> CliResult<()> {
             title,
             price,
             publish,
-        } => commands::synthesize(config, format, &sources, &output, title, price, publish).await?,
+        } => commands::synthesize(config, format, &sources, &output, title, price, publish).await,
 
-        Commands::BuildL2 { sources, title } => {
-            commands::build_l2(config, format, &sources, title)?
-        }
+        Commands::BuildL2 { sources, title } => commands::build_l2(config, format, &sources, title),
 
-        Commands::MergeL2 { graphs, title } => commands::merge_l2(config, format, &graphs, title)?,
+        Commands::MergeL2 { graphs, title } => commands::merge_l2(config, format, &graphs, title),
 
-        Commands::Reference { hash } => commands::reference(config, format, &hash)?,
+        Commands::Reference { hash } => commands::reference(config, format, &hash),
 
         // Economics commands
-        Commands::Balance => commands::balance(config, format).await?,
+        Commands::Balance => commands::balance(config, format).await,
 
-        Commands::Earnings { content, limit } => {
-            commands::earnings(config, format, content, limit)?
-        }
+        Commands::Earnings { content, limit } => commands::earnings(config, format, content, limit),
 
-        Commands::Deposit { amount } => commands::deposit(config, format, amount).await?,
+        Commands::Deposit { amount } => commands::deposit(config, format, amount).await,
 
-        Commands::Withdraw { amount } => commands::withdraw(config, format, amount).await?,
+        Commands::Withdraw { amount } => commands::withdraw(config, format, amount).await,
 
-        Commands::Settle => commands::settle(config, format).await?,
+        Commands::Settle => commands::settle(config, format).await,
 
         // Channel commands
         Commands::OpenChannel { peer_id, deposit } => {
-            commands::open_channel(config, format, &peer_id, deposit).await?
+            commands::open_channel(config, format, &peer_id, deposit).await
         }
 
         Commands::CloseChannel { peer_id } => {
-            commands::close_channel(config, format, &peer_id).await?
+            commands::close_channel(config, format, &peer_id).await
         }
 
         Commands::DisputeChannel { peer_id } => {
-            commands::dispute_channel(config, format, &peer_id).await?
+            commands::dispute_channel(config, format, &peer_id).await
         }
 
         Commands::ResolveDispute { peer_id } => {
-            commands::resolve_dispute(config, format, &peer_id).await?
+            commands::resolve_dispute(config, format, &peer_id).await
         }
 
-        Commands::ListChannels => commands::list_channels(config, format)?,
+        Commands::ListChannels => commands::list_channels(config, format),
 
         // Node management commands
         Commands::Start {
             daemon,
             health,
             health_port,
-        } => commands::start(config, format, daemon, health, health_port).await?,
+        } => commands::start(config, format, daemon, health, health_port).await,
 
-        Commands::Status => commands::status(config, format).await?,
+        Commands::Status => commands::status(config, format).await,
 
-        Commands::Stop => commands::stop(config, format).await?,
+        Commands::Stop => commands::stop(config, format).await,
 
         // MCP server command
         Commands::McpServer {
@@ -268,7 +264,7 @@ async fn run(cli: Cli) -> CliResult<()> {
                 contract_id: hedera_contract_id,
                 network: hedera_network,
             };
-            commands::mcp_server(config, budget, auto_approve, enable_network, hedera_args).await?
+            commands::mcp_server(config, budget, auto_approve, enable_network, hedera_args).await
         }
 
         // Search command
@@ -286,12 +282,12 @@ async fn run(cli: Cli) -> CliResult<()> {
                 limit,
                 all,
             )
-            .await?
+            .await
         }
 
         // Completions command
-        Commands::Completions { shell } => commands::completions(shell)?,
-    };
+        Commands::Completions { shell } => commands::completions(shell),
+    }?;
 
     // Print output
     println!("{}", output);

@@ -55,86 +55,15 @@ impl ProvenanceGraph for SqliteProvenanceGraph {
             .conn
             .lock()
             .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
-        let hash_bytes = hash.0.to_vec();
 
         // First check the cache
-        let mut stmt = conn.prepare(
-            "SELECT root_hash, owner, visibility, weight FROM root_cache WHERE content_hash = ?1",
-        )?;
-
-        let cached: Vec<ProvenanceEntry> = stmt
-            .query_map([&hash_bytes], |row| {
-                let root_bytes: Vec<u8> = row.get(0)?;
-                let owner_bytes: Vec<u8> = row.get(1)?;
-                let visibility_u8: u8 = row.get(2)?;
-                let weight: u32 = row.get(3)?;
-
-                let root_hash = bytes_to_hash(&root_bytes);
-                let owner = bytes_to_peer_id(&owner_bytes);
-                let visibility = u8_to_visibility(visibility_u8);
-
-                Ok(ProvenanceEntry {
-                    hash: root_hash,
-                    owner,
-                    visibility,
-                    weight,
-                })
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
-
+        let cached = query_cached_roots(&conn, hash)?;
         if !cached.is_empty() {
             return Ok(cached);
         }
 
         // If not cached, traverse the graph
-        // For L0 content (no derived_from edges), it is its own root
-        let sources = self.get_direct_sources(&conn, hash)?;
-        if sources.is_empty() {
-            // This is L0 content - return empty (caller should handle self-reference)
-            return Ok(vec![]);
-        }
-
-        // For derived content, flatten all roots from sources
-        let mut all_roots = Vec::new();
-        let mut visited = HashSet::new();
-        let mut queue: VecDeque<Hash> = sources.into_iter().collect();
-
-        while let Some(current) = queue.pop_front() {
-            if visited.contains(&current) {
-                continue;
-            }
-            visited.insert(current);
-
-            let current_sources = self.get_direct_sources(&conn, &current)?;
-            if current_sources.is_empty() {
-                // This is an L0 source - it's a root
-                // We'd need manifest data to get owner/visibility
-                // For now, return with placeholder
-                all_roots.push(current);
-            } else {
-                // Add sources to queue
-                for source in current_sources {
-                    if !visited.contains(&source) {
-                        queue.push_back(source);
-                    }
-                }
-            }
-        }
-
-        // Convert to entries (note: this returns partial data without owner/visibility)
-        // Full entries require cross-referencing with manifest store
-        let entries: Vec<ProvenanceEntry> = all_roots
-            .into_iter()
-            .map(|h| ProvenanceEntry {
-                hash: h,
-                owner: PeerId::from_bytes([0u8; 20]), // Placeholder
-                visibility: Visibility::Private,      // Placeholder
-                weight: 1,
-            })
-            .collect();
-
-        Ok(entries)
+        self.traverse_roots(&conn, hash)
     }
 
     fn get_derivations(&self, hash: &Hash) -> Result<Vec<Hash>> {
@@ -168,29 +97,7 @@ impl ProvenanceGraph for SqliteProvenanceGraph {
             .lock()
             .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
 
-        // BFS from descendant towards roots
-        let mut visited = HashSet::new();
-        let mut queue = VecDeque::new();
-        queue.push_back(*descendant);
-
-        while let Some(current) = queue.pop_front() {
-            if visited.contains(&current) {
-                continue;
-            }
-            visited.insert(current);
-
-            let sources = self.get_direct_sources(&conn, &current)?;
-            for source in sources {
-                if source == *ancestor {
-                    return Ok(true);
-                }
-                if !visited.contains(&source) {
-                    queue.push_back(source);
-                }
-            }
-        }
-
-        Ok(false)
+        self.search_ancestors(&conn, ancestor, descendant)
     }
 
     fn cache_root(&mut self, content_hash: &Hash, entry: &ProvenanceEntry) -> Result<()> {
@@ -262,35 +169,131 @@ impl SqliteProvenanceGraph {
             .conn
             .lock()
             .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
-        let hash_bytes = hash.0.to_vec();
 
-        let mut stmt = conn.prepare(
-            "SELECT root_hash, owner, visibility, weight FROM root_cache WHERE content_hash = ?1",
-        )?;
-
-        let entries: Vec<ProvenanceEntry> = stmt
-            .query_map([&hash_bytes], |row| {
-                let root_bytes: Vec<u8> = row.get(0)?;
-                let owner_bytes: Vec<u8> = row.get(1)?;
-                let visibility_u8: u8 = row.get(2)?;
-                let weight: u32 = row.get(3)?;
-
-                Ok(ProvenanceEntry {
-                    hash: bytes_to_hash(&root_bytes),
-                    owner: bytes_to_peer_id(&owner_bytes),
-                    visibility: u8_to_visibility(visibility_u8),
-                    weight,
-                })
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
-
+        let entries = query_cached_roots(&conn, hash)?;
         if entries.is_empty() {
             Ok(None)
         } else {
             Ok(Some(entries))
         }
     }
+
+    /// Roots found by walking the derived_from graph from `hash`, for content whose
+    /// roots are not cached.
+    ///
+    /// L0 content (no sources) has no roots here: the caller handles self-reference.
+    /// Entries carry the root hash only; owner and visibility are placeholders,
+    /// since full entries require cross-referencing with the manifest store.
+    fn traverse_roots(&self, conn: &Connection, hash: &Hash) -> Result<Vec<ProvenanceEntry>> {
+        // For L0 content (no derived_from edges), it is its own root
+        let sources = self.get_direct_sources(conn, hash)?;
+        if sources.is_empty() {
+            // This is L0 content - return empty (caller should handle self-reference)
+            return Ok(vec![]);
+        }
+
+        // For derived content, flatten all roots from sources
+        let all_roots = self.collect_l0_sources(conn, sources)?;
+
+        // Convert to entries (note: this returns partial data without owner/visibility)
+        // Full entries require cross-referencing with manifest store
+        Ok(all_roots
+            .into_iter()
+            .map(|h| ProvenanceEntry {
+                hash: h,
+                owner: PeerId::from_bytes([0u8; 20]), // Placeholder
+                visibility: Visibility::Private,      // Placeholder
+                weight: 1,
+            })
+            .collect())
+    }
+
+    /// Breadth-first from `sources`, the reachable hashes that have no sources of their own,
+    /// in the order they are reached.
+    fn collect_l0_sources(&self, conn: &Connection, sources: Vec<Hash>) -> Result<Vec<Hash>> {
+        let mut all_roots = Vec::new();
+        let mut visited = HashSet::new();
+        let mut queue: VecDeque<Hash> = sources.into_iter().collect();
+
+        while let Some(current) = queue.pop_front() {
+            if !visited.insert(current) {
+                continue;
+            }
+
+            let current_sources = self.get_direct_sources(conn, &current)?;
+            if current_sources.is_empty() {
+                // This is an L0 source - it's a root
+                all_roots.push(current);
+            } else {
+                // Add sources to queue
+                enqueue_unvisited(&mut queue, &visited, current_sources);
+            }
+        }
+        Ok(all_roots)
+    }
+
+    /// Breadth-first from `descendant` towards roots: whether `ancestor` is reached.
+    fn search_ancestors(
+        &self,
+        conn: &Connection,
+        ancestor: &Hash,
+        descendant: &Hash,
+    ) -> Result<bool> {
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::from([*descendant]);
+
+        while let Some(current) = queue.pop_front() {
+            if !visited.insert(current) {
+                continue;
+            }
+
+            let sources = self.get_direct_sources(conn, &current)?;
+            if sources.contains(ancestor) {
+                return Ok(true);
+            }
+            enqueue_unvisited(&mut queue, &visited, sources);
+        }
+
+        Ok(false)
+    }
+}
+
+/// Queue each of `sources` not yet visited.
+fn enqueue_unvisited(queue: &mut VecDeque<Hash>, visited: &HashSet<Hash>, sources: Vec<Hash>) {
+    for source in sources {
+        if !visited.contains(&source) {
+            queue.push_back(source);
+        }
+    }
+}
+
+/// The cached root entries for `hash`; empty when none are cached.
+fn query_cached_roots(conn: &Connection, hash: &Hash) -> Result<Vec<ProvenanceEntry>> {
+    let hash_bytes = hash.0.to_vec();
+    let mut stmt = conn.prepare(
+        "SELECT root_hash, owner, visibility, weight FROM root_cache WHERE content_hash = ?1",
+    )?;
+
+    let entries = stmt
+        .query_map([&hash_bytes], root_cache_entry)?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(entries)
+}
+
+/// A root entry from a root_cache row (root_hash, owner, visibility, weight).
+fn root_cache_entry(row: &rusqlite::Row) -> rusqlite::Result<ProvenanceEntry> {
+    let root_bytes: Vec<u8> = row.get(0)?;
+    let owner_bytes: Vec<u8> = row.get(1)?;
+    let visibility_u8: u8 = row.get(2)?;
+    let weight: u32 = row.get(3)?;
+
+    Ok(ProvenanceEntry {
+        hash: bytes_to_hash(&root_bytes),
+        owner: bytes_to_peer_id(&owner_bytes),
+        visibility: u8_to_visibility(visibility_u8),
+        weight,
+    })
 }
 
 /// Convert bytes to Hash.

@@ -25,40 +25,54 @@ use crate::{MockNetwork, MockSettlement};
 ///
 /// This is safe to call multiple times and from multiple tests.
 pub fn try_load_dotenv() {
-    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        let mut path = PathBuf::from(manifest_dir);
-        // Walk up until we find a Cargo.toml with [workspace]
-        loop {
-            let cargo_toml = path.join("Cargo.toml");
-            if cargo_toml.exists() {
-                if let Ok(contents) = std::fs::read_to_string(&cargo_toml) {
-                    if contents.contains("[workspace]") {
-                        break;
-                    }
-                }
-            }
-            if !path.pop() {
-                return; // reached filesystem root without finding workspace
-            }
+    let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") else {
+        return;
+    };
+    let Some(root) = find_workspace_root(PathBuf::from(manifest_dir)) else {
+        return; // reached filesystem root without finding workspace
+    };
+    if let Ok(contents) = std::fs::read_to_string(root.join(".env")) {
+        contents.lines().for_each(apply_dotenv_line);
+    }
+}
+
+/// Walk up from `path` to the first directory whose `Cargo.toml` declares `[workspace]`.
+fn find_workspace_root(mut path: PathBuf) -> Option<PathBuf> {
+    loop {
+        if is_workspace_manifest(&path.join("Cargo.toml")) {
+            return Some(path);
         }
-        let env_file = path.join(".env");
-        if env_file.exists() {
-            if let Ok(contents) = std::fs::read_to_string(&env_file) {
-                for line in contents.lines() {
-                    let line = line.trim();
-                    if line.is_empty() || line.starts_with('#') {
-                        continue;
-                    }
-                    if let Some((key, value)) = line.split_once('=') {
-                        let key = key.trim();
-                        let value = value.trim().trim_matches('"').trim_matches('\'');
-                        // Only set if not already present
-                        if std::env::var(key).is_err() {
-                            std::env::set_var(key, value);
-                        }
-                    }
-                }
-            }
+        if !path.pop() {
+            return None;
+        }
+    }
+}
+
+fn is_workspace_manifest(cargo_toml: &std::path::Path) -> bool {
+    std::fs::read_to_string(cargo_toml)
+        .map(|contents| contents.contains("[workspace]"))
+        .unwrap_or(false)
+}
+
+/// Parse one `KEY=value` line of a `.env` file into its key and unquoted value;
+/// blank lines and `#` comments yield nothing.
+fn parse_dotenv_line(line: &str) -> Option<(&str, &str)> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return None;
+    }
+    let (key, value) = line.split_once('=')?;
+    Some((
+        key.trim(),
+        value.trim().trim_matches('"').trim_matches('\''),
+    ))
+}
+
+/// Set the variable a `.env` line names, unless the environment already has it.
+fn apply_dotenv_line(line: &str) {
+    if let Some((key, value)) = parse_dotenv_line(line) {
+        if std::env::var(key).is_err() {
+            std::env::set_var(key, value);
         }
     }
 }
@@ -172,6 +186,27 @@ pub fn test_hash(label: &str) -> Hash {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_dotenv_line() {
+        assert_eq!(parse_dotenv_line("KEY=value"), Some(("KEY", "value")));
+        assert_eq!(
+            parse_dotenv_line("  KEY = \"quoted\" "),
+            Some(("KEY", "quoted"))
+        );
+        assert_eq!(parse_dotenv_line("KEY='single'"), Some(("KEY", "single")));
+        assert_eq!(parse_dotenv_line("A=b=c"), Some(("A", "b=c")));
+        assert_eq!(parse_dotenv_line("# comment"), None);
+        assert_eq!(parse_dotenv_line("   "), None);
+        assert_eq!(parse_dotenv_line("NO_EQUALS"), None);
+    }
+
+    #[test]
+    fn test_find_workspace_root_from_crate_dir() {
+        let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let root = find_workspace_root(crate_dir).expect("workspace root");
+        assert!(is_workspace_manifest(&root.join("Cargo.toml")));
+    }
 
     #[test]
     fn test_test_keypair() {

@@ -1,9 +1,7 @@
 //! Build L2 Entity Graph command.
 
-use nodalync_store::ContentStore;
-
 use crate::config::CliConfig;
-use crate::context::{parse_hash, NodeContext};
+use crate::context::{load_entity_graph, parse_hashes, require_manifest, NodeContext};
 use crate::error::{CliError, CliResult};
 use crate::output::{BuildL2Output, OutputFormat, Render};
 
@@ -15,26 +13,13 @@ pub fn build_l2(
     title: Option<String>,
 ) -> CliResult<String> {
     // Parse source hashes
-    let sources: Vec<_> = source_strs
-        .iter()
-        .map(|s| parse_hash(s))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    if sources.is_empty() {
-        return Err(CliError::User(
-            "At least one L1 source is required".to_string(),
-        ));
-    }
+    let sources = parse_l1_sources(source_strs)?;
 
     // Initialize context
     let mut ctx = NodeContext::local(config)?;
 
     // Verify sources exist
-    for source in &sources {
-        ctx.ops
-            .get_content_manifest(source)?
-            .ok_or_else(|| CliError::NotFound(source.to_string()))?;
-    }
+    require_source_manifests(&ctx, &sources)?;
 
     // Get title
     let _title = title.unwrap_or_else(|| "Entity Graph".to_string());
@@ -46,20 +31,8 @@ pub fn build_l2(
     let l2_config = nodalync_types::L2BuildConfig::default();
     let hash = ctx.ops.build_l2(sources, Some(l2_config))?;
 
-    // Get the entity graph to count entities and relationships
-    let _manifest = ctx.ops.get_content_manifest(&hash)?.unwrap();
-
-    // Load entity graph from content
-    let content = ctx
-        .ops
-        .state
-        .content
-        .load(&hash)?
-        .ok_or_else(|| CliError::NotFound(hash.to_string()))?;
-
-    // Deserialize to count
-    let graph: nodalync_types::L2EntityGraph = ciborium::from_reader(&content[..])
-        .map_err(|e| CliError::User(format!("Failed to parse entity graph: {}", e)))?;
+    // Load entity graph from content to count entities and relationships
+    let graph = load_entity_graph(&ctx, &hash, "entity graph")?;
 
     let output = BuildL2Output {
         hash: hash.to_string(),
@@ -69,6 +42,25 @@ pub fn build_l2(
     };
 
     Ok(output.render(format))
+}
+
+/// Every source must have a manifest here.
+fn require_source_manifests(ctx: &NodeContext, sources: &[nodalync_crypto::Hash]) -> CliResult<()> {
+    for source in sources {
+        require_manifest(&ctx.ops, source, &source.to_string())?;
+    }
+    Ok(())
+}
+
+/// Parse the L1 source hashes; at least one is required.
+fn parse_l1_sources(source_strs: &[String]) -> CliResult<Vec<nodalync_crypto::Hash>> {
+    let sources = parse_hashes(source_strs)?;
+    if sources.is_empty() {
+        return Err(CliError::User(
+            "At least one L1 source is required".to_string(),
+        ));
+    }
+    Ok(sources)
 }
 
 #[cfg(test)]

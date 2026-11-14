@@ -6,7 +6,7 @@
 //! - Version number increments by 1
 //! - Timestamp is after previous timestamp
 
-use nodalync_types::Manifest;
+use nodalync_types::{Manifest, Version};
 
 use crate::error::{ValidationError, ValidationResult};
 
@@ -91,30 +91,37 @@ fn validate_v2_plus(manifest: &Manifest, previous: Option<&Manifest>) -> Validat
     }
 
     // If previous manifest is provided, validate against it
-    if let Some(prev) = previous {
-        // Previous hash must match
-        if v.previous.as_ref() != Some(&prev.hash) {
-            return Err(ValidationError::PreviousHashMismatch);
-        }
+    match previous {
+        Some(prev) => validate_follows_previous(v, prev),
+        None => Ok(()),
+    }
+}
 
-        // Root must equal previous root
-        if v.root != prev.version.root {
-            return Err(ValidationError::RootMismatch);
-        }
+/// A v2+ version links to `prev` by hash, shares its root, increments its number by 1,
+/// and is timestamped after it.
+fn validate_follows_previous(v: &Version, prev: &Manifest) -> ValidationResult<()> {
+    // Previous hash must match
+    if v.previous.as_ref() != Some(&prev.hash) {
+        return Err(ValidationError::PreviousHashMismatch);
+    }
 
-        // Version number must increment by 1
-        let expected_number = prev.version.number + 1;
-        if v.number != expected_number {
-            return Err(ValidationError::VersionNumberMismatch {
-                expected: expected_number,
-                actual: v.number,
-            });
-        }
+    // Root must equal previous root
+    if v.root != prev.version.root {
+        return Err(ValidationError::RootMismatch);
+    }
 
-        // Timestamp must be after previous
-        if v.timestamp <= prev.version.timestamp {
-            return Err(ValidationError::TimestampNotAfterPrevious);
-        }
+    // Version number must increment by 1
+    let expected_number = prev.version.number + 1;
+    if v.number != expected_number {
+        return Err(ValidationError::VersionNumberMismatch {
+            expected: expected_number,
+            actual: v.number,
+        });
+    }
+
+    // Timestamp must be after previous
+    if v.timestamp <= prev.version.timestamp {
+        return Err(ValidationError::TimestampNotAfterPrevious);
     }
 
     Ok(())

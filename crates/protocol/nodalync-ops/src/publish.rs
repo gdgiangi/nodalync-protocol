@@ -37,28 +37,11 @@ where
         price: Amount,
     ) -> OpsResult<()> {
         // 1. Load manifest
-        let mut manifest = self
-            .state
-            .manifests
-            .load(hash)?
-            .ok_or(OpsError::ManifestNotFound(*hash))?;
-
-        // L2 content cannot be published
-        if manifest.content_type == ContentType::L2 {
-            return Err(OpsError::Validation(
-                nodalync_valid::ValidationError::L2CannotPublish,
-            ));
-        }
-
-        // Verify ownership
-        if manifest.owner != self.peer_id() {
-            return Err(OpsError::AccessDenied);
-        }
+        let mut manifest = self.load_manifest(hash)?;
+        self.ensure_publishable(&manifest)?;
 
         // 2. Validate price
-        if price > 0 {
-            validate_price(price)?;
-        }
+        validate_nonzero_price(price)?;
 
         // 3. Extract L1 summary to get topics
         let l1_summary = self.extract_l1_summary(hash)?;
@@ -73,40 +56,78 @@ where
         self.state.manifests.update(&manifest)?;
 
         // 6. Network announce (if network available)
-        if let Some(network) = self.network().cloned() {
-            // Include our libp2p peer ID so other nodes can dial us directly
-            let publisher_peer_id = Some(network.local_peer_id().to_string());
-            let listen_addrs = network.listen_addresses();
-            tracing::debug!(
-                "Publishing content: hash={}, publisher_peer_id={:?}, listen_addresses={:?}",
-                hash,
-                publisher_peer_id,
-                listen_addrs
-            );
-            let payload = Self::create_announce_payload(
-                &manifest,
-                l1_summary,
-                listen_addrs,
-                publisher_peer_id,
-            );
+        self.announce_published(&manifest, l1_summary).await;
 
-            // DHT announce for persistence - best-effort
-            if let Err(e) = network.dht_announce(*hash, payload.clone()).await {
-                tracing::warn!(
-                    "DHT announce failed (content still published locally): {}",
-                    e
-                );
-            }
+        Ok(())
+    }
 
-            // GossipSub broadcast for immediate discovery - best-effort
-            if let Err(e) = network.broadcast_announce(payload).await {
-                tracing::warn!(
-                    "GossipSub broadcast failed (content still published locally): {}",
-                    e
-                );
-            }
+    /// Announce published content over the DHT (for persistence) and GossipSub (for
+    /// immediate discovery). Both are best-effort: failures are logged.
+    async fn announce_published(&self, manifest: &Manifest, l1_summary: nodalync_types::L1Summary) {
+        let Some(network) = self.network().cloned() else {
+            return;
+        };
+        let hash = &manifest.hash;
+        // Include our libp2p peer ID so other nodes can dial us directly
+        let publisher_peer_id = Some(network.local_peer_id().to_string());
+        let listen_addrs = network.listen_addresses();
+        tracing::debug!(
+            "Publishing content: hash={}, publisher_peer_id={:?}, listen_addresses={:?}",
+            hash,
+            publisher_peer_id,
+            listen_addrs
+        );
+        let payload =
+            Self::create_announce_payload(manifest, l1_summary, listen_addrs, publisher_peer_id);
+
+        // DHT announce for persistence - best-effort
+        if let Err(e) = network.dht_announce(*hash, payload.clone()).await {
+            tracing::warn!(
+                "DHT announce failed (content still published locally): {}",
+                e
+            );
         }
 
+        // GossipSub broadcast for immediate discovery - best-effort
+        if let Err(e) = network.broadcast_announce(payload).await {
+            tracing::warn!(
+                "GossipSub broadcast failed (content still published locally): {}",
+                e
+            );
+        }
+    }
+
+    /// Load the manifest for `hash`.
+    fn load_manifest(&self, hash: &Hash) -> OpsResult<Manifest> {
+        self.state
+            .manifests
+            .load(hash)?
+            .ok_or(OpsError::ManifestNotFound(*hash))
+    }
+
+    /// Load the manifest for `hash`, which we must own.
+    fn load_owned_manifest(&self, hash: &Hash) -> OpsResult<Manifest> {
+        let manifest = self.load_manifest(hash)?;
+        // Verify ownership
+        if manifest.owner != self.peer_id() {
+            return Err(OpsError::AccessDenied);
+        }
+        Ok(manifest)
+    }
+
+    /// Content can be published if it is not L2 (which must remain private) and we own it.
+    fn ensure_publishable(&self, manifest: &Manifest) -> OpsResult<()> {
+        // L2 content cannot be published
+        if manifest.content_type == ContentType::L2 {
+            return Err(OpsError::Validation(
+                nodalync_valid::ValidationError::L2CannotPublish,
+            ));
+        }
+
+        // Verify ownership
+        if manifest.owner != self.peer_id() {
+            return Err(OpsError::AccessDenied);
+        }
         Ok(())
     }
 
@@ -138,16 +159,7 @@ where
     /// - Removes from DHT (if network available)
     pub async fn unpublish_content(&mut self, hash: &Hash) -> OpsResult<()> {
         // Load manifest
-        let mut manifest = self
-            .state
-            .manifests
-            .load(hash)?
-            .ok_or(OpsError::ManifestNotFound(*hash))?;
-
-        // Verify ownership
-        if manifest.owner != self.peer_id() {
-            return Err(OpsError::AccessDenied);
-        }
+        let mut manifest = self.load_owned_manifest(hash)?;
 
         // Set visibility to Private
         manifest.visibility = Visibility::Private;
@@ -172,16 +184,7 @@ where
     /// Set visibility level for content.
     pub fn set_content_visibility(&mut self, hash: &Hash, visibility: Visibility) -> OpsResult<()> {
         // Load manifest
-        let mut manifest = self
-            .state
-            .manifests
-            .load(hash)?
-            .ok_or(OpsError::ManifestNotFound(*hash))?;
-
-        // Verify ownership
-        if manifest.owner != self.peer_id() {
-            return Err(OpsError::AccessDenied);
-        }
+        let mut manifest = self.load_owned_manifest(hash)?;
 
         // Update visibility
         manifest.visibility = visibility;
@@ -196,16 +199,7 @@ where
     /// Set access control for content.
     pub fn set_content_access(&mut self, hash: &Hash, access: AccessControl) -> OpsResult<()> {
         // Load manifest
-        let mut manifest = self
-            .state
-            .manifests
-            .load(hash)?
-            .ok_or(OpsError::ManifestNotFound(*hash))?;
-
-        // Verify ownership
-        if manifest.owner != self.peer_id() {
-            return Err(OpsError::AccessDenied);
-        }
+        let mut manifest = self.load_owned_manifest(hash)?;
 
         // Update access control
         manifest.access = access;
@@ -220,21 +214,10 @@ where
     /// Set price for content.
     pub fn set_content_price(&mut self, hash: &Hash, price: Amount) -> OpsResult<()> {
         // Validate price
-        if price > 0 {
-            validate_price(price)?;
-        }
+        validate_nonzero_price(price)?;
 
         // Load manifest
-        let mut manifest = self
-            .state
-            .manifests
-            .load(hash)?
-            .ok_or(OpsError::ManifestNotFound(*hash))?;
-
-        // Verify ownership
-        if manifest.owner != self.peer_id() {
-            return Err(OpsError::AccessDenied);
-        }
+        let mut manifest = self.load_owned_manifest(hash)?;
 
         // Update price
         manifest.economics.price = price;
@@ -245,6 +228,14 @@ where
 
         Ok(())
     }
+}
+
+/// Validate a price unless it is zero (free content).
+fn validate_nonzero_price(price: Amount) -> OpsResult<()> {
+    if price > 0 {
+        validate_price(price)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

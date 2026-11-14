@@ -68,25 +68,13 @@ impl SqliteChannelStore {
     fn deserialize_channel(row: &rusqlite::Row) -> rusqlite::Result<Channel> {
         let channel_id_bytes: Vec<u8> = row.get(1)?;
         let state_u8: u8 = row.get(2)?;
-        let my_balance: i64 = row.get(3)?;
-        let their_balance: i64 = row.get(4)?;
-        let nonce: i64 = row.get(5)?;
+        let (my_balance, their_balance, nonce) = Self::read_channel_balances(row)?;
         let last_update: i64 = row.get(6)?;
 
-        // Get pending_close and pending_dispute (may be NULL in older schemas)
-        let pending_close_json: Option<String> = row.get(7).ok().flatten();
-        let pending_dispute_json: Option<String> = row.get(8).ok().flatten();
+        let (pending_close, pending_dispute) = Self::read_pending_close_and_dispute(row);
 
         let peer_id_bytes: Vec<u8> = row.get(0)?;
         let peer_id = bytes_to_peer_id(&peer_id_bytes);
-
-        // Deserialize pending close/dispute from JSON
-        let pending_close: Option<PendingClose> = pending_close_json
-            .as_ref()
-            .and_then(|json| serde_json::from_str(json).ok());
-        let pending_dispute: Option<PendingDispute> = pending_dispute_json
-            .as_ref()
-            .and_then(|json| serde_json::from_str(json).ok());
 
         Ok(Channel {
             channel_id: bytes_to_hash(&channel_id_bytes),
@@ -101,6 +89,31 @@ impl SqliteChannelStore {
             pending_close,
             pending_dispute,
         })
+    }
+
+    /// Read a channel row's my_balance, their_balance and nonce columns (3-5).
+    fn read_channel_balances(row: &rusqlite::Row) -> rusqlite::Result<(i64, i64, i64)> {
+        Ok((row.get(3)?, row.get(4)?, row.get(5)?))
+    }
+
+    /// Read a channel row's pending_close and pending_dispute JSON columns (7-8).
+    ///
+    /// Either may be NULL, missing in older schemas, or unparseable: each of those reads as `None`.
+    fn read_pending_close_and_dispute(
+        row: &rusqlite::Row,
+    ) -> (Option<PendingClose>, Option<PendingDispute>) {
+        // Get pending_close and pending_dispute (may be NULL in older schemas)
+        let pending_close_json: Option<String> = row.get(7).ok().flatten();
+        let pending_dispute_json: Option<String> = row.get(8).ok().flatten();
+
+        // Deserialize pending close/dispute from JSON
+        let pending_close: Option<PendingClose> = pending_close_json
+            .as_ref()
+            .and_then(|json| serde_json::from_str(json).ok());
+        let pending_dispute: Option<PendingDispute> = pending_dispute_json
+            .as_ref()
+            .and_then(|json| serde_json::from_str(json).ok());
+        (pending_close, pending_dispute)
     }
 
     /// Serialize a payment for storage.
@@ -136,28 +149,47 @@ impl SqliteChannelStore {
 
     /// Deserialize a payment from a database row.
     fn deserialize_payment(row: &rusqlite::Row) -> rusqlite::Result<Payment> {
+        let (id, channel_id, query_hash) = Self::read_payment_hashes(row)?;
+        let (amount, provenance, timestamp) = Self::read_payment_terms(row)?;
+        let recipient_bytes: Vec<u8> = row.get(4)?;
+        let signature_bytes: Vec<u8> = row.get(8)?;
+
+        Ok(Payment {
+            id,
+            channel_id,
+            amount,
+            recipient: bytes_to_peer_id(&recipient_bytes),
+            query_hash,
+            provenance,
+            timestamp,
+            signature: bytes_to_signature(&signature_bytes),
+        })
+    }
+
+    /// Read a payment row's id, channel_id and query_hash columns (0, 2, 5).
+    fn read_payment_hashes(row: &rusqlite::Row) -> rusqlite::Result<(Hash, Hash, Hash)> {
         let id_bytes: Vec<u8> = row.get(0)?;
         let channel_id_bytes: Vec<u8> = row.get(2)?;
-        let amount: i64 = row.get(3)?;
-        let recipient_bytes: Vec<u8> = row.get(4)?;
         let query_hash_bytes: Vec<u8> = row.get(5)?;
+        Ok((
+            bytes_to_hash(&id_bytes),
+            bytes_to_hash(&channel_id_bytes),
+            bytes_to_hash(&query_hash_bytes),
+        ))
+    }
+
+    /// Read a payment row's amount, provenance (JSON) and timestamp columns (3, 6, 7).
+    /// Unparseable provenance reads as empty.
+    fn read_payment_terms(
+        row: &rusqlite::Row,
+    ) -> rusqlite::Result<(Amount, Vec<ProvenanceEntry>, Timestamp)> {
+        let amount: i64 = row.get(3)?;
         let provenance_json: String = row.get(6)?;
         let timestamp: i64 = row.get(7)?;
-        let signature_bytes: Vec<u8> = row.get(8)?;
 
         let provenance: Vec<ProvenanceEntry> =
             serde_json::from_str(&provenance_json).unwrap_or_default();
-
-        Ok(Payment {
-            id: bytes_to_hash(&id_bytes),
-            channel_id: bytes_to_hash(&channel_id_bytes),
-            amount: amount as Amount,
-            recipient: bytes_to_peer_id(&recipient_bytes),
-            query_hash: bytes_to_hash(&query_hash_bytes),
-            provenance,
-            timestamp: timestamp as Timestamp,
-            signature: bytes_to_signature(&signature_bytes),
-        })
+        Ok((amount as Amount, provenance, timestamp as Timestamp))
     }
 }
 
@@ -290,10 +322,8 @@ impl ChannelStore for SqliteChannelStore {
 
         let channels: Vec<(PeerId, Channel)> = stmt
             .query_map([ChannelState::Open as u8], |row| {
-                let peer_bytes: Vec<u8> = row.get(0)?;
-                let peer_id = bytes_to_peer_id(&peer_bytes);
-                let channel = Self::deserialize_channel(row)?;
-                Ok((peer_id, channel))
+                // deserialize_channel reads the peer ID from the same peer_id column
+                Self::deserialize_channel(row).map(|channel| (channel.peer_id, channel))
             })?
             .filter_map(|r| r.ok())
             .collect();

@@ -3,8 +3,8 @@
 use nodalync_types::Visibility;
 
 use crate::config::CliConfig;
-use crate::context::{parse_hash, NodeContext};
-use crate::error::{CliError, CliResult};
+use crate::context::{parse_hash, require_owned_manifest, NodeContext};
+use crate::error::CliResult;
 use crate::output::{OutputFormat, Render, VisibilityOutput};
 
 /// Execute the visibility command.
@@ -20,16 +20,8 @@ pub async fn visibility(
     // Initialize context with network (needed for DHT operations)
     let mut ctx = NodeContext::with_network(config).await?;
 
-    // Verify content exists
-    let manifest = ctx
-        .ops
-        .get_content_manifest(&hash)?
-        .ok_or_else(|| CliError::NotFound(hash_str.to_string()))?;
-
-    // Check ownership
-    if manifest.owner != ctx.peer_id() {
-        return Err(CliError::User("You don't own this content".to_string()));
-    }
+    // Verify content exists and we own it
+    require_owned_manifest(&ctx, &hash, hash_str)?;
 
     // Set visibility
     ctx.ops.set_content_visibility(&hash, new_visibility)?;

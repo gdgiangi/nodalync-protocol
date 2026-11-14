@@ -47,6 +47,7 @@
 pub mod budget;
 pub mod error;
 pub mod server;
+mod startup;
 pub mod tools;
 
 pub use budget::{BudgetStatus, BudgetTracker};

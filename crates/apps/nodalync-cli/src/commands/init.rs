@@ -9,45 +9,16 @@ use crate::wizard::run_wizard;
 /// Execute the init command.
 pub fn init(config: CliConfig, format: OutputFormat, wizard: bool) -> CliResult<String> {
     // Check if identity already exists
-    let base_dir = config.base_dir();
-    let identity_dir = base_dir.join("identity");
-
-    if identity_dir.join("keypair.key").exists() {
-        if wizard && crate::prompt::is_interactive() {
-            // In wizard mode, automatically reinitialize by removing existing identity
-            eprintln!("⚠️  Existing identity found. Reinitializing...");
-            if let Err(e) = std::fs::remove_dir_all(&identity_dir) {
-                return Err(CliError::User(format!(
-                    "Failed to remove existing identity: {}",
-                    e
-                )));
-            }
-        } else {
-            return Err(CliError::IdentityExists(identity_dir.display().to_string()));
-        }
-    }
+    clear_existing_identity(&config.base_dir().join("identity"), wizard)?;
 
     // Run wizard if requested
-    let config = if wizard && crate::prompt::is_interactive() {
-        run_wizard(config)?
-    } else {
-        config
-    };
+    let config = maybe_run_wizard(config, wizard)?;
 
     // Initialize storage
     let state = NodeContext::for_init(config.clone())?;
 
-    // Get password from environment (preferred for scripts/CI) or prompt
-    let password = if let Ok(pwd) = std::env::var("NODALYNC_PASSWORD") {
-        pwd
-    } else if crate::prompt::is_interactive() {
-        crate::prompt::password_with_confirm("Enter password to encrypt identity")?
-    } else {
-        return Err(CliError::PasswordRequired);
-    };
-
     // Generate identity
-    let peer_id = state.identity.generate(&password)?;
+    let peer_id = generate_identity(&state)?;
 
     // Save default config
     let config_path = default_config_path();
@@ -60,6 +31,47 @@ pub fn init(config: CliConfig, format: OutputFormat, wizard: bool) -> CliResult<
     };
 
     Ok(output.render(format))
+}
+
+/// An existing identity is an error, except in interactive wizard mode, which
+/// automatically reinitializes by removing it.
+fn clear_existing_identity(identity_dir: &std::path::Path, wizard: bool) -> CliResult<()> {
+    if !identity_dir.join("keypair.key").exists() {
+        return Ok(());
+    }
+    if !(wizard && crate::prompt::is_interactive()) {
+        return Err(CliError::IdentityExists(identity_dir.display().to_string()));
+    }
+    eprintln!("⚠️  Existing identity found. Reinitializing...");
+    std::fs::remove_dir_all(identity_dir)
+        .map_err(|e| CliError::User(format!("Failed to remove existing identity: {}", e)))
+}
+
+/// Run the setup wizard when requested in an interactive terminal.
+fn maybe_run_wizard(config: CliConfig, wizard: bool) -> CliResult<CliConfig> {
+    if wizard && crate::prompt::is_interactive() {
+        return run_wizard(config);
+    }
+    Ok(config)
+}
+
+/// Generate the identity, encrypted with the identity password.
+fn generate_identity(state: &nodalync_store::NodeState) -> CliResult<nodalync_crypto::PeerId> {
+    let password = init_password()?;
+    Ok(state.identity.generate(&password)?)
+}
+
+/// Get password from environment (preferred for scripts/CI) or prompt.
+fn init_password() -> CliResult<String> {
+    if let Ok(pwd) = std::env::var("NODALYNC_PASSWORD") {
+        return Ok(pwd);
+    }
+    if crate::prompt::is_interactive() {
+        return Ok(crate::prompt::password_with_confirm(
+            "Enter password to encrypt identity",
+        )?);
+    }
+    Err(CliError::PasswordRequired)
 }
 
 #[cfg(test)]

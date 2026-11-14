@@ -7,7 +7,7 @@ use nodalync_crypto::content_hash;
 use nodalync_types::{Metadata, Visibility};
 
 use crate::config::{ndl_to_units, tinybars_to_hbar, CliConfig};
-use crate::context::NodeContext;
+use crate::context::{require_file, NodeContext};
 use crate::error::{CliError, CliResult};
 use crate::output::{OutputFormat, PublishOutput, Render};
 use crate::progress;
@@ -22,156 +22,31 @@ pub async fn publish(
     title: Option<String>,
     description: Option<String>,
 ) -> CliResult<String> {
-    // Validate file exists
-    if !file.exists() {
-        return Err(CliError::FileNotFound(file.display().to_string()));
-    }
-
-    // Reject directories (Issue #22/#82: clear error with correct INVALID_INPUT code)
-    if file.is_dir() {
-        return Err(CliError::InvalidInput(
-            "Cannot publish a directory. Please specify a file path.".to_string(),
-        ));
-    }
-
-    // Create spinner for human output
-    let spinner = if format == OutputFormat::Human {
-        progress::spinner("Reading file...")
-    } else {
-        progress::hidden()
-    };
-
-    // Read file content
-    let content = std::fs::read(file)?;
-
-    // Guard: reject empty files (Issue #49: use InvalidInput, not User/AccessDenied)
-    if content.is_empty() {
-        return Err(CliError::InvalidInput(
-            "Cannot publish an empty file. The file has 0 bytes of content.".to_string(),
-        ));
-    }
-
-    // Guard: warn about binary content
-    // Check first 8KB for null bytes as a heuristic for binary data
-    let check_len = content.len().min(8192);
-    let has_null_bytes = content[..check_len].contains(&0);
-    if has_null_bytes && format == OutputFormat::Human {
-        eprintln!(
-            "{}: File appears to be binary. Binary content cannot be meaningfully indexed or queried.",
-            "Warning".yellow().bold()
-        );
-        if crate::prompt::is_interactive() && !crate::prompt::confirm("Publish anyway?")? {
-            return Ok("Cancelled.".to_string());
-        }
-    }
-
-    spinner.set_message("Hashing content...");
-
-    // Get title from filename if not provided
-    let title = title.unwrap_or_else(|| {
-        file.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("Untitled")
-            .to_string()
-    });
-
     // Convert price to units
     let price_units = price
         .map(ndl_to_units)
         .unwrap_or_else(|| config.economics.default_price_units());
 
-    // Validate price BEFORE writing any content to disk.
-    // This prevents ghost content from being stored when price validation fails.
-    if price_units > 0 {
-        nodalync_econ::validate_price(price_units).map_err(|e| {
-            // Issue #81: Show HBAR values instead of raw tinybars for user comprehension
-            match &e {
-                nodalync_econ::EconError::PriceTooHigh { price, max } => CliError::user(format!(
-                    "Invalid price: {} HBAR exceeds maximum {} HBAR",
-                    tinybars_to_hbar(*price),
-                    tinybars_to_hbar(*max)
-                )),
-                _ => CliError::user(format!("Invalid price: {}", e)),
-            }
-        })?;
-    }
-
-    // Initialize context with network
-    spinner.set_message("Connecting to network...");
-    let mut ctx = NodeContext::with_network(config).await?;
-
-    // Bootstrap the network to find peers
-    ctx.bootstrap().await?;
-
-    // Subscribe to announcements (required for GossipSub mesh formation)
-    if let Some(ref network) = ctx.network {
-        network.subscribe_announcements().await?;
-    }
-
-    // Create metadata
-    let mut metadata = Metadata::new(&title, content.len() as u64);
-    if let Some(desc) = description {
-        metadata = metadata.with_description(&desc);
-    }
-
-    // Detect mime type from extension
-    if let Some(ext) = file.extension().and_then(|e| e.to_str()) {
-        let mime_type = match ext.to_lowercase().as_str() {
-            "txt" => "text/plain",
-            "md" => "text/markdown",
-            "html" | "htm" => "text/html",
-            "json" => "application/json",
-            "pdf" => "application/pdf",
-            "png" => "image/png",
-            "jpg" | "jpeg" => "image/jpeg",
-            _ => "application/octet-stream",
-        };
-        metadata = metadata.with_mime_type(mime_type);
-    }
-
-    // Check if this content already exists (re-publish detection)
-    let computed_hash = content_hash(&content);
-    if let Ok(Some(existing)) = ctx.ops.get_content_manifest(&computed_hash) {
-        if format == OutputFormat::Human {
-            eprintln!(
-                "{}: Content with this hash already exists (title: \"{}\", price: {} units).",
-                "Warning".yellow().bold(),
-                existing.metadata.title,
-                existing.economics.price,
-            );
-            eprintln!(
-                "  Delete it first with '{}', or create a new version with '{}'.",
-                format!("nodalync delete {}", computed_hash).bold(),
-                "nodalync update".bold(),
-            );
-            if crate::prompt::is_interactive() {
-                if !crate::prompt::confirm("Re-publish with new metadata?")? {
-                    return Ok("Cancelled.".to_string());
-                }
-            } else {
-                return Err(CliError::user(format!(
-                    "Content already exists with hash {}. Delete it first with 'nodalync delete {}', or create a new version with 'nodalync update'.",
-                    computed_hash, computed_hash
-                )));
-            }
-        } else {
-            // In JSON mode, always error on re-publish to avoid silent overwrites
-            return Err(CliError::user(format!(
-                "Content already exists with hash {}. Delete it first with 'nodalync delete {}', or create a new version with 'nodalync update'.",
-                computed_hash, computed_hash
-            )));
-        }
-    }
-
-    // Create content
-    let hash = ctx.ops.create_content(&content, metadata.clone())?;
-
-    // Extract L1 mentions (if L0 content)
-    spinner.set_message("Extracting mentions...");
-    let mentions = match ctx.ops.extract_l1_summary(&hash) {
-        Ok(summary) => Some(summary.mention_count as usize),
-        Err(_) => None,
+    // Read and check the file, and validate the price before writing anything
+    let Some(content) = prepare_content(file, format, price_units)? else {
+        return Ok("Cancelled.".to_string());
     };
+
+    // Create spinner for human output
+    let spinner = progress::for_format(format, "Connecting to network...");
+
+    // Get title from filename if not provided
+    let title = default_title(title, file);
+    let metadata = publish_metadata(&title, content.len(), description, file);
+
+    // Connect, and check whether this content already exists (re-publish detection)
+    let Some(mut ctx) = connect_for_publish(config, &content_hash(&content), format).await? else {
+        return Ok("Cancelled.".to_string());
+    };
+
+    // Create content and extract L1 mentions (if L0 content)
+    spinner.set_message("Extracting mentions...");
+    let (hash, mentions) = create_and_extract(&mut ctx, &content, metadata)?;
 
     // Publish content
     spinner.set_message("Publishing to network...");
@@ -198,9 +73,225 @@ pub async fn publish(
     Ok(output.render(format))
 }
 
+/// Read the file to publish and validate the price, before anything is written.
+/// Returns `None` if the user declines to publish binary content.
+fn prepare_content(
+    file: &Path,
+    format: OutputFormat,
+    price_units: u64,
+) -> CliResult<Option<Vec<u8>>> {
+    let content = read_publishable_file(file)?;
+    if !confirm_binary_content(&content, format)? {
+        return Ok(None);
+    }
+
+    // Validate price BEFORE writing any content to disk.
+    // This prevents ghost content from being stored when price validation fails.
+    validate_publish_price(price_units)?;
+    Ok(Some(content))
+}
+
+/// Read the file, which must exist, not be a directory, and not be empty.
+fn read_publishable_file(file: &Path) -> CliResult<Vec<u8>> {
+    // Validate file exists
+    require_file(file)?;
+
+    // Reject directories (Issue #22/#82: clear error with correct INVALID_INPUT code)
+    if file.is_dir() {
+        return Err(CliError::InvalidInput(
+            "Cannot publish a directory. Please specify a file path.".to_string(),
+        ));
+    }
+
+    // Read file content
+    let content = std::fs::read(file)?;
+
+    // Guard: reject empty files (Issue #49: use InvalidInput, not User/AccessDenied)
+    if content.is_empty() {
+        return Err(CliError::InvalidInput(
+            "Cannot publish an empty file. The file has 0 bytes of content.".to_string(),
+        ));
+    }
+    Ok(content)
+}
+
+/// Guard: warn about binary content in human output, and in an interactive terminal
+/// ask whether to publish anyway. Returns whether to go on.
+fn confirm_binary_content(content: &[u8], format: OutputFormat) -> CliResult<bool> {
+    if !looks_binary(content) || format != OutputFormat::Human {
+        return Ok(true);
+    }
+    eprintln!(
+        "{}: File appears to be binary. Binary content cannot be meaningfully indexed or queried.",
+        "Warning".yellow().bold()
+    );
+    if !crate::prompt::is_interactive() {
+        return Ok(true);
+    }
+    Ok(crate::prompt::confirm("Publish anyway?")?)
+}
+
+/// Heuristic for binary data: a null byte in the first 8KB.
+fn looks_binary(content: &[u8]) -> bool {
+    let check_len = content.len().min(8192);
+    content[..check_len].contains(&0)
+}
+
+/// The given title, else the file name, else "Untitled".
+fn default_title(title: Option<String>, file: &Path) -> String {
+    title.unwrap_or_else(|| {
+        file.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("Untitled")
+            .to_string()
+    })
+}
+
+/// A non-zero price must be within the protocol's limits.
+fn validate_publish_price(price_units: u64) -> CliResult<()> {
+    if price_units > 0 {
+        nodalync_econ::validate_price(price_units).map_err(price_error)?;
+    }
+    Ok(())
+}
+
+/// A price validation error, in HBAR (Issue #81: show HBAR values instead of raw
+/// tinybars for user comprehension).
+fn price_error(e: nodalync_econ::EconError) -> CliError {
+    match &e {
+        nodalync_econ::EconError::PriceTooHigh { price, max } => CliError::user(format!(
+            "Invalid price: {} HBAR exceeds maximum {} HBAR",
+            tinybars_to_hbar(*price),
+            tinybars_to_hbar(*max)
+        )),
+        _ => CliError::user(format!("Invalid price: {}", e)),
+    }
+}
+
+/// Metadata for the file, with the description if given and a mime type detected
+/// from the file extension.
+fn publish_metadata(
+    title: &str,
+    size: usize,
+    description: Option<String>,
+    file: &Path,
+) -> Metadata {
+    let mut metadata = Metadata::new(title, size as u64);
+    if let Some(desc) = description {
+        metadata = metadata.with_description(&desc);
+    }
+
+    // Detect mime type from extension
+    if let Some(ext) = file.extension().and_then(|e| e.to_str()) {
+        metadata = metadata.with_mime_type(mime_type_for(ext));
+    }
+    metadata
+}
+
+/// The mime type for a file extension.
+fn mime_type_for(ext: &str) -> &'static str {
+    match ext.to_lowercase().as_str() {
+        "txt" => "text/plain",
+        "md" => "text/markdown",
+        "html" | "htm" => "text/html",
+        "json" => "application/json",
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Connect to the network, subscribe to announcements (required for GossipSub mesh
+/// formation), and check for a re-publish. Returns `None` if the user cancels.
+async fn connect_for_publish(
+    config: CliConfig,
+    hash: &nodalync_crypto::Hash,
+    format: OutputFormat,
+) -> CliResult<Option<NodeContext>> {
+    let ctx = NodeContext::connected(config).await?;
+    if let Some(ref network) = ctx.network {
+        network.subscribe_announcements().await?;
+    }
+
+    if !confirm_republish(&ctx, hash, format)? {
+        return Ok(None);
+    }
+    Ok(Some(ctx))
+}
+
+/// When content with this hash already exists: warn and ask in an interactive
+/// terminal; otherwise (and always in JSON mode, to avoid silent overwrites) fail.
+/// Returns whether to go on.
+fn confirm_republish(
+    ctx: &NodeContext,
+    hash: &nodalync_crypto::Hash,
+    format: OutputFormat,
+) -> CliResult<bool> {
+    let Ok(Some(existing)) = ctx.ops.get_content_manifest(hash) else {
+        return Ok(true);
+    };
+    if format != OutputFormat::Human {
+        return Err(already_exists_error(hash));
+    }
+    eprintln!(
+        "{}: Content with this hash already exists (title: \"{}\", price: {} units).",
+        "Warning".yellow().bold(),
+        existing.metadata.title,
+        existing.economics.price,
+    );
+    eprintln!(
+        "  Delete it first with '{}', or create a new version with '{}'.",
+        format!("nodalync delete {}", hash).bold(),
+        "nodalync update".bold(),
+    );
+    if !crate::prompt::is_interactive() {
+        return Err(already_exists_error(hash));
+    }
+    Ok(crate::prompt::confirm("Re-publish with new metadata?")?)
+}
+
+fn already_exists_error(hash: &nodalync_crypto::Hash) -> CliError {
+    CliError::user(format!(
+        "Content already exists with hash {}. Delete it first with 'nodalync delete {}', or create a new version with 'nodalync update'.",
+        hash, hash
+    ))
+}
+
+/// Create the content and extract its L1 mention count (none if extraction fails).
+fn create_and_extract(
+    ctx: &mut NodeContext,
+    content: &[u8],
+    metadata: Metadata,
+) -> CliResult<(nodalync_crypto::Hash, Option<usize>)> {
+    let hash = ctx.ops.create_content(content, metadata)?;
+    let mentions = ctx
+        .ops
+        .extract_l1_summary(&hash)
+        .ok()
+        .map(|summary| summary.mention_count as usize);
+    Ok((hash, mentions))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_publish_input_checks() {
+        assert!(looks_binary(b"abc\0def"));
+        assert!(!looks_binary(b"plain text"));
+        assert_eq!(mime_type_for("MD"), "text/markdown");
+        assert_eq!(mime_type_for("xyz"), "application/octet-stream");
+        assert_eq!(
+            default_title(None, Path::new("/tmp/notes.txt")),
+            "notes.txt"
+        );
+        assert!(validate_publish_price(0).is_ok());
+        assert!(validate_publish_price(u64::MAX).is_err());
+        // Non-human output never prompts about binary content.
+        assert!(confirm_binary_content(b"\0", OutputFormat::Json).unwrap());
+    }
     use tempfile::TempDir;
 
     fn setup_config(temp_dir: &TempDir) -> CliConfig {

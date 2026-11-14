@@ -296,10 +296,11 @@ pub async fn run_event_loop_with_health(
 ) -> CliResult<()> {
     info!("Starting node event loop");
 
-    let network = ctx
-        .network
-        .as_ref()
-        .ok_or(CliError::config("Network not initialized"))?;
+    let network = Arc::clone(
+        ctx.network
+            .as_ref()
+            .ok_or(CliError::config("Network not initialized"))?,
+    );
 
     // Status file path (if base_dir provided)
     let status_path = base_dir.map(status_file_path);
@@ -313,10 +314,7 @@ pub async fn run_event_loop_with_health(
     settlement_interval.tick().await;
 
     // Track start time for uptime calculation
-    let start_time = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let start_time = unix_now_secs();
 
     // Create metrics (always created, used for instrumentation even without health endpoint)
     let metrics: SharedMetrics = Arc::new(Metrics::new());
@@ -339,85 +337,19 @@ pub async fn run_event_loop_with_health(
     let initial_peer_count = network.connected_peers().len() as u32;
     alert_manager.send_startup_alert(initial_peer_count).await;
 
-    // Spawn heartbeat task if configured
-    let heartbeat_shutdown_tx = if let Some(interval_duration) = alert_manager.heartbeat_interval()
-    {
-        let (tx, mut rx) = watch::channel(false);
-        let alert_manager_clone = Arc::clone(&alert_manager);
-        let network_clone = Arc::clone(network);
-
-        tokio::spawn(async move {
-            let mut heartbeat_interval = interval(interval_duration);
-            // Skip first tick (immediate)
-            heartbeat_interval.tick().await;
-
-            loop {
-                tokio::select! {
-                    result = rx.changed() => {
-                        if result.is_err() || *rx.borrow() {
-                            break;
-                        }
-                    }
-                    _ = heartbeat_interval.tick() => {
-                        let peer_count = network_clone.connected_peers().len() as u32;
-                        alert_manager_clone.send_heartbeat(peer_count).await;
-                    }
-                }
-            }
-        });
-
-        info!(
-            "Heartbeat alerting enabled with {:?} interval",
-            interval_duration
-        );
-        Some(tx)
-    } else {
-        None
-    };
-
-    // Spawn health server if enabled
-    let health_shutdown_tx = if health_config.enabled {
-        let (tx, rx) = watch::channel(false);
-        let network_clone = Arc::clone(network);
-        let metrics_clone = Arc::clone(&metrics);
-        let port = health_config.port;
-
-        tokio::spawn(async move {
-            if let Err(e) =
-                run_health_server(port, network_clone, start_time, Some(metrics_clone), rx).await
-            {
-                warn!("Health server error: {}", e);
-            }
-        });
-
-        info!("Health endpoint enabled on port {}", port);
-        info!(
-            "Metrics endpoint available at http://0.0.0.0:{}/metrics",
-            port
-        );
-        Some(tx)
-    } else {
-        None
-    };
-
-    // Helper to write status
-    let write_status = |network: &Arc<NetworkNode>, path: &Option<PathBuf>| {
-        if let Some(ref path) = path {
-            let status = RuntimeStatus {
-                connected_peers: network.connected_peers().len() as u32,
-                updated_at: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0),
-            };
-            if let Err(e) = write_status_file(path, &status) {
-                debug!("Failed to write status file: {}", e);
-            }
-        }
-    };
+    // Spawn heartbeat task if configured, and health server if enabled
+    let heartbeat_shutdown_tx = spawn_heartbeat(&alert_manager, &network);
+    let health_shutdown_tx = spawn_health_server(&health_config, &network, &metrics, start_time);
 
     // Write initial status
-    write_status(network, &status_path);
+    write_runtime_status(&network, status_path.as_deref());
+
+    let monitor = EventLoopMonitor {
+        network: Arc::clone(&network),
+        metrics,
+        alert_manager: Arc::clone(&alert_manager),
+        status_path: status_path.clone(),
+    };
 
     loop {
         tokio::select! {
@@ -431,74 +363,18 @@ pub async fn run_event_loop_with_health(
 
             // Periodic status update and health check
             _ = status_interval.tick() => {
-                let peer_count = network.connected_peers().len() as u32;
-                write_status(network, &status_path);
-                // Check health periodically even without peer events
-                alert_manager.check_health(peer_count).await;
+                monitor.refresh_status().await;
             }
 
             // Periodic settlement check
             _ = settlement_interval.tick() => {
-                // Trigger settlement batch for any channels that have exceeded thresholds
-                match ctx.ops.trigger_settlement_batch().await {
-                    Ok(Some(batch_id)) => {
-                        info!(batch_id = %batch_id, "Background settlement batch submitted");
-                    }
-                    Ok(None) => {
-                        // No settlement needed (threshold not reached)
-                        debug!("Settlement check: no settlement needed");
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Background settlement batch failed");
-                    }
-                }
+                run_settlement_check(ctx).await;
             }
 
             // Process network events
             event_result = network.next_event() => {
                 match event_result {
-                    Ok(event) => {
-                        // Instrument metrics based on event type
-                        match &event {
-                            NetworkEvent::PeerConnected { .. } => {
-                                metrics.peer_events_total.with_label_values(&["connect"]).inc();
-                                metrics.connected_peers.set(network.connected_peers().len() as i64);
-                            }
-                            NetworkEvent::PeerDisconnected { .. } => {
-                                metrics.peer_events_total.with_label_values(&["disconnect"]).inc();
-                                metrics.connected_peers.set(network.connected_peers().len() as i64);
-                            }
-                            NetworkEvent::DhtPutComplete { success, .. } => {
-                                let result = if *success { "success" } else { "failure" };
-                                metrics.dht_operations_total.with_label_values(&["put", result]).inc();
-                            }
-                            NetworkEvent::DhtGetResult { value, .. } => {
-                                let result = if value.is_some() { "success" } else { "not_found" };
-                                metrics.dht_operations_total.with_label_values(&["get", result]).inc();
-                            }
-                            NetworkEvent::BroadcastReceived { .. } => {
-                                metrics.gossipsub_messages_total.inc();
-                            }
-                            _ => {}
-                        }
-
-                        // Check if this is a peer connect/disconnect event
-                        let peer_change = matches!(
-                            &event,
-                            NetworkEvent::PeerConnected { .. } | NetworkEvent::PeerDisconnected { .. }
-                        );
-
-                        if let Err(e) = handle_event(&mut ctx.ops, Arc::clone(network), event).await {
-                            warn!("Error handling event: {}", e);
-                        }
-
-                        // Update status and check health on peer changes
-                        if peer_change {
-                            let peer_count = network.connected_peers().len() as u32;
-                            write_status(network, &status_path);
-                            alert_manager.check_health(peer_count).await;
-                        }
-                    }
+                    Ok(event) => monitor.process_event(ctx, event).await,
                     Err(e) => {
                         error!("Network error: {}", e);
                         // Channel closed, network is shutting down
@@ -514,69 +390,314 @@ pub async fn run_event_loop_with_health(
     alert_manager.send_shutdown_alert(final_peer_count).await;
 
     // Close all payment channels on shutdown
-    info!("Closing payment channels on shutdown...");
-    let channels = ctx.ops.state.channels.list_open().unwrap_or_default();
-    if !channels.is_empty() {
-        let channels_count = channels.len();
-        if let Some(private_key) = ctx.ops.private_key().cloned() {
-            let mut closed = 0;
-            let mut disputed = 0;
+    close_channels_on_shutdown(ctx).await;
 
-            for (peer_id, _channel) in channels {
-                // Try cooperative close with short timeout
-                let close_result = tokio::time::timeout(
-                    Duration::from_secs(3),
-                    ctx.ops.close_payment_channel(&peer_id, &private_key),
-                )
-                .await;
+    stop_background_tasks(
+        heartbeat_shutdown_tx,
+        health_shutdown_tx,
+        status_path.as_deref(),
+    );
 
-                match close_result {
-                    Ok(Ok(CloseResult::Success { .. }))
-                    | Ok(Ok(CloseResult::SuccessOffChain { .. })) => {
-                        closed += 1;
-                    }
-                    _ => {
-                        // Try to initiate dispute for unresponsive/failed channels
-                        if ctx
-                            .ops
-                            .dispute_payment_channel(&peer_id, &private_key)
-                            .await
-                            .is_ok()
-                        {
-                            disputed += 1;
-                        }
-                    }
+    info!("Event loop stopped");
+    Ok(())
+}
+
+/// Seconds since the Unix epoch (0 if the clock is before it).
+fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// What the event loop keeps up to date: metrics, the status file and health alerts.
+struct EventLoopMonitor {
+    network: Arc<NetworkNode>,
+    metrics: SharedMetrics,
+    alert_manager: Arc<AlertManager>,
+    status_path: Option<PathBuf>,
+}
+
+impl EventLoopMonitor {
+    /// Write the status file and check health (periodically, and on peer changes).
+    async fn refresh_status(&self) {
+        let peer_count = self.network.connected_peers().len() as u32;
+        write_runtime_status(&self.network, self.status_path.as_deref());
+        // Check health periodically even without peer events
+        self.alert_manager.check_health(peer_count).await;
+    }
+
+    /// Record metrics for a network event, handle it, and refresh status on peer changes.
+    async fn process_event(&self, ctx: &mut NodeContext, event: NetworkEvent) {
+        // Instrument metrics based on event type
+        record_event_metrics(&self.metrics, &self.network, &event);
+
+        // Check if this is a peer connect/disconnect event
+        let peer_change = matches!(
+            &event,
+            NetworkEvent::PeerConnected { .. } | NetworkEvent::PeerDisconnected { .. }
+        );
+
+        if let Err(e) = handle_event(&mut ctx.ops, Arc::clone(&self.network), event).await {
+            warn!("Error handling event: {}", e);
+        }
+
+        // Update status and check health on peer changes
+        if peer_change {
+            self.refresh_status().await;
+        }
+    }
+}
+
+/// Count peer, DHT and GossipSub events in the metrics.
+fn record_event_metrics(metrics: &Metrics, network: &NetworkNode, event: &NetworkEvent) {
+    match event {
+        NetworkEvent::PeerConnected { .. } => {
+            metrics
+                .peer_events_total
+                .with_label_values(&["connect"])
+                .inc();
+            metrics
+                .connected_peers
+                .set(network.connected_peers().len() as i64);
+        }
+        NetworkEvent::PeerDisconnected { .. } => {
+            metrics
+                .peer_events_total
+                .with_label_values(&["disconnect"])
+                .inc();
+            metrics
+                .connected_peers
+                .set(network.connected_peers().len() as i64);
+        }
+        NetworkEvent::DhtPutComplete { success, .. } => {
+            let result = if *success { "success" } else { "failure" };
+            metrics
+                .dht_operations_total
+                .with_label_values(&["put", result])
+                .inc();
+        }
+        NetworkEvent::DhtGetResult { value, .. } => {
+            let result = if value.is_some() {
+                "success"
+            } else {
+                "not_found"
+            };
+            metrics
+                .dht_operations_total
+                .with_label_values(&["get", result])
+                .inc();
+        }
+        NetworkEvent::BroadcastReceived { .. } => {
+            metrics.gossipsub_messages_total.inc();
+        }
+        _ => {}
+    }
+}
+
+/// Write the runtime status file, when there is a status path. Failures are logged.
+fn write_runtime_status(network: &NetworkNode, path: Option<&Path>) {
+    let Some(path) = path else {
+        return;
+    };
+    let status = RuntimeStatus {
+        connected_peers: network.connected_peers().len() as u32,
+        updated_at: unix_now_secs(),
+    };
+    if let Err(e) = write_status_file(path, &status) {
+        debug!("Failed to write status file: {}", e);
+    }
+}
+
+/// Trigger a settlement batch for any channels that have exceeded thresholds.
+async fn run_settlement_check(ctx: &mut NodeContext) {
+    match ctx.ops.trigger_settlement_batch().await {
+        Ok(Some(batch_id)) => {
+            info!(batch_id = %batch_id, "Background settlement batch submitted");
+        }
+        Ok(None) => {
+            // No settlement needed (threshold not reached)
+            debug!("Settlement check: no settlement needed");
+        }
+        Err(e) => {
+            warn!(error = %e, "Background settlement batch failed");
+        }
+    }
+}
+
+/// Spawn the heartbeat task if a heartbeat interval is configured. Returns the
+/// sender that stops it.
+fn spawn_heartbeat(
+    alert_manager: &Arc<AlertManager>,
+    network: &Arc<NetworkNode>,
+) -> Option<watch::Sender<bool>> {
+    let interval_duration = alert_manager.heartbeat_interval()?;
+    let (tx, rx) = watch::channel(false);
+    tokio::spawn(send_heartbeats(
+        interval_duration,
+        rx,
+        Arc::clone(alert_manager),
+        Arc::clone(network),
+    ));
+
+    info!(
+        "Heartbeat alerting enabled with {:?} interval",
+        interval_duration
+    );
+    Some(tx)
+}
+
+/// Send a heartbeat with the peer count every `interval_duration` until shut down.
+async fn send_heartbeats(
+    interval_duration: Duration,
+    mut rx: watch::Receiver<bool>,
+    alert_manager: Arc<AlertManager>,
+    network: Arc<NetworkNode>,
+) {
+    let mut heartbeat_interval = interval(interval_duration);
+    // Skip first tick (immediate)
+    heartbeat_interval.tick().await;
+
+    loop {
+        tokio::select! {
+            result = rx.changed() => {
+                if result.is_err() || *rx.borrow() {
+                    break;
                 }
             }
+            _ = heartbeat_interval.tick() => {
+                let peer_count = network.connected_peers().len() as u32;
+                alert_manager.send_heartbeat(peer_count).await;
+            }
+        }
+    }
+}
 
-            info!(
-                channels = channels_count,
-                closed = closed,
-                disputed = disputed,
-                "Channel cleanup complete"
-            );
-        } else {
-            warn!("Private key not available, cannot close channels on shutdown");
+/// Spawn the health server if enabled. Returns the sender that stops it.
+fn spawn_health_server(
+    health_config: &HealthConfig,
+    network: &Arc<NetworkNode>,
+    metrics: &SharedMetrics,
+    start_time: u64,
+) -> Option<watch::Sender<bool>> {
+    if !health_config.enabled {
+        return None;
+    }
+    let (tx, rx) = watch::channel(false);
+    let port = health_config.port;
+    tokio::spawn(serve_health(
+        port,
+        Arc::clone(network),
+        start_time,
+        Arc::clone(metrics),
+        rx,
+    ));
+
+    info!("Health endpoint enabled on port {}", port);
+    info!(
+        "Metrics endpoint available at http://0.0.0.0:{}/metrics",
+        port
+    );
+    Some(tx)
+}
+
+/// Run the health server, logging any error.
+async fn serve_health(
+    port: u16,
+    network: Arc<NetworkNode>,
+    start_time: u64,
+    metrics: SharedMetrics,
+    rx: watch::Receiver<bool>,
+) {
+    if let Err(e) = run_health_server(port, network, start_time, Some(metrics), rx).await {
+        warn!("Health server error: {}", e);
+    }
+}
+
+/// Close all open payment channels: cooperatively (3 second timeout), else by
+/// initiating a dispute.
+async fn close_channels_on_shutdown(ctx: &mut NodeContext) {
+    info!("Closing payment channels on shutdown...");
+    let channels = ctx.ops.state.channels.list_open().unwrap_or_default();
+    if channels.is_empty() {
+        return;
+    }
+    let Some(private_key) = ctx.ops.private_key().cloned() else {
+        warn!("Private key not available, cannot close channels on shutdown");
+        return;
+    };
+
+    let channels_count = channels.len();
+    let mut closed = 0;
+    let mut disputed = 0;
+    for (peer_id, _channel) in channels {
+        match close_or_dispute(ctx, &peer_id, &private_key).await {
+            ShutdownClose::Closed => closed += 1,
+            ShutdownClose::Disputed => disputed += 1,
+            ShutdownClose::Failed => {}
         }
     }
 
-    // Signal heartbeat task to shutdown
-    if let Some(tx) = heartbeat_shutdown_tx {
-        let _ = tx.send(true);
-    }
+    info!(
+        channels = channels_count,
+        closed = closed,
+        disputed = disputed,
+        "Channel cleanup complete"
+    );
+}
 
-    // Signal health server to shutdown
-    if let Some(tx) = health_shutdown_tx {
+/// How a channel was settled on shutdown.
+enum ShutdownClose {
+    Closed,
+    Disputed,
+    Failed,
+}
+
+/// Try cooperative close with short timeout; dispute unresponsive/failed channels.
+async fn close_or_dispute(
+    ctx: &mut NodeContext,
+    peer_id: &nodalync_crypto::PeerId,
+    private_key: &nodalync_crypto::PrivateKey,
+) -> ShutdownClose {
+    let close_result = tokio::time::timeout(
+        Duration::from_secs(3),
+        ctx.ops.close_payment_channel(peer_id, private_key),
+    )
+    .await;
+
+    match close_result {
+        Ok(Ok(CloseResult::Success { .. })) | Ok(Ok(CloseResult::SuccessOffChain { .. })) => {
+            ShutdownClose::Closed
+        }
+        _ if ctx
+            .ops
+            .dispute_payment_channel(peer_id, private_key)
+            .await
+            .is_ok() =>
+        {
+            ShutdownClose::Disputed
+        }
+        _ => ShutdownClose::Failed,
+    }
+}
+
+/// Signal the heartbeat task and health server to shut down, and remove the status file.
+fn stop_background_tasks(
+    heartbeat_shutdown_tx: Option<watch::Sender<bool>>,
+    health_shutdown_tx: Option<watch::Sender<bool>>,
+    status_path: Option<&Path>,
+) {
+    for tx in [heartbeat_shutdown_tx, health_shutdown_tx]
+        .into_iter()
+        .flatten()
+    {
         let _ = tx.send(true);
     }
 
     // Clean up status file on exit
-    if let Some(ref path) = status_path {
+    if let Some(path) = status_path {
         let _ = remove_status_file(path);
     }
-
-    info!("Event loop stopped");
-    Ok(())
 }
 
 /// Run a minimal HTTP health server with optional Prometheus metrics endpoint.

@@ -190,19 +190,24 @@ impl Provenance {
     /// for the given content hash.
     pub fn is_valid(&self, content_hash: &Hash) -> bool {
         if self.is_l0() {
-            // L0: must have exactly one entry (self), no derived_from
-            self.root_l0l1.len() == 1
-                && self.root_l0l1[0].hash == *content_hash
-                && self.derived_from.is_empty()
-                && self.depth == 0
+            self.is_valid_l0(content_hash)
         } else {
-            // L3: must have at least one root and one derived_from
-            !self.root_l0l1.is_empty()
-                && !self.derived_from.is_empty()
-                && self.depth > 0
-                // Self-reference not allowed in derived_from
-                && !self.derived_from.contains(content_hash)
+            self.is_valid_derived(content_hash)
         }
+    }
+
+    /// L0: must have exactly one entry (self), no derived_from.
+    fn is_valid_l0(&self, content_hash: &Hash) -> bool {
+        let is_self_root =
+            matches!(self.root_l0l1.as_slice(), [only] if only.hash == *content_hash);
+        is_self_root && self.derived_from.is_empty() && self.depth == 0
+    }
+
+    /// L3: must have at least one root and one derived_from,
+    /// and must not list itself in derived_from.
+    fn is_valid_derived(&self, content_hash: &Hash) -> bool {
+        let has_sources = !self.root_l0l1.is_empty() && !self.derived_from.is_empty();
+        has_sources && self.depth > 0 && !self.derived_from.contains(content_hash)
     }
 }
 

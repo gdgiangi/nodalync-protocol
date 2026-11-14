@@ -57,74 +57,104 @@ where
         }
 
         // Validate minimum deposit
-        if deposit < self.config.channel.min_deposit {
-            return Err(OpsError::invalid_operation(format!(
-                "deposit {} below minimum {}",
-                deposit, self.config.channel.min_deposit
-            )));
-        }
+        self.ensure_min_deposit(deposit)?;
 
         // 1. Generate channel ID
         let nonce: u64 = rand::thread_rng().gen();
         let channel_id = self.generate_channel_id(peer, nonce);
 
         // 2. Create on-chain channel if settlement is configured
-        let (channel, funding_tx) = if let Some(settlement) = self.settlement().cloned() {
-            let on_chain_channel_id = nodalync_settle::ChannelId::new(channel_id);
-            match settlement
-                .open_channel(&on_chain_channel_id, peer, deposit)
-                .await
-            {
-                Ok(tx_id) => {
-                    let funding_tx_id = tx_id.to_string();
-                    tracing::info!(
-                        channel_id = %channel_id,
-                        tx_id = %tx_id,
-                        deposit = deposit,
-                        "Channel opened on-chain"
-                    );
-                    let channel = Channel::with_funding(
-                        channel_id,
-                        *peer,
-                        deposit,
-                        timestamp,
-                        funding_tx_id.clone(),
-                    );
-                    (channel, Some(funding_tx_id.into_bytes()))
-                }
-                Err(e) => {
-                    return Err(OpsError::SettlementFailed(format!(
-                        "failed to open channel on-chain: {}",
-                        e
-                    )));
-                }
-            }
-        } else {
-            // No settlement configured, create off-chain channel only
-            (Channel::new(channel_id, *peer, deposit, timestamp), None)
-        };
+        let (channel, funding_tx) = self
+            .create_funded_channel(channel_id, peer, deposit, timestamp)
+            .await?;
 
         // 3. Store locally
         self.state.channels.create(peer, channel.clone())?;
 
         // 4. Send ChannelOpen message (if network available)
-        if let Some(network) = self.network().cloned() {
-            if let Some(libp2p_peer) = network.libp2p_peer_id(peer) {
-                // Include our Hedera account if settlement is configured
-                let hedera_account = self.settlement().map(|s| s.get_own_account_string());
-
-                let payload = ChannelOpenPayload {
-                    channel_id,
-                    initial_balance: deposit,
-                    funding_tx,
-                    hedera_account,
-                };
-                // Best effort - don't fail if network send fails
-                let _ = network.send_channel_open(libp2p_peer, payload).await;
-            }
-        }
+        self.notify_channel_open(peer, channel_id, deposit, funding_tx)
+            .await;
 
         Ok(channel)
+    }
+
+    /// Reject a deposit below the configured minimum.
+    fn ensure_min_deposit(&self, deposit: Amount) -> OpsResult<()> {
+        if deposit < self.config.channel.min_deposit {
+            return Err(OpsError::invalid_operation(format!(
+                "deposit {} below minimum {}",
+                deposit, self.config.channel.min_deposit
+            )));
+        }
+        Ok(())
+    }
+
+    /// The new channel and its funding transaction (as bytes): opened on-chain when
+    /// settlement is configured, otherwise off-chain only.
+    async fn create_funded_channel(
+        &self,
+        channel_id: Hash,
+        peer: &PeerId,
+        deposit: Amount,
+        timestamp: u64,
+    ) -> OpsResult<(Channel, Option<Vec<u8>>)> {
+        let Some(settlement) = self.settlement().cloned() else {
+            // No settlement configured, create off-chain channel only
+            return Ok((Channel::new(channel_id, *peer, deposit, timestamp), None));
+        };
+        let on_chain_channel_id = nodalync_settle::ChannelId::new(channel_id);
+        match settlement
+            .open_channel(&on_chain_channel_id, peer, deposit)
+            .await
+        {
+            Ok(tx_id) => {
+                let funding_tx_id = tx_id.to_string();
+                tracing::info!(
+                    channel_id = %channel_id,
+                    tx_id = %tx_id,
+                    deposit = deposit,
+                    "Channel opened on-chain"
+                );
+                let channel = Channel::with_funding(
+                    channel_id,
+                    *peer,
+                    deposit,
+                    timestamp,
+                    funding_tx_id.clone(),
+                );
+                Ok((channel, Some(funding_tx_id.into_bytes())))
+            }
+            Err(e) => Err(OpsError::SettlementFailed(format!(
+                "failed to open channel on-chain: {}",
+                e
+            ))),
+        }
+    }
+
+    /// Send ChannelOpen to the peer, best effort, if a network and a peer mapping exist.
+    async fn notify_channel_open(
+        &self,
+        peer: &PeerId,
+        channel_id: Hash,
+        deposit: Amount,
+        funding_tx: Option<Vec<u8>>,
+    ) {
+        let Some(network) = self.network().cloned() else {
+            return;
+        };
+        if let Some(libp2p_peer) = network.libp2p_peer_id(peer) {
+            // Include our Hedera account if settlement is configured
+            let hedera_account = self.settlement().map(|s| s.get_own_account_string());
+
+            let payload = ChannelOpenPayload {
+                channel_id,
+                initial_balance: deposit,
+                funding_tx,
+                hedera_account,
+            };
+            // Best effort - don't fail if network send fails
+            let _ = network.send_channel_open(libp2p_peer, payload).await;
+        }
     }
 
     /// Open a new payment channel with a peer using their libp2p peer ID directly.
@@ -142,12 +172,7 @@ where
         let timestamp = current_timestamp();
 
         // Validate minimum deposit
-        if deposit < self.config.channel.min_deposit {
-            return Err(OpsError::invalid_operation(format!(
-                "deposit {} below minimum {}",
-                deposit, self.config.channel.min_deposit
-            )));
-        }
+        self.ensure_min_deposit(deposit)?;
 
         let Some(network) = self.network().cloned() else {
             return Err(OpsError::invalid_operation("network not available"));
@@ -180,67 +205,21 @@ where
         // Register the peer ID mapping so future lookups work
         network.register_peer_mapping(libp2p_peer, remote_nodalync_id);
 
-        // Check if channel already exists with this peer
-        if self.state.channels.get(&remote_nodalync_id)?.is_some() {
-            return Err(OpsError::ChannelAlreadyExists);
-        }
-
-        // Decode the ChannelAccept payload
-        let accept: nodalync_wire::ChannelAcceptPayload =
-            nodalync_wire::decode_payload(&response.payload)
-                .map_err(|e| OpsError::invalid_operation(format!("decode error: {}", e)))?;
+        let accept = self.decode_accept_for_new_channel(&remote_nodalync_id, &response.payload)?;
 
         // Register peer's Hedera account if provided (enables on-chain channels)
-        let mut funding_tx_id: Option<String> = None;
-        if let Some(peer_hedera) = &accept.hedera_account {
-            if let Some(settlement) = self.settlement().cloned() {
-                if let Ok(account_id) = nodalync_settle::AccountId::from_string(peer_hedera) {
-                    settlement.register_peer_account(&remote_nodalync_id, account_id);
-                    tracing::debug!(
-                        peer = %remote_nodalync_id,
-                        hedera_account = %peer_hedera,
-                        "Registered peer's Hedera account"
-                    );
-
-                    // NOW open the channel on-chain (peer account is registered)
-                    let on_chain_channel_id = nodalync_settle::ChannelId::new(accept.channel_id);
-                    match settlement
-                        .open_channel(&on_chain_channel_id, &remote_nodalync_id, deposit)
-                        .await
-                    {
-                        Ok(tx_id) => {
-                            funding_tx_id = Some(tx_id.to_string());
-                            tracing::info!(
-                                channel_id = %accept.channel_id,
-                                tx_id = %tx_id,
-                                deposit = deposit,
-                                "Channel opened on-chain"
-                            );
-                        }
-                        Err(e) => {
-                            return Err(OpsError::SettlementFailed(format!(
-                                "failed to open channel on-chain for libp2p peer: {}",
-                                e
-                            )));
-                        }
-                    }
-                }
-            }
-        }
+        let funding_tx_id = self
+            .open_accepted_channel_on_chain(&accept, &remote_nodalync_id, deposit)
+            .await?;
 
         // Create the channel in Open state (since we received Accept)
-        let mut channel = Channel::accepted(
-            accept.channel_id,
+        let channel = accepted_channel(
+            &accept,
             remote_nodalync_id,
-            accept.initial_balance,
             deposit,
             timestamp,
+            funding_tx_id,
         );
-
-        // Set the funding transaction ID if we opened on-chain
-        if let Some(tx_id) = funding_tx_id {
-            channel.set_funding_tx_id(tx_id);
-        }
 
         // Store the channel keyed by the remote's Nodalync peer ID
         self.state
@@ -256,6 +235,68 @@ where
         );
 
         Ok((channel, remote_nodalync_id))
+    }
+
+    /// Decode a ChannelAccept response, failing if we already have a channel with the peer.
+    fn decode_accept_for_new_channel(
+        &self,
+        remote_nodalync_id: &PeerId,
+        payload: &[u8],
+    ) -> OpsResult<nodalync_wire::ChannelAcceptPayload> {
+        // Check if channel already exists with this peer
+        if self.state.channels.get(remote_nodalync_id)?.is_some() {
+            return Err(OpsError::ChannelAlreadyExists);
+        }
+
+        // Decode the ChannelAccept payload
+        nodalync_wire::decode_payload(payload)
+            .map_err(|e| OpsError::invalid_operation(format!("decode error: {}", e)))
+    }
+
+    /// When the peer sent a valid Hedera account and settlement is configured, register
+    /// the account and open the channel on-chain. Returns the funding transaction ID, if any.
+    async fn open_accepted_channel_on_chain(
+        &self,
+        accept: &nodalync_wire::ChannelAcceptPayload,
+        remote_nodalync_id: &PeerId,
+        deposit: Amount,
+    ) -> OpsResult<Option<String>> {
+        let Some(peer_hedera) = &accept.hedera_account else {
+            return Ok(None);
+        };
+        let Some(settlement) = self.settlement().cloned() else {
+            return Ok(None);
+        };
+        let Ok(account_id) = nodalync_settle::AccountId::from_string(peer_hedera) else {
+            return Ok(None);
+        };
+        settlement.register_peer_account(remote_nodalync_id, account_id);
+        tracing::debug!(
+            peer = %remote_nodalync_id,
+            hedera_account = %peer_hedera,
+            "Registered peer's Hedera account"
+        );
+
+        // NOW open the channel on-chain (peer account is registered)
+        let on_chain_channel_id = nodalync_settle::ChannelId::new(accept.channel_id);
+        match settlement
+            .open_channel(&on_chain_channel_id, remote_nodalync_id, deposit)
+            .await
+        {
+            Ok(tx_id) => {
+                tracing::info!(
+                    channel_id = %accept.channel_id,
+                    tx_id = %tx_id,
+                    deposit = deposit,
+                    "Channel opened on-chain"
+                );
+                Ok(Some(tx_id.to_string()))
+            }
+            Err(e) => Err(OpsError::SettlementFailed(format!(
+                "failed to open channel on-chain for libp2p peer: {}",
+                e
+            ))),
+        }
     }
 
     /// Accept an incoming channel open request.
@@ -291,30 +332,11 @@ where
     pub fn update_payment_channel(&mut self, peer: &PeerId, payment: Payment) -> OpsResult<()> {
         let timestamp = current_timestamp();
 
-        // Get channel
-        let mut channel = self
-            .state
-            .channels
-            .get(peer)?
-            .ok_or(OpsError::ChannelNotFound)?;
-
-        // Verify channel is open
-        if !channel.is_open() {
-            return Err(OpsError::ChannelNotOpen);
-        }
+        // Get channel, which must be open
+        let mut channel = self.load_open_channel(peer)?;
 
         // Record payment (determines if we're paying or receiving)
-        if payment.recipient == self.peer_id() {
-            // We're receiving
-            channel
-                .receive(payment.clone(), timestamp)
-                .map_err(|_| OpsError::InsufficientChannelBalance)?;
-        } else {
-            // We're paying
-            channel
-                .pay(payment.clone(), timestamp)
-                .map_err(|_| OpsError::InsufficientChannelBalance)?;
-        }
+        self.record_channel_payment(&mut channel, payment.clone(), timestamp)?;
 
         // Store updated channel
         self.state.channels.update(peer, &channel)?;
@@ -322,6 +344,45 @@ where
         // Add payment to pending
         self.state.channels.add_payment(peer, payment)?;
 
+        Ok(())
+    }
+
+    /// Load the channel with `peer`.
+    pub(crate) fn load_channel(&self, peer: &PeerId) -> OpsResult<Channel> {
+        self.state
+            .channels
+            .get(peer)?
+            .ok_or(OpsError::ChannelNotFound)
+    }
+
+    /// Load the channel with `peer`, which must be open.
+    fn load_open_channel(&self, peer: &PeerId) -> OpsResult<Channel> {
+        let channel = self.load_channel(peer)?;
+        // Verify channel is open
+        if !channel.is_open() {
+            return Err(OpsError::ChannelNotOpen);
+        }
+        Ok(channel)
+    }
+
+    /// Apply a payment to the channel: received when we are the recipient, paid otherwise.
+    fn record_channel_payment(
+        &self,
+        channel: &mut Channel,
+        payment: Payment,
+        timestamp: u64,
+    ) -> OpsResult<()> {
+        if payment.recipient == self.peer_id() {
+            // We're receiving
+            channel
+                .receive(payment, timestamp)
+                .map_err(|_| OpsError::InsufficientChannelBalance)?;
+        } else {
+            // We're paying
+            channel
+                .pay(payment, timestamp)
+                .map_err(|_| OpsError::InsufficientChannelBalance)?;
+        }
         Ok(())
     }
 
@@ -349,32 +410,66 @@ where
         let timestamp = current_timestamp();
 
         // 1. Get channel and validate state
-        let mut channel = self
-            .state
-            .channels
-            .get(peer)?
-            .ok_or(OpsError::ChannelNotFound)?;
+        let mut channel = self.load_channel(peer)?;
+        ensure_closable(&channel)?;
 
-        // Cannot close already closed channel
-        if channel.is_closed() {
-            return Err(OpsError::invalid_operation("channel already closed"));
-        }
+        // 2. Compute final balances, sign close message and store pending close state
+        let (final_balances, initiator_signature) =
+            self.record_pending_close(peer, &mut channel, private_key, timestamp)?;
 
-        // Cannot close if there's already a pending close or dispute
-        if channel.pending_close.is_some() {
-            return Err(OpsError::invalid_operation(
-                "channel already has a pending close",
-            ));
-        }
-        if channel.pending_dispute.is_some() {
-            return Err(OpsError::invalid_operation("channel has a pending dispute"));
-        }
+        // 3. Send ChannelClose with our signature to peer
+        let Some(responder_signature) = self
+            .request_close_ack(peer, &channel, final_balances, initiator_signature)
+            .await
+        else {
+            // Peer didn't respond - return with suggestion to dispute
+            return Ok(CloseResult::PeerUnresponsive {
+                suggestion: "Peer did not respond to cooperative close. \
+                    Use 'nodalync dispute-channel' to initiate a dispute-based close (24-hour wait)."
+                    .to_string(),
+            });
+        };
 
-        // 2. Compute final balances and sign close message
+        // 4. Peer responded, update pending_close with their signature
+        self.record_responder_signature(peer, &mut channel, responder_signature)?;
+
+        // 5. Submit to chain with both signatures (if settlement available)
+        let result = self
+            .submit_cooperative_close(&channel, &final_balances)
+            .await;
+
+        // 6. Update state to Closed (only if successful)
+        self.finalize_close(peer, &mut channel, &result, timestamp)?;
+
+        Ok(result)
+    }
+
+    /// Add the peer's signature to the pending close and store it.
+    fn record_responder_signature(
+        &mut self,
+        peer: &PeerId,
+        channel: &mut Channel,
+        responder_signature: Signature,
+    ) -> OpsResult<()> {
+        if let Some(pending) = channel.pending_close.as_mut() {
+            pending.add_responder_signature(responder_signature);
+        }
+        self.state.channels.update(peer, channel)?;
+        Ok(())
+    }
+
+    /// Sign the close message for the channel's current balances and store it as the
+    /// pending close. Returns the final balances and our (initiator) signature.
+    fn record_pending_close(
+        &mut self,
+        peer: &PeerId,
+        channel: &mut Channel,
+        private_key: &PrivateKey,
+        timestamp: u64,
+    ) -> OpsResult<(ChannelBalances, Signature)> {
         let my_balance = channel.my_balance;
         let their_balance = channel.their_balance;
         let nonce = channel.nonce;
-        let final_balances = ChannelBalances::new(my_balance, their_balance);
 
         // Sign close message: channel_id || nonce || initiator_balance || responder_balance
         let initiator_signature = sign_channel_close(
@@ -393,127 +488,130 @@ where
             timestamp,
         );
         channel.pending_close = Some(pending_close);
-        self.state.channels.update(peer, &channel)?;
+        self.state.channels.update(peer, channel)?;
 
-        // 3. Send ChannelClose with our signature to peer
-        let responder_signature = if let Some(network) = self.network().cloned() {
-            if let Some(libp2p_peer) = network.libp2p_peer_id(peer) {
-                let payload = ChannelClosePayload {
-                    channel_id: channel.channel_id,
-                    nonce,
-                    final_balances,
-                    initiator_signature,
-                };
+        Ok((
+            ChannelBalances::new(my_balance, their_balance),
+            initiator_signature,
+        ))
+    }
 
-                // Send and wait for response
-                match network.send_channel_close(libp2p_peer, payload).await {
-                    Ok(response) => {
-                        // Decode the ChannelCloseAck response
-                        match nodalync_wire::decode_payload::<ChannelCloseAckPayload>(
-                            &response.payload,
-                        ) {
-                            Ok(ack) => Some(ack.responder_signature),
-                            Err(e) => {
-                                tracing::warn!(
-                                    error = %e,
-                                    "Failed to decode ChannelCloseAck response"
-                                );
-                                None
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            peer = %peer,
-                            error = %e,
-                            "Peer unresponsive for cooperative close"
-                        );
-                        None
-                    }
-                }
-            } else {
+    /// Send ChannelClose to the peer and wait for its ChannelCloseAck.
+    ///
+    /// Returns the peer's signature, or `None` when there is no network (off-chain close
+    /// only), no peer mapping, no response, or an undecodable response.
+    async fn request_close_ack(
+        &self,
+        peer: &PeerId,
+        channel: &Channel,
+        final_balances: ChannelBalances,
+        initiator_signature: Signature,
+    ) -> Option<Signature> {
+        // No network - proceed with off-chain close only
+        let network = self.network().cloned()?;
+        let Some(libp2p_peer) = network.libp2p_peer_id(peer) else {
+            tracing::warn!(
+                peer = %peer,
+                "No libp2p peer ID mapping for cooperative close"
+            );
+            return None;
+        };
+        let payload = ChannelClosePayload {
+            channel_id: channel.channel_id,
+            nonce: channel.nonce,
+            final_balances,
+            initiator_signature,
+        };
+
+        // Send and wait for response
+        match network.send_channel_close(libp2p_peer, payload).await {
+            // Decode the ChannelCloseAck response
+            Ok(response) => decode_close_ack(&response.payload),
+            Err(e) => {
                 tracing::warn!(
                     peer = %peer,
-                    "No libp2p peer ID mapping for cooperative close"
+                    error = %e,
+                    "Peer unresponsive for cooperative close"
                 );
                 None
             }
-        } else {
-            // No network - proceed with off-chain close only
-            None
+        }
+    }
+
+    /// Submit the cooperative close with both signatures on-chain, or close off-chain
+    /// when no settlement is configured.
+    async fn submit_cooperative_close(
+        &self,
+        channel: &Channel,
+        final_balances: &ChannelBalances,
+    ) -> crate::error::CloseResult {
+        use crate::error::CloseResult;
+
+        let my_balance = channel.my_balance;
+        let their_balance = channel.their_balance;
+        let Some(settlement) = self.settlement().cloned() else {
+            // No settlement configured - off-chain close only
+            return CloseResult::SuccessOffChain {
+                final_balances: (my_balance, their_balance),
+            };
         };
 
-        // 4. If peer responded, update pending_close with their signature
-        if let Some(sig) = responder_signature {
-            let mut pending = channel.pending_close.take().unwrap();
-            pending.add_responder_signature(sig);
-            channel.pending_close = Some(pending);
-            self.state.channels.update(peer, &channel)?;
-        } else {
-            // Peer didn't respond - return with suggestion to dispute
-            return Ok(CloseResult::PeerUnresponsive {
-                suggestion: "Peer did not respond to cooperative close. \
-                    Use 'nodalync dispute-channel' to initiate a dispute-based close (24-hour wait)."
-                    .to_string(),
-            });
-        }
-
-        // 5. Submit to chain with both signatures (if settlement available)
         let pending = channel.pending_close.as_ref().unwrap();
         let both_signatures = vec![
             pending.initiator_signature,
             pending.responder_signature.unwrap(),
         ];
+        let channel_id = nodalync_settle::ChannelId::new(channel.channel_id);
 
-        let result = if let Some(settlement) = self.settlement().cloned() {
-            let channel_id = nodalync_settle::ChannelId::new(channel.channel_id);
-
-            match settlement
-                .close_channel(&channel_id, &final_balances, &both_signatures)
-                .await
-            {
-                Ok(tx_id) => {
-                    tracing::info!(
-                        channel_id = %channel.channel_id,
-                        tx_id = %tx_id,
-                        my_balance = my_balance,
-                        their_balance = their_balance,
-                        "Channel closed on-chain with cooperative signatures"
-                    );
-                    CloseResult::Success {
-                        transaction_id: tx_id.to_string(),
-                        final_balances: (my_balance, their_balance),
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        channel_id = %channel.channel_id,
-                        error = %e,
-                        "On-chain cooperative close failed"
-                    );
-                    CloseResult::OnChainFailed {
-                        error: e.to_string(),
-                    }
+        match settlement
+            .close_channel(&channel_id, final_balances, &both_signatures)
+            .await
+        {
+            Ok(tx_id) => {
+                tracing::info!(
+                    channel_id = %channel.channel_id,
+                    tx_id = %tx_id,
+                    my_balance = my_balance,
+                    their_balance = their_balance,
+                    "Channel closed on-chain with cooperative signatures"
+                );
+                CloseResult::Success {
+                    transaction_id: tx_id.to_string(),
+                    final_balances: (my_balance, their_balance),
                 }
             }
-        } else {
-            // No settlement configured - off-chain close only
-            CloseResult::SuccessOffChain {
-                final_balances: (my_balance, their_balance),
+            Err(e) => {
+                tracing::warn!(
+                    channel_id = %channel.channel_id,
+                    error = %e,
+                    "On-chain cooperative close failed"
+                );
+                CloseResult::OnChainFailed {
+                    error: e.to_string(),
+                }
             }
-        };
-
-        // 6. Update state to Closed (only if successful)
-        if result.is_success() {
-            channel.mark_closing(timestamp);
-            channel.pending_close = None;
-            self.state.channels.update(peer, &channel)?;
-
-            channel.mark_closed(timestamp);
-            self.state.channels.update(peer, &channel)?;
         }
+    }
 
-        Ok(result)
+    /// After a successful close, move the channel through Closing to Closed and clear
+    /// the pending close. A failed close leaves the channel as it is.
+    fn finalize_close(
+        &mut self,
+        peer: &PeerId,
+        channel: &mut Channel,
+        result: &crate::error::CloseResult,
+        timestamp: u64,
+    ) -> OpsResult<()> {
+        if !result.is_success() {
+            return Ok(());
+        }
+        channel.mark_closing(timestamp);
+        channel.pending_close = None;
+        self.state.channels.update(peer, channel)?;
+
+        channel.mark_closed(timestamp);
+        self.state.channels.update(peer, channel)?;
+        Ok(())
     }
 
     /// Dispute a channel with latest signed state.
@@ -531,23 +629,8 @@ where
         let timestamp = current_timestamp();
 
         // Get channel
-        let mut channel = self
-            .state
-            .channels
-            .get(peer)?
-            .ok_or(OpsError::ChannelNotFound)?;
-
-        // Cannot dispute closed channel
-        if channel.is_closed() {
-            return Err(OpsError::invalid_operation("channel already closed"));
-        }
-
-        // Cannot dispute if already disputing
-        if channel.pending_dispute.is_some() {
-            return Err(OpsError::invalid_operation(
-                "channel already has a pending dispute",
-            ));
-        }
+        let mut channel = self.load_channel(peer)?;
+        ensure_disputable(&channel)?;
 
         // Get settlement layer
         let settlement = self
@@ -619,27 +702,8 @@ where
         let timestamp = current_timestamp();
 
         // Get channel
-        let mut channel = self
-            .state
-            .channels
-            .get(peer)?
-            .ok_or(OpsError::ChannelNotFound)?;
-
-        // Must have a pending dispute
-        let pending = channel
-            .pending_dispute
-            .as_ref()
-            .ok_or_else(|| OpsError::invalid_operation("no pending dispute to resolve"))?;
-
-        // Check if dispute period has elapsed
-        if !pending.can_resolve(timestamp) {
-            let remaining_ms = pending.time_until_resolution(timestamp);
-            let remaining_hours = remaining_ms as f64 / (60.0 * 60.0 * 1000.0);
-            return Err(OpsError::invalid_operation(format!(
-                "dispute period not yet elapsed ({:.1} hours remaining)",
-                remaining_hours
-            )));
-        }
+        let mut channel = self.load_channel(peer)?;
+        ensure_dispute_resolvable(&channel, timestamp)?;
 
         // Get settlement layer
         let settlement = self
@@ -738,6 +802,99 @@ pub fn sign_payment(private_key: &PrivateKey, payment: &Payment) -> Signature {
 /// Create a signed payment for a query.
 ///
 /// This function creates a payment with proper signature for submitting
+/// A channel can be closed unless it is closed or already has a pending close or dispute.
+fn ensure_closable(channel: &Channel) -> OpsResult<()> {
+    // Cannot close already closed channel
+    if channel.is_closed() {
+        return Err(OpsError::invalid_operation("channel already closed"));
+    }
+
+    // Cannot close if there's already a pending close or dispute
+    if channel.pending_close.is_some() {
+        return Err(OpsError::invalid_operation(
+            "channel already has a pending close",
+        ));
+    }
+    if channel.pending_dispute.is_some() {
+        return Err(OpsError::invalid_operation("channel has a pending dispute"));
+    }
+    Ok(())
+}
+
+/// A channel can be disputed unless it is closed or already disputed.
+fn ensure_disputable(channel: &Channel) -> OpsResult<()> {
+    // Cannot dispute closed channel
+    if channel.is_closed() {
+        return Err(OpsError::invalid_operation("channel already closed"));
+    }
+
+    // Cannot dispute if already disputing
+    if channel.pending_dispute.is_some() {
+        return Err(OpsError::invalid_operation(
+            "channel already has a pending dispute",
+        ));
+    }
+    Ok(())
+}
+
+/// A dispute can be resolved once one is pending and its period has elapsed.
+fn ensure_dispute_resolvable(channel: &Channel, timestamp: u64) -> OpsResult<()> {
+    // Must have a pending dispute
+    let pending = channel
+        .pending_dispute
+        .as_ref()
+        .ok_or_else(|| OpsError::invalid_operation("no pending dispute to resolve"))?;
+
+    // Check if dispute period has elapsed
+    if !pending.can_resolve(timestamp) {
+        let remaining_ms = pending.time_until_resolution(timestamp);
+        let remaining_hours = remaining_ms as f64 / (60.0 * 60.0 * 1000.0);
+        return Err(OpsError::invalid_operation(format!(
+            "dispute period not yet elapsed ({:.1} hours remaining)",
+            remaining_hours
+        )));
+    }
+    Ok(())
+}
+
+/// The peer's signature from a ChannelCloseAck payload, or `None` if it does not decode.
+fn decode_close_ack(payload: &[u8]) -> Option<Signature> {
+    match nodalync_wire::decode_payload::<ChannelCloseAckPayload>(payload) {
+        Ok(ack) => Some(ack.responder_signature),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "Failed to decode ChannelCloseAck response"
+            );
+            None
+        }
+    }
+}
+
+/// The channel created after the peer accepted: Open, with our deposit and theirs,
+/// and the funding transaction when it was opened on-chain.
+fn accepted_channel(
+    accept: &nodalync_wire::ChannelAcceptPayload,
+    remote_nodalync_id: PeerId,
+    deposit: Amount,
+    timestamp: u64,
+    funding_tx_id: Option<String>,
+) -> Channel {
+    let mut channel = Channel::accepted(
+        accept.channel_id,
+        remote_nodalync_id,
+        accept.initial_balance,
+        deposit,
+        timestamp,
+    );
+
+    // Set the funding transaction ID if we opened on-chain
+    if let Some(tx_id) = funding_tx_id {
+        channel.set_funding_tx_id(tx_id);
+    }
+    channel
+}
+
 /// a query request to a content owner.
 pub fn create_signed_payment(
     private_key: &PrivateKey,
@@ -876,6 +1033,43 @@ mod tests {
         // Below minimum deposit
         let result = ops.open_payment_channel(&peer, 10).await;
         assert!(matches!(result, Err(OpsError::InvalidOperation(_))));
+    }
+
+    #[test]
+    fn test_close_and_dispute_preconditions() {
+        let mut channel = Channel::new(content_hash(b"ch"), test_peer_id(), 100, 1000);
+        assert!(ensure_closable(&channel).is_ok());
+        assert!(ensure_disputable(&channel).is_ok());
+
+        channel.pending_dispute = Some(PendingDispute::new("tx".into(), 1000, 1, 100, 0));
+        assert!(ensure_closable(&channel).is_err());
+        assert!(ensure_disputable(&channel).is_err());
+
+        // Not resolvable during the 24-hour period, resolvable once it has elapsed.
+        assert!(ensure_dispute_resolvable(&channel, 1000).is_err());
+        let after = 1000 + PendingDispute::DISPUTE_PERIOD_MS;
+        assert!(ensure_dispute_resolvable(&channel, after).is_ok());
+
+        channel.pending_dispute = None;
+        assert!(ensure_dispute_resolvable(&channel, after).is_err());
+        channel.mark_closed(2000);
+        assert!(ensure_closable(&channel).is_err());
+        assert!(ensure_disputable(&channel).is_err());
+    }
+
+    #[test]
+    fn test_accepted_channel_records_funding_tx() {
+        let accept = nodalync_wire::ChannelAcceptPayload {
+            channel_id: content_hash(b"ch"),
+            initial_balance: 50,
+            funding_tx: None,
+            hedera_account: None,
+        };
+        let channel = accepted_channel(&accept, test_peer_id(), 100, 1000, Some("0.0.1@2".into()));
+        assert_eq!(channel.my_balance, 100);
+        assert_eq!(channel.their_balance, 50);
+        assert_eq!(channel.funding_tx_id.as_deref(), Some("0.0.1@2"));
+        assert!(channel.is_open());
     }
 
     #[test]
