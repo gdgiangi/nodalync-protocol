@@ -355,94 +355,8 @@ impl AlertManager {
         // Determine what alert to send (if any) while holding the lock
         let pending_alert = {
             let mut state = self.state.lock().await;
-            let now = Instant::now();
-
-            // Determine new health state
-            let new_state = if peer_count == 0 {
-                HealthState::NoPeers
-            } else if let Some(min) = self.config.conditions.min_peer_count {
-                if peer_count < min {
-                    HealthState::LowPeers
-                } else {
-                    HealthState::Healthy
-                }
-            } else {
-                HealthState::Healthy
-            };
-
-            // Handle state transitions and determine if we need to send an alert
-            match (state.health_state, new_state) {
-                // Transition to unhealthy
-                (HealthState::Healthy, HealthState::NoPeers | HealthState::LowPeers) => {
-                    state.health_state = new_state;
-                    state.unhealthy_since = Some(now);
-                    debug!("Health state changed to {:?}", new_state);
-                    None
-                }
-
-                // Already unhealthy with no peers, check if threshold exceeded
-                (HealthState::NoPeers, HealthState::NoPeers) => {
-                    if let Some(since) = state.unhealthy_since {
-                        let duration = now.duration_since(since).as_secs();
-                        if duration >= self.config.conditions.no_peers_threshold_secs
-                            && self.should_send_alert(&state, AlertType::NoPeers, now)
-                        {
-                            state.last_alert_times.insert(AlertType::NoPeers, now);
-                            let message = format!(
-                                "Node {} has had zero peers for {} seconds",
-                                self.config.node_name.as_deref().unwrap_or("nodalync"),
-                                duration
-                            );
-                            Some((AlertType::NoPeers, message))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                }
-
-                // Low peers threshold check
-                (HealthState::LowPeers, HealthState::LowPeers) => {
-                    if self.should_send_alert(&state, AlertType::LowPeerCount, now) {
-                        state.last_alert_times.insert(AlertType::LowPeerCount, now);
-                        let message = format!(
-                            "Node {} has only {} peers (minimum: {})",
-                            self.config.node_name.as_deref().unwrap_or("nodalync"),
-                            peer_count,
-                            self.config.conditions.min_peer_count.unwrap_or(0)
-                        );
-                        Some((AlertType::LowPeerCount, message))
-                    } else {
-                        None
-                    }
-                }
-
-                // Transition to healthy (recovery)
-                (HealthState::NoPeers | HealthState::LowPeers, HealthState::Healthy) => {
-                    info!("Node recovered to healthy state with {} peers", peer_count);
-                    state.health_state = HealthState::Healthy;
-                    state.unhealthy_since = None;
-                    state.last_recovery = Some(now);
-                    let message = format!(
-                        "Node {} recovered with {} peers",
-                        self.config.node_name.as_deref().unwrap_or("nodalync"),
-                        peer_count
-                    );
-                    Some((AlertType::Recovered, message))
-                }
-
-                // State change between unhealthy states
-                (HealthState::NoPeers, HealthState::LowPeers)
-                | (HealthState::LowPeers, HealthState::NoPeers) => {
-                    state.health_state = new_state;
-                    state.unhealthy_since = Some(now);
-                    None
-                }
-
-                // No change
-                (HealthState::Healthy, HealthState::Healthy) => None,
-            }
+            let new_state = self.health_state_for(peer_count);
+            self.transition(&mut state, new_state, peer_count, Instant::now())
         }; // Lock is released here
 
         // Send alert outside the lock if needed
@@ -450,6 +364,122 @@ impl AlertManager {
             let payload = self.create_payload(alert_type, message, peer_count);
             self.send_alert(payload).await;
         }
+    }
+
+    /// The health state for a peer count: no peers, fewer than the configured
+    /// minimum, or healthy.
+    fn health_state_for(&self, peer_count: u32) -> HealthState {
+        match self.config.conditions.min_peer_count {
+            _ if peer_count == 0 => HealthState::NoPeers,
+            Some(min) if peer_count < min => HealthState::LowPeers,
+            _ => HealthState::Healthy,
+        }
+    }
+
+    /// Handle a state transition and determine if we need to send an alert.
+    fn transition(
+        &self,
+        state: &mut AlertManagerState,
+        new_state: HealthState,
+        peer_count: u32,
+        now: Instant,
+    ) -> Option<(AlertType, String)> {
+        match (state.health_state, new_state) {
+            // Transition to unhealthy, or a state change between unhealthy states
+            (HealthState::Healthy, HealthState::NoPeers | HealthState::LowPeers) => {
+                state.health_state = new_state;
+                state.unhealthy_since = Some(now);
+                debug!("Health state changed to {:?}", new_state);
+                None
+            }
+            (HealthState::NoPeers, HealthState::LowPeers)
+            | (HealthState::LowPeers, HealthState::NoPeers) => {
+                state.health_state = new_state;
+                state.unhealthy_since = Some(now);
+                None
+            }
+
+            // Already unhealthy with no peers, check if threshold exceeded
+            (HealthState::NoPeers, HealthState::NoPeers) => self.no_peers_alert(state, now),
+
+            // Low peers threshold check
+            (HealthState::LowPeers, HealthState::LowPeers) => {
+                self.low_peers_alert(state, peer_count, now)
+            }
+
+            // Transition to healthy (recovery)
+            (HealthState::NoPeers | HealthState::LowPeers, HealthState::Healthy) => {
+                Some(self.recover(state, peer_count, now))
+            }
+
+            // No change
+            (HealthState::Healthy, HealthState::Healthy) => None,
+        }
+    }
+
+    /// Alert once the node has had no peers for the configured threshold (rate-limited).
+    fn no_peers_alert(
+        &self,
+        state: &mut AlertManagerState,
+        now: Instant,
+    ) -> Option<(AlertType, String)> {
+        let duration = now.duration_since(state.unhealthy_since?).as_secs();
+        let due = duration >= self.config.conditions.no_peers_threshold_secs
+            && self.should_send_alert(state, AlertType::NoPeers, now);
+        if !due {
+            return None;
+        }
+        state.last_alert_times.insert(AlertType::NoPeers, now);
+        let message = format!(
+            "Node {} has had zero peers for {} seconds",
+            self.node_name(),
+            duration
+        );
+        Some((AlertType::NoPeers, message))
+    }
+
+    /// Alert that the peer count is below the minimum (rate-limited).
+    fn low_peers_alert(
+        &self,
+        state: &mut AlertManagerState,
+        peer_count: u32,
+        now: Instant,
+    ) -> Option<(AlertType, String)> {
+        if !self.should_send_alert(state, AlertType::LowPeerCount, now) {
+            return None;
+        }
+        state.last_alert_times.insert(AlertType::LowPeerCount, now);
+        let message = format!(
+            "Node {} has only {} peers (minimum: {})",
+            self.node_name(),
+            peer_count,
+            self.config.conditions.min_peer_count.unwrap_or(0)
+        );
+        Some((AlertType::LowPeerCount, message))
+    }
+
+    /// Record recovery to the healthy state; always alerts.
+    fn recover(
+        &self,
+        state: &mut AlertManagerState,
+        peer_count: u32,
+        now: Instant,
+    ) -> (AlertType, String) {
+        info!("Node recovered to healthy state with {} peers", peer_count);
+        state.health_state = HealthState::Healthy;
+        state.unhealthy_since = None;
+        state.last_recovery = Some(now);
+        let message = format!(
+            "Node {} recovered with {} peers",
+            self.node_name(),
+            peer_count
+        );
+        (AlertType::Recovered, message)
+    }
+
+    /// The configured node name, or "nodalync".
+    fn node_name(&self) -> &str {
+        self.config.node_name.as_deref().unwrap_or("nodalync")
     }
 
     /// Check if we should send an alert based on rate limits and cooldowns.

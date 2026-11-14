@@ -57,6 +57,13 @@ pub fn validate_payment(
     payer_pubkey: Option<&PublicKey>,
     payment_nonce: u64,
 ) -> ValidationResult<()> {
+    validate_payment_terms(payment, manifest)?;
+    validate_payment_channel(payment, channel, payment_nonce)?;
+    validate_payment_authenticity(payment, manifest, payer_pubkey)
+}
+
+/// Checks 1-3: the payment covers the price, pays the owner, and is for this content.
+fn validate_payment_terms(payment: &Payment, manifest: &Manifest) -> ValidationResult<()> {
     // 1. Amount sufficient
     if payment.amount < manifest.economics.price {
         return Err(ValidationError::InsufficientPayment {
@@ -77,7 +84,15 @@ pub fn validate_payment(
     if payment.query_hash != manifest.hash {
         return Err(ValidationError::QueryHashMismatch);
     }
+    Ok(())
+}
 
+/// Checks 4-6: the channel is open, can cover the amount, and the nonce moves forward.
+fn validate_payment_channel(
+    payment: &Payment,
+    channel: &Channel,
+    payment_nonce: u64,
+) -> ValidationResult<()> {
     // 4. Channel is open
     if channel.state != ChannelState::Open {
         return Err(ValidationError::ChannelNotOpen {
@@ -100,7 +115,15 @@ pub fn validate_payment(
             channel_nonce: channel.nonce,
         });
     }
+    Ok(())
+}
 
+/// Checks 7-8: the signature verifies (if a public key is given) and the provenance matches.
+fn validate_payment_authenticity(
+    payment: &Payment,
+    manifest: &Manifest,
+    payer_pubkey: Option<&PublicKey>,
+) -> ValidationResult<()> {
     // 7. Verify signature (if public key provided)
     if let Some(pubkey) = payer_pubkey {
         if !verify_payment_signature(pubkey, payment) {

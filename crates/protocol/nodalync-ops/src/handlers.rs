@@ -92,12 +92,43 @@ where
         let timestamp = current_timestamp();
         let payment_amount = request.payment.amount;
 
+        // 1-2. Load manifest and validate access
+        let manifest = self.load_queryable_manifest(requester, &request.hash)?;
+
+        // 3-4. Validate payment amount, and the payment itself for paid content
+        self.validate_query_payment(requester, request, &manifest)?;
+
+        // 5. Update channel state (credit - they pay us)
+        self.credit_query_payment(requester, request, &manifest, timestamp)?;
+
+        // 6. Generate payment ID
+        let payment_id =
+            content_hash(&[request.hash.0.as_slice(), &timestamp.to_be_bytes()].concat());
+
+        // 7. Calculate 95/5 distribution (CORE PROTOCOL FEATURE)
+        let num_recipients = log_revenue_distribution(payment_amount, &manifest, &payment_id);
+
+        // 8. IMMEDIATE ON-CHAIN SETTLEMENT (required before content delivery)
+        let transaction_id = self
+            .settle_query_payment(request, &manifest, payment_id, timestamp, num_recipients)
+            .await?;
+
+        // 9-10. Update manifest economics and deliver the content
+        self.deliver_query_content(request, manifest, payment_id, timestamp, transaction_id)
+    }
+
+    /// Steps 1-2 of a query: load the manifest and check it may be served to `requester`.
+    fn load_queryable_manifest(
+        &self,
+        requester: &PeerId,
+        hash: &Hash,
+    ) -> OpsResult<nodalync_types::Manifest> {
         // 1. Load manifest
-        let mut manifest = self
+        let manifest = self
             .state
             .manifests
-            .load(&request.hash)?
-            .ok_or(OpsError::ManifestNotFound(request.hash))?;
+            .load(hash)?
+            .ok_or(OpsError::ManifestNotFound(*hash))?;
 
         // 2. Validate access
         if matches!(
@@ -109,243 +140,269 @@ where
 
         // Check access control
         self.validator.validate_access(requester, &manifest)?;
+        Ok(manifest)
+    }
 
+    /// Steps 3-4 of a query: the payment covers the price, and paid content is paid
+    /// through an open channel with a valid payment.
+    fn validate_query_payment(
+        &self,
+        requester: &PeerId,
+        request: &QueryRequestPayload,
+        manifest: &nodalync_types::Manifest,
+    ) -> OpsResult<()> {
         // 3. Validate payment amount
-        if payment_amount < manifest.economics.price {
+        if request.payment.amount < manifest.economics.price {
             return Err(OpsError::PaymentInsufficient);
         }
 
         // 4. Validate payment signature for paid content
         // Payment channels are REQUIRED for paid content queries.
         if manifest.economics.price > 0 {
-            match self.state.channels.get(requester)? {
-                Some(channel) if channel.is_open() => {
-                    // Full payment validation: signature, nonce, amount, provenance
-                    let requester_pubkey = self
-                        .state
-                        .peers
-                        .get(requester)
-                        .ok()
-                        .flatten()
-                        .map(|info| info.public_key)
-                        .filter(|pk| pk.0 != [0u8; 32]);
-
-                    nodalync_valid::validate_payment(
-                        &request.payment,
-                        &channel,
-                        &manifest,
-                        requester_pubkey.as_ref(),
-                        request.payment_nonce,
-                    )
-                    .map_err(|e| OpsError::PaymentValidationFailed(e.to_string()))?;
-
-                    // Verify payment nonce is strictly greater than channel nonce (replay prevention)
-                    if request.payment_nonce <= channel.nonce {
-                        return Err(OpsError::PaymentValidationFailed(format!(
-                            "payment nonce {} must be > channel nonce {}",
-                            request.payment_nonce, channel.nonce
-                        )));
-                    }
-                }
-                Some(_) => {
-                    // Channel exists but not open - require open channel for paid content
-                    return Err(OpsError::ChannelNotOpen);
-                }
-                None => {
-                    // No channel exists - require channel for paid content
-                    tracing::warn!(
-                        requester = %requester,
-                        hash = %request.hash,
-                        price = manifest.economics.price,
-                        "Paid content requested without payment channel"
-                    );
-                    return Err(OpsError::ChannelRequired);
-                }
-            }
+            self.validate_query_channel(requester, request, manifest)?;
         }
+        Ok(())
+    }
 
-        // 5. Update channel state (credit - they pay us)
-        if let Some(mut channel) = self.state.channels.get(requester)? {
-            if channel.is_open() && payment_amount > 0 {
-                // Create payment record
-                let payment_id = content_hash(
-                    &[
-                        request.hash.0.as_slice(),
-                        &timestamp.to_be_bytes(),
-                        &payment_amount.to_be_bytes(),
-                    ]
-                    .concat(),
-                );
-
-                let payment_sig = match self.private_key() {
-                    Some(pk) => {
-                        // Create a temporary payment to compute the signing message
-                        let tmp = Payment::new(
-                            payment_id,
-                            channel.channel_id,
-                            payment_amount,
-                            self.peer_id(),
-                            request.hash,
-                            manifest.provenance.root_l0l1.clone(),
-                            timestamp,
-                            Signature::from_bytes([0u8; 64]),
-                        );
-                        let msg = nodalync_valid::construct_payment_message(&tmp);
-                        nodalync_crypto::sign(pk, &msg)
-                    }
-                    None => Signature::from_bytes([0u8; 64]),
-                };
-                let payment = Payment::new(
-                    payment_id,
-                    channel.channel_id,
-                    payment_amount,
-                    self.peer_id(),
-                    request.hash,
-                    manifest.provenance.root_l0l1.clone(),
-                    timestamp,
-                    payment_sig,
-                );
-
-                // Credit our side (receive payment)
-                channel
-                    .receive(payment.clone(), timestamp)
-                    .map_err(|_| OpsError::InsufficientChannelBalance)?;
-
-                // Update nonce to prevent replay attacks
-                // Set to request nonce to track the highest seen nonce
-                if request.payment_nonce > channel.nonce {
-                    channel.nonce = request.payment_nonce;
-                }
-
-                self.state.channels.update(requester, &channel)?;
-                self.state.channels.add_payment(requester, payment)?;
-            }
-        }
-
-        // 6. Generate payment ID
-        let payment_id =
-            content_hash(&[request.hash.0.as_slice(), &timestamp.to_be_bytes()].concat());
-
-        // 7. Calculate 95/5 distribution (CORE PROTOCOL FEATURE)
-        // - 5% synthesis fee goes to the content owner
-        // - 95% root pool is distributed proportionally to foundational L0/L1 contributors
-        let distributions = distribute_revenue(
-            payment_amount,
-            &manifest.owner,
-            &manifest.provenance.root_l0l1,
-        );
-
-        // Log the distribution split for transparency
-        for dist in &distributions {
-            tracing::debug!(
-                recipient = %dist.recipient,
-                amount = dist.amount,
-                source_hash = %dist.source_hash,
-                "Distribution calculated for settlement"
-            );
-        }
-
-        tracing::info!(
-            payment_id = %payment_id,
-            total_amount = payment_amount,
-            num_recipients = distributions.len(),
-            "95/5 distribution calculated: 5% synthesis fee to owner, 95% to {} root contributors",
-            manifest.provenance.root_l0l1.len()
-        );
-
-        // 8. IMMEDIATE ON-CHAIN SETTLEMENT (required before content delivery)
-        // Content is ONLY delivered after payment is confirmed on-chain.
-        // This ensures trustless operation - no content without verified payment.
-        // The settlement batch includes ALL distributions from the 95/5 split.
-        let transaction_id = if payment_amount > 0 {
-            if let Some(settlement) = self.settlement().cloned() {
-                // Create a single-payment batch for immediate settlement
-                // Note: create_settlement_batch internally calls distribute_revenue
-                // to compute the same 95/5 split for all recipients
-                let settle_sig = match self.private_key() {
-                    Some(pk) => {
-                        let tmp = Payment::new(
-                            payment_id,
-                            Hash([0u8; 32]),
-                            payment_amount,
-                            manifest.owner,
-                            request.hash,
-                            manifest.provenance.root_l0l1.clone(),
-                            timestamp,
-                            Signature::from_bytes([0u8; 64]),
-                        );
-                        let msg = nodalync_valid::construct_payment_message(&tmp);
-                        nodalync_crypto::sign(pk, &msg)
-                    }
-                    None => Signature::from_bytes([0u8; 64]),
-                };
-                let payment = Payment::new(
-                    payment_id,
-                    Hash([0u8; 32]),
-                    payment_amount,
-                    manifest.owner,
-                    request.hash,
-                    manifest.provenance.root_l0l1.clone(),
-                    timestamp,
-                    settle_sig,
-                );
-
-                let batch = nodalync_econ::create_settlement_batch(&[payment]);
-
-                // Submit to chain and WAIT for confirmation (with timeout)
-                let settlement_timeout =
-                    std::time::Duration::from_millis(self.config.settlement_timeout_ms);
-                let settle_result =
-                    tokio::time::timeout(settlement_timeout, settlement.settle_batch(&batch)).await;
-
-                match settle_result {
-                    Ok(Ok(tx_id)) => {
-                        tracing::info!(
-                            payment_id = %payment_id,
-                            tx_id = %tx_id,
-                            amount = payment_amount,
-                            num_recipients = distributions.len(),
-                            hash = %request.hash,
-                            "Payment settled on-chain with 95/5 distribution before content delivery"
-                        );
-                        Some(tx_id.to_string())
-                    }
-                    Ok(Err(e)) => {
-                        tracing::error!(
-                            payment_id = %payment_id,
-                            error = %e,
-                            hash = %request.hash,
-                            "On-chain settlement FAILED - refusing to deliver content"
-                        );
-                        return Err(OpsError::SettlementFailed(format!(
-                            "Payment settlement failed: {}. Content will not be delivered without confirmed payment.",
-                            e
-                        )));
-                    }
-                    Err(_elapsed) => {
-                        tracing::error!(
-                            payment_id = %payment_id,
-                            hash = %request.hash,
-                            timeout_ms = self.config.settlement_timeout_ms,
-                            "On-chain settlement TIMED OUT - refusing to deliver content"
-                        );
-                        return Err(OpsError::SettlementFailed(
-                            "settlement timed out".to_string(),
-                        ));
-                    }
-                }
-            } else {
-                // No settlement configured - cannot process paid queries trustlessly
-                tracing::error!(
+    /// Paid content requires an open channel with `requester` and a valid payment on it.
+    fn validate_query_channel(
+        &self,
+        requester: &PeerId,
+        request: &QueryRequestPayload,
+        manifest: &nodalync_types::Manifest,
+    ) -> OpsResult<()> {
+        match self.state.channels.get(requester)? {
+            Some(channel) if channel.is_open() => validate_channel_payment(
+                request,
+                &channel,
+                manifest,
+                self.known_peer_key(requester),
+            ),
+            // Channel exists but not open - require open channel for paid content
+            Some(_) => Err(OpsError::ChannelNotOpen),
+            None => {
+                // No channel exists - require channel for paid content
+                tracing::warn!(
+                    requester = %requester,
                     hash = %request.hash,
-                    price = payment_amount,
-                    "Paid query received but no settlement configured"
+                    price = manifest.economics.price,
+                    "Paid content requested without payment channel"
                 );
-                return Err(OpsError::SettlementRequired);
+                Err(OpsError::ChannelRequired)
             }
-        } else {
-            None // Free content, no settlement needed
+        }
+    }
+
+    /// The public key we hold for `peer`, if any (an all-zero key counts as unknown).
+    fn known_peer_key(&self, peer: &PeerId) -> Option<nodalync_crypto::PublicKey> {
+        self.state
+            .peers
+            .get(peer)
+            .ok()
+            .flatten()
+            .map(|info| info.public_key)
+            .filter(|pk| pk.0 != [0u8; 32])
+    }
+
+    /// Step 5 of a query: credit a paid query to an open channel with `requester`.
+    fn credit_query_payment(
+        &mut self,
+        requester: &PeerId,
+        request: &QueryRequestPayload,
+        manifest: &nodalync_types::Manifest,
+        timestamp: u64,
+    ) -> OpsResult<()> {
+        let Some(mut channel) = self.state.channels.get(requester)? else {
+            return Ok(());
         };
+        if !channel.is_open() || request.payment.amount == 0 {
+            return Ok(());
+        }
+
+        // Create payment record
+        let payment_id = content_hash(
+            &[
+                request.hash.0.as_slice(),
+                &timestamp.to_be_bytes(),
+                &request.payment.amount.to_be_bytes(),
+            ]
+            .concat(),
+        );
+        let payment = self.signed_payment(Payment::new(
+            payment_id,
+            channel.channel_id,
+            request.payment.amount,
+            self.peer_id(),
+            request.hash,
+            manifest.provenance.root_l0l1.clone(),
+            timestamp,
+            Signature::from_bytes([0u8; 64]),
+        ));
+
+        self.apply_channel_credit(
+            requester,
+            &mut channel,
+            payment,
+            request.payment_nonce,
+            timestamp,
+        )
+    }
+
+    /// Receive `payment` on the channel, raise the channel nonce to the request's nonce
+    /// (replay prevention), and store the channel and the payment.
+    fn apply_channel_credit(
+        &mut self,
+        requester: &PeerId,
+        channel: &mut Channel,
+        payment: Payment,
+        payment_nonce: u64,
+        timestamp: u64,
+    ) -> OpsResult<()> {
+        // Credit our side (receive payment)
+        channel
+            .receive(payment.clone(), timestamp)
+            .map_err(|_| OpsError::InsufficientChannelBalance)?;
+
+        // Update nonce to prevent replay attacks
+        // Set to request nonce to track the highest seen nonce
+        if payment_nonce > channel.nonce {
+            channel.nonce = payment_nonce;
+        }
+
+        self.state.channels.update(requester, channel)?;
+        self.state.channels.add_payment(requester, payment)?;
+        Ok(())
+    }
+
+    /// `payment` signed with our private key, or with a zero signature when we have none.
+    fn signed_payment(&self, mut payment: Payment) -> Payment {
+        if let Some(pk) = self.private_key() {
+            let msg = nodalync_valid::construct_payment_message(&payment);
+            payment.signature = nodalync_crypto::sign(pk, &msg);
+        }
+        payment
+    }
+
+    /// Step 8 of a query: settle a paid query on-chain and wait for confirmation.
+    ///
+    /// Content is ONLY delivered after payment is confirmed on-chain. This ensures
+    /// trustless operation - no content without verified payment. The settlement batch
+    /// includes ALL distributions from the 95/5 split. Free content needs no settlement.
+    async fn settle_query_payment(
+        &self,
+        request: &QueryRequestPayload,
+        manifest: &nodalync_types::Manifest,
+        payment_id: Hash,
+        timestamp: u64,
+        num_recipients: usize,
+    ) -> OpsResult<Option<String>> {
+        let payment_amount = request.payment.amount;
+        if payment_amount == 0 {
+            return Ok(None); // Free content, no settlement needed
+        }
+        let Some(settlement) = self.settlement().cloned() else {
+            // No settlement configured - cannot process paid queries trustlessly
+            tracing::error!(
+                hash = %request.hash,
+                price = payment_amount,
+                "Paid query received but no settlement configured"
+            );
+            return Err(OpsError::SettlementRequired);
+        };
+
+        // Create a single-payment batch for immediate settlement
+        // Note: create_settlement_batch internally calls distribute_revenue
+        // to compute the same 95/5 split for all recipients
+        let payment = self.signed_payment(Payment::new(
+            payment_id,
+            Hash([0u8; 32]),
+            payment_amount,
+            manifest.owner,
+            request.hash,
+            manifest.provenance.root_l0l1.clone(),
+            timestamp,
+            Signature::from_bytes([0u8; 64]),
+        ));
+        let batch = nodalync_econ::create_settlement_batch(&[payment]);
+
+        // Submit to chain and WAIT for confirmation (with timeout)
+        let settlement_timeout =
+            std::time::Duration::from_millis(self.config.settlement_timeout_ms);
+        let settle_result =
+            tokio::time::timeout(settlement_timeout, settlement.settle_batch(&batch)).await;
+
+        let tx_id = self.query_settlement_outcome(
+            settle_result,
+            &payment_id,
+            payment_amount,
+            num_recipients,
+            &request.hash,
+        )?;
+        Ok(Some(tx_id))
+    }
+
+    /// The transaction ID of a confirmed query settlement; a failed or timed-out
+    /// settlement refuses delivery.
+    fn query_settlement_outcome(
+        &self,
+        settle_result: Result<
+            Result<nodalync_settle::TransactionId, nodalync_settle::SettleError>,
+            tokio::time::error::Elapsed,
+        >,
+        payment_id: &Hash,
+        payment_amount: u64,
+        num_recipients: usize,
+        hash: &Hash,
+    ) -> OpsResult<String> {
+        match settle_result {
+            Ok(Ok(tx_id)) => {
+                tracing::info!(
+                    payment_id = %payment_id,
+                    tx_id = %tx_id,
+                    amount = payment_amount,
+                    num_recipients = num_recipients,
+                    hash = %hash,
+                    "Payment settled on-chain with 95/5 distribution before content delivery"
+                );
+                Ok(tx_id.to_string())
+            }
+            Ok(Err(e)) => {
+                tracing::error!(
+                    payment_id = %payment_id,
+                    error = %e,
+                    hash = %hash,
+                    "On-chain settlement FAILED - refusing to deliver content"
+                );
+                Err(OpsError::SettlementFailed(format!(
+                    "Payment settlement failed: {}. Content will not be delivered without confirmed payment.",
+                    e
+                )))
+            }
+            Err(_elapsed) => {
+                tracing::error!(
+                    payment_id = %payment_id,
+                    hash = %hash,
+                    timeout_ms = self.config.settlement_timeout_ms,
+                    "On-chain settlement TIMED OUT - refusing to deliver content"
+                );
+                Err(OpsError::SettlementFailed(
+                    "settlement timed out".to_string(),
+                ))
+            }
+        }
+    }
+
+    /// Steps 9-10 of a query: record the query in the manifest's economics (only after
+    /// successful settlement), then return the content with a signed receipt.
+    fn deliver_query_content(
+        &mut self,
+        request: &QueryRequestPayload,
+        mut manifest: nodalync_types::Manifest,
+        payment_id: Hash,
+        timestamp: u64,
+        transaction_id: Option<String>,
+    ) -> OpsResult<QueryResponsePayload> {
+        let payment_amount = request.payment.amount;
 
         // 9. Update manifest economics (only after successful settlement)
         manifest.economics.record_query(payment_amount);
@@ -359,24 +416,17 @@ where
             .load(&request.hash)?
             .ok_or(OpsError::NotFound(request.hash))?;
 
-        let receipt_sig = match self.private_key() {
-            Some(pk) => {
-                let msg = nodalync_valid::construct_receipt_message(
-                    &payment_id,
-                    payment_amount,
-                    timestamp,
-                    request.payment_nonce,
-                );
-                nodalync_crypto::sign(pk, &msg)
-            }
-            None => Signature::from_bytes([0u8; 64]),
-        };
         let receipt = PaymentReceipt {
             payment_id,
             amount: payment_amount,
             timestamp,
             channel_nonce: request.payment_nonce,
-            distributor_signature: receipt_sig,
+            distributor_signature: self.receipt_signature(
+                &payment_id,
+                payment_amount,
+                timestamp,
+                request.payment_nonce,
+            ),
         };
 
         tracing::info!(
@@ -392,6 +442,28 @@ where
             manifest,
             payment_receipt: receipt,
         })
+    }
+
+    /// Our signature over a payment receipt, or a zero signature when we have no private key.
+    fn receipt_signature(
+        &self,
+        payment_id: &Hash,
+        payment_amount: u64,
+        timestamp: u64,
+        channel_nonce: u64,
+    ) -> Signature {
+        match self.private_key() {
+            Some(pk) => {
+                let msg = nodalync_valid::construct_receipt_message(
+                    payment_id,
+                    payment_amount,
+                    timestamp,
+                    channel_nonce,
+                );
+                nodalync_crypto::sign(pk, &msg)
+            }
+            None => Signature::from_bytes([0u8; 64]),
+        }
     }
 
     /// Handle an incoming version request.
@@ -443,7 +515,6 @@ where
         request: &SearchPayload,
     ) -> OpsResult<SearchResponsePayload> {
         use nodalync_store::ManifestFilter;
-        use nodalync_types::L1Summary;
 
         let query = request.query.to_lowercase();
         let limit = request.limit.min(100);
@@ -455,12 +526,8 @@ where
             .limit(limit);
 
         // Apply content type filter if specified
-        if let Some(ref filters) = request.filters {
-            if let Some(ref content_types) = filters.content_types {
-                if let Some(ct) = content_types.first() {
-                    filter = filter.with_content_type(*ct);
-                }
-            }
+        if let Some(ct) = requested_content_type(request) {
+            filter = filter.with_content_type(ct);
         }
 
         // Search local manifests
@@ -473,48 +540,15 @@ where
             .unwrap_or_default();
 
         // Convert to SearchResult
-        let results: Vec<WireSearchResult> = manifests
+        let mut results: Vec<WireSearchResult> = manifests
             .iter()
-            .map(|m| {
-                // Extract L1 summary if available
-                let l1_summary = self
-                    .extract_l1_summary(&m.hash)
-                    .unwrap_or_else(|_| L1Summary::empty(m.hash));
-
-                // Calculate simple relevance score based on title match
-                let relevance_score = if m.metadata.title.to_lowercase().contains(&query) {
-                    1.0
-                } else {
-                    0.5
-                };
-
-                WireSearchResult {
-                    hash: m.hash,
-                    content_type: m.content_type,
-                    title: m.metadata.title.clone(),
-                    owner: m.owner,
-                    l1_summary,
-                    price: m.economics.price,
-                    total_queries: m.economics.total_queries,
-                    relevance_score,
-                    publisher_addresses: publisher_addresses.clone(),
-                }
-            })
+            .map(|m| self.wire_search_result(m, &query, &publisher_addresses))
             .collect();
 
         // Apply max_price filter if specified
-        let results = if let Some(ref filters) = request.filters {
-            if let Some(max_price) = filters.max_price {
-                results
-                    .into_iter()
-                    .filter(|r| r.price <= max_price)
-                    .collect()
-            } else {
-                results
-            }
-        } else {
-            results
-        };
+        if let Some(max_price) = request.filters.as_ref().and_then(|f| f.max_price) {
+            results.retain(|r| r.price <= max_price);
+        }
 
         let total_count = results.len() as u64;
 
@@ -522,6 +556,39 @@ where
             results,
             total_count,
         })
+    }
+
+    /// A search result for a local manifest, with its L1 summary (empty if extraction
+    /// fails) and a relevance of 1.0 when the title matches `query`, else 0.5.
+    fn wire_search_result(
+        &mut self,
+        m: &nodalync_types::Manifest,
+        query: &str,
+        publisher_addresses: &[String],
+    ) -> WireSearchResult {
+        // Extract L1 summary if available
+        let l1_summary = self
+            .extract_l1_summary(&m.hash)
+            .unwrap_or_else(|_| nodalync_types::L1Summary::empty(m.hash));
+
+        // Calculate simple relevance score based on title match
+        let relevance_score = if m.metadata.title.to_lowercase().contains(query) {
+            1.0
+        } else {
+            0.5
+        };
+
+        WireSearchResult {
+            hash: m.hash,
+            content_type: m.content_type,
+            title: m.metadata.title.clone(),
+            owner: m.owner,
+            l1_summary,
+            price: m.economics.price,
+            total_queries: m.economics.total_queries,
+            relevance_score,
+            publisher_addresses: publisher_addresses.to_vec(),
+        }
     }
 
     /// Handle an incoming channel open request.
@@ -574,62 +641,18 @@ where
         );
 
         // 3. Register peer's Hedera account if provided (enables on-chain channels)
-        if let Some(peer_hedera) = &request.hedera_account {
-            if let Some(settlement) = self.settlement() {
-                if let Ok(account_id) = nodalync_settle::AccountId::from_string(peer_hedera) {
-                    settlement.register_peer_account(requester, account_id);
-                    debug!(
-                        peer = %requester,
-                        hedera_account = %peer_hedera,
-                        "Registered peer's Hedera account from channel open"
-                    );
-                }
-            }
+        if let Some(peer_hedera) =
+            self.register_peer_hedera_account(requester, &request.hedera_account)
+        {
+            debug!(
+                peer = %requester,
+                hedera_account = %peer_hedera,
+                "Registered peer's Hedera account from channel open"
+            );
         }
 
         // 4. Auto-deposit if enabled and needed (SECURITY: gated by config flag)
-        // Only triggers if:
-        // - auto_deposit_on_channel_open is true
-        // - Settlement is configured
-        // - Cooldown has elapsed
-        // - Balance is below threshold
-        if self.config.channel.auto_deposit_on_channel_open {
-            if let Some(settlement) = self.settlement().cloned() {
-                // Check cooldown (SECURITY: prevents rapid deposit spam)
-                if self.can_auto_deposit() {
-                    // Check current contract balance
-                    if let Ok(balance) = settlement.get_balance().await {
-                        if balance < self.config.channel.auto_deposit_min_balance {
-                            // Use fixed deposit amount from config (SECURITY: never derived from peer request)
-                            let deposit_amount = self.config.channel.auto_deposit_amount;
-                            info!(
-                                current_balance = balance,
-                                min_balance = self.config.channel.auto_deposit_min_balance,
-                                deposit_amount = deposit_amount,
-                                "Auto-depositing to settlement contract for channel acceptance"
-                            );
-
-                            match settlement.deposit(deposit_amount).await {
-                                Ok(tx_id) => {
-                                    info!(tx_id = %tx_id, "Auto-deposit successful for channel acceptance");
-                                    // Record the deposit time (SECURITY: sets cooldown)
-                                    self.mark_auto_deposit();
-                                }
-                                Err(e) => {
-                                    warn!(error = %e, "Auto-deposit failed, channel acceptance may fail");
-                                    // Continue anyway - maybe balance is enough for this channel
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    debug!(
-                        cooldown_secs = self.config.channel.auto_deposit_cooldown_secs,
-                        "Auto-deposit skipped due to cooldown"
-                    );
-                }
-            }
-        }
+        self.auto_deposit_for_channel_open().await;
 
         // 5. Create channel state with CAPPED deposit
         // We match the capped deposit, not the original request
@@ -656,6 +679,75 @@ where
         })
     }
 
+    /// Register a peer's Hedera account with the settlement layer (enables on-chain
+    /// channels). Returns the account when it was provided, settlement is configured
+    /// and the account parses.
+    fn register_peer_hedera_account<'a>(
+        &self,
+        peer: &PeerId,
+        hedera_account: &'a Option<String>,
+    ) -> Option<&'a str> {
+        let peer_hedera = hedera_account.as_deref()?;
+        let settlement = self.settlement()?;
+        let account_id = nodalync_settle::AccountId::from_string(peer_hedera).ok()?;
+        settlement.register_peer_account(peer, account_id);
+        Some(peer_hedera)
+    }
+
+    /// Auto-deposit to the settlement contract when accepting a channel.
+    ///
+    /// Only triggers if:
+    /// - auto_deposit_on_channel_open is true
+    /// - Settlement is configured
+    /// - Cooldown has elapsed
+    /// - Balance is below threshold
+    ///
+    /// A failed deposit is logged; channel acceptance continues.
+    async fn auto_deposit_for_channel_open(&mut self) {
+        if !self.config.channel.auto_deposit_on_channel_open {
+            return;
+        }
+        let Some(settlement) = self.settlement().cloned() else {
+            return;
+        };
+        // Check cooldown (SECURITY: prevents rapid deposit spam)
+        if !self.can_auto_deposit() {
+            debug!(
+                cooldown_secs = self.config.channel.auto_deposit_cooldown_secs,
+                "Auto-deposit skipped due to cooldown"
+            );
+            return;
+        }
+        // Check current contract balance
+        let Ok(balance) = settlement.get_balance().await else {
+            return;
+        };
+        if balance >= self.config.channel.auto_deposit_min_balance {
+            return;
+        }
+
+        // Use fixed deposit amount from config (SECURITY: never derived from peer request)
+        let deposit_amount = self.config.channel.auto_deposit_amount;
+        info!(
+            current_balance = balance,
+            min_balance = self.config.channel.auto_deposit_min_balance,
+            deposit_amount = deposit_amount,
+            "Auto-depositing to settlement contract for channel acceptance"
+        );
+
+        match settlement.deposit(deposit_amount).await {
+            Ok(tx_id) => {
+                info!(tx_id = %tx_id, "Auto-deposit successful for channel acceptance");
+                // Record the deposit time (SECURITY: sets cooldown)
+                self.mark_auto_deposit();
+            }
+            Err(e) => {
+                warn!(error = %e, "Auto-deposit failed, channel acceptance may fail");
+                // Continue anyway - maybe balance is enough for this channel
+            }
+        }
+    }
+
     /// Handle an incoming channel accept response.
     ///
     /// Transitions channel from Opening to Open when peer accepts.
@@ -669,11 +761,7 @@ where
         let timestamp = current_timestamp();
 
         // Get the channel we opened with this peer
-        let mut channel = self
-            .state
-            .channels
-            .get(peer)?
-            .ok_or(OpsError::ChannelNotFound)?;
+        let mut channel = self.load_channel(peer)?;
 
         // Verify the channel ID matches
         if channel.channel_id != response.channel_id {
@@ -689,17 +777,13 @@ where
         }
 
         // Register peer's Hedera account if provided (enables on-chain channels)
-        if let Some(peer_hedera) = &response.hedera_account {
-            if let Some(settlement) = self.settlement() {
-                if let Ok(account_id) = nodalync_settle::AccountId::from_string(peer_hedera) {
-                    settlement.register_peer_account(peer, account_id);
-                    debug!(
-                        peer = %peer,
-                        hedera_account = %peer_hedera,
-                        "Registered peer's Hedera account from channel accept"
-                    );
-                }
-            }
+        if let Some(peer_hedera) = self.register_peer_hedera_account(peer, &response.hedera_account)
+        {
+            debug!(
+                peer = %peer,
+                hedera_account = %peer_hedera,
+                "Registered peer's Hedera account from channel accept"
+            );
         }
 
         // Transition to Open state with their deposit
@@ -732,107 +816,20 @@ where
         private_key: &PrivateKey,
     ) -> OpsResult<ChannelCloseAckPayload> {
         use nodalync_types::PendingClose;
-        use nodalync_valid::{sign_channel_close, verify_channel_close_signature};
+        use nodalync_valid::sign_channel_close;
 
         let timestamp = current_timestamp();
 
-        // 1. Verify channel exists
-        let mut channel = self
-            .state
-            .channels
-            .get(requester)?
-            .ok_or(OpsError::ChannelNotFound)?;
-
-        // Verify channel ID matches
-        if channel.channel_id != request.channel_id {
-            return Err(OpsError::invalid_operation("channel ID mismatch"));
-        }
-
-        // Cannot close already closed channel
-        if channel.is_closed() {
-            return Err(OpsError::invalid_operation("channel already closed"));
-        }
-
-        // Cannot close if already disputing
-        if channel.pending_dispute.is_some() {
-            return Err(OpsError::invalid_operation("channel has pending dispute"));
-        }
+        // 1. Verify channel exists, and that this close request applies to it
+        let mut channel = self.load_channel(requester)?;
+        ensure_close_request_applies(&channel, request)?;
 
         // 2. Verify initiator's signature using peer key registry
         // Soft-fail: if peer key is unknown, skip verification (consistent with C1/C2)
-        let requester_pubkey = self
-            .state
-            .peers
-            .get(requester)
-            .ok()
-            .flatten()
-            .map(|info| info.public_key)
-            .filter(|pk| pk.0 != [0u8; 32]);
+        verify_close_request_signature(requester, request, self.known_peer_key(requester))?;
 
-        if let Some(pubkey) = requester_pubkey {
-            let valid = verify_channel_close_signature(
-                &pubkey,
-                &request.channel_id,
-                request.nonce,
-                request.final_balances.initiator,
-                request.final_balances.responder,
-                &request.initiator_signature,
-            );
-            if !valid {
-                return Err(OpsError::invalid_operation(
-                    "invalid initiator signature on close request",
-                ));
-            }
-        } else {
-            tracing::debug!(
-                requester = %requester,
-                "No public key for close requester - skipping signature verification"
-            );
-        }
-
-        // 3. Verify proposed balances match our local state
-        // Note: From our perspective as responder:
-        // - Their initiator_balance is what THEY think they should get
-        // - Their responder_balance is what WE should get (from their POV)
-        //
-        // From our local channel state:
-        // - their_balance is what THEY have
-        // - my_balance is what WE have
-        //
-        // So: initiator_balance should == their_balance (what they have)
-        //     responder_balance should == my_balance (what we have)
-        if request.final_balances.initiator != channel.their_balance
-            || request.final_balances.responder != channel.my_balance
-        {
-            tracing::warn!(
-                channel_id = %channel.channel_id,
-                proposed_initiator = request.final_balances.initiator,
-                proposed_responder = request.final_balances.responder,
-                our_their_balance = channel.their_balance,
-                our_my_balance = channel.my_balance,
-                "Close request balances don't match local state"
-            );
-            return Err(OpsError::invalid_operation(
-                "proposed balances don't match local state",
-            ));
-        }
-
-        // Verify nonce matches
-        if request.nonce != channel.nonce {
-            tracing::warn!(
-                channel_id = %channel.channel_id,
-                proposed_nonce = request.nonce,
-                our_nonce = channel.nonce,
-                "Close request nonce doesn't match"
-            );
-            // We allow closing with a higher nonce (they may have payments we haven't seen yet)
-            // but not a lower nonce (potential replay attack)
-            if request.nonce < channel.nonce {
-                return Err(OpsError::invalid_operation(
-                    "proposed nonce is lower than local state",
-                ));
-            }
-        }
+        // 3. Verify proposed balances and nonce match our local state
+        verify_close_request_state(&channel, request)?;
 
         // 4. Sign the close message as responder
         // We sign with the same parameters they sent (after validation)
@@ -938,251 +935,407 @@ where
     ) -> OpsResult<Option<(MessageType, Vec<u8>)>> {
         match event {
             NetworkEvent::InboundRequest { peer, data, .. } => {
-                // First decode the full wire message (header + payload + signature)
-                let message = match decode_message(&data) {
-                    Ok(msg) => msg,
-                    Err(e) => {
-                        debug!(
-                            "Failed to decode message: {}, data length: {}",
-                            e,
-                            data.len()
-                        );
-                        return Ok(None);
-                    }
-                };
-
-                debug!(
-                    "Received message type {:?} from peer {}, sender {:?}, payload length: {}",
-                    message.message_type,
-                    peer,
-                    message.sender,
-                    message.payload.len()
-                );
-
-                // SECURITY: Verify message signature before trusting sender identity.
-                let sender_pubkey = self
-                    .state
-                    .peers
-                    .get(&message.sender)
-                    .ok()
-                    .flatten()
-                    .map(|info| info.public_key)
-                    .filter(|pk| pk.0 != [0u8; 32]);
-
-                if let Some(pubkey) = &sender_pubkey {
-                    if !nodalync_wire::verify_message_signature(&message, pubkey) {
-                        tracing::warn!(
-                            sender = %message.sender,
-                            msg_type = ?message.message_type,
-                            "Message signature verification FAILED - rejecting"
-                        );
-                        return Ok(None);
-                    }
-                } else {
-                    // Peer key not yet known — soft-fail during bootstrap.
-                    tracing::debug!(
-                        sender = %message.sender,
-                        "No public key for sender - skipping signature verification"
-                    );
-                }
-
-                let nodalync_peer = message.sender;
-
-                // Handle the request based on message type
-                match message.message_type {
-                    MessageType::PreviewRequest => {
-                        let request: PreviewRequestPayload = decode_payload(&message.payload)
-                            .map_err(|e| {
-                                OpsError::invalid_operation(format!("decode error: {}", e))
-                            })?;
-                        debug!("Received preview request for hash: {}", request.hash);
-                        let response = self.handle_preview_request(&nodalync_peer, &request)?;
-                        let response_bytes =
-                            nodalync_wire::encode_payload(&response).map_err(|e| {
-                                OpsError::invalid_operation(format!("encoding error: {}", e))
-                            })?;
-                        Ok(Some((MessageType::PreviewResponse, response_bytes)))
-                    }
-                    MessageType::QueryRequest => {
-                        let request: QueryRequestPayload = decode_payload(&message.payload)
-                            .map_err(|e| {
-                                OpsError::invalid_operation(format!("decode error: {}", e))
-                            })?;
-                        debug!("Received query request for hash: {}", request.hash);
-
-                        // Handle query request and convert errors to QueryError responses
-                        match self.handle_query_request(&nodalync_peer, &request).await {
-                            Ok(response) => {
-                                let response_bytes = nodalync_wire::encode_payload(&response)
-                                    .map_err(|e| {
-                                        OpsError::invalid_operation(format!(
-                                            "encoding error: {}",
-                                            e
-                                        ))
-                                    })?;
-                                Ok(Some((MessageType::QueryResponse, response_bytes)))
-                            }
-                            Err(OpsError::ChannelRequired) => {
-                                // Return QueryError with our peer IDs so client can open channel
-                                use nodalync_wire::QueryErrorPayload;
-                                let error_payload = QueryErrorPayload {
-                                    hash: request.hash,
-                                    error_code: nodalync_types::ErrorCode::ChannelNotFound,
-                                    message: Some(
-                                        "Payment channel required for paid content".to_string(),
-                                    ),
-                                    required_channel_peer_id: Some(self.peer_id()),
-                                    required_channel_libp2p_peer: self
-                                        .network()
-                                        .map(|n| n.local_peer_id().to_string()),
-                                };
-                                info!(
-                                    requester = %nodalync_peer,
-                                    our_peer_id = %self.peer_id(),
-                                    "Returning ChannelRequired error with peer info"
-                                );
-                                let error_bytes = nodalync_wire::encode_payload(&error_payload)
-                                    .map_err(|e| {
-                                        OpsError::invalid_operation(format!(
-                                            "encoding error: {}",
-                                            e
-                                        ))
-                                    })?;
-                                Ok(Some((MessageType::QueryError, error_bytes)))
-                            }
-                            Err(e) => {
-                                // For other errors, return QueryError without peer info
-                                use nodalync_wire::QueryErrorPayload;
-                                let error_payload = QueryErrorPayload {
-                                    hash: request.hash,
-                                    error_code: e.error_code(),
-                                    message: Some(e.to_string()),
-                                    required_channel_peer_id: None,
-                                    required_channel_libp2p_peer: None,
-                                };
-                                let error_bytes = nodalync_wire::encode_payload(&error_payload)
-                                    .map_err(|e| {
-                                        OpsError::invalid_operation(format!(
-                                            "encoding error: {}",
-                                            e
-                                        ))
-                                    })?;
-                                Ok(Some((MessageType::QueryError, error_bytes)))
-                            }
-                        }
-                    }
-                    MessageType::VersionRequest => {
-                        let request: VersionRequestPayload = decode_payload(&message.payload)
-                            .map_err(|e| {
-                                OpsError::invalid_operation(format!("decode error: {}", e))
-                            })?;
-                        debug!(
-                            "Received version request for root: {}",
-                            request.version_root
-                        );
-                        let response = self.handle_version_request(&nodalync_peer, &request)?;
-                        let response_bytes =
-                            nodalync_wire::encode_payload(&response).map_err(|e| {
-                                OpsError::invalid_operation(format!("encoding error: {}", e))
-                            })?;
-                        Ok(Some((MessageType::VersionResponse, response_bytes)))
-                    }
-                    MessageType::ChannelOpen => {
-                        let request: ChannelOpenPayload = decode_payload(&message.payload)
-                            .map_err(|e| {
-                                OpsError::invalid_operation(format!("decode error: {}", e))
-                            })?;
-                        debug!("Received channel open request");
-                        let response = self.handle_channel_open(&nodalync_peer, &request).await?;
-                        let response_bytes =
-                            nodalync_wire::encode_payload(&response).map_err(|e| {
-                                OpsError::invalid_operation(format!("encoding error: {}", e))
-                            })?;
-                        Ok(Some((MessageType::ChannelAccept, response_bytes)))
-                    }
-                    MessageType::ChannelClose => {
-                        let request: ChannelClosePayload = decode_payload(&message.payload)
-                            .map_err(|e| {
-                                OpsError::invalid_operation(format!("decode error: {}", e))
-                            })?;
-                        debug!("Received channel close request");
-
-                        match self.private_key().cloned() {
-                            Some(pk) => {
-                                let ack = self.handle_channel_close_request(
-                                    &nodalync_peer,
-                                    &request,
-                                    &pk,
-                                )?;
-                                let response_bytes =
-                                    nodalync_wire::encode_payload(&ack).map_err(|e| {
-                                        OpsError::invalid_operation(format!(
-                                            "encoding error: {}",
-                                            e
-                                        ))
-                                    })?;
-                                Ok(Some((MessageType::ChannelCloseAck, response_bytes)))
-                            }
-                            None => Err(OpsError::invalid_operation(
-                                "private key required for channel close",
-                            )),
-                        }
-                    }
-                    MessageType::ChannelCloseAck => {
-                        // This is handled by the initiator when they receive the response
-                        // No action needed here as it's processed in close_payment_channel()
-                        debug!("Received channel close ack (handled by initiator)");
-                        Ok(None)
-                    }
-                    MessageType::ChannelAccept => {
-                        let response: ChannelAcceptPayload = decode_payload(&message.payload)
-                            .map_err(|e| {
-                                OpsError::invalid_operation(format!("decode error: {}", e))
-                            })?;
-                        debug!("Received channel accept response");
-                        self.handle_channel_accept(&nodalync_peer, &response)?;
-                        Ok(None) // No response needed for accept
-                    }
-                    MessageType::Search => {
-                        let request: SearchPayload =
-                            decode_payload(&message.payload).map_err(|e| {
-                                OpsError::invalid_operation(format!("decode error: {}", e))
-                            })?;
-                        debug!("Received search request for query: {}", request.query);
-                        let response = self.handle_search_request(&nodalync_peer, &request)?;
-                        let response_bytes =
-                            nodalync_wire::encode_payload(&response).map_err(|e| {
-                                OpsError::invalid_operation(format!("encoding error: {}", e))
-                            })?;
-                        Ok(Some((MessageType::SearchResponse, response_bytes)))
-                    }
-                    _ => {
-                        debug!("Unhandled message type: {:?}", message.message_type);
-                        Ok(None)
-                    }
-                }
-            }
-            NetworkEvent::PeerConnected { peer } => {
-                // Log peer connection (could track connected peers in state)
-                let _ = peer;
-                Ok(None)
-            }
-            NetworkEvent::PeerDisconnected { peer } => {
-                // Log peer disconnection
-                let _ = peer;
-                Ok(None)
+                self.handle_inbound_request(&peer, &data).await
             }
             NetworkEvent::BroadcastReceived { topic, data } => {
                 // Handle content announcements from GossipSub
                 self.handle_broadcast_announcement(&topic, &data)?;
                 Ok(None)
             }
+            // Peer connections and other events don't require action from ops layer
+            _ => Ok(None),
+        }
+    }
+
+    /// Decode and authenticate an inbound request, then dispatch it by message type.
+    /// Undecodable messages and messages with a bad signature get no response.
+    async fn handle_inbound_request(
+        &mut self,
+        peer: &nodalync_net::PeerId,
+        data: &[u8],
+    ) -> OpsResult<Option<(MessageType, Vec<u8>)>> {
+        // First decode the full wire message (header + payload + signature)
+        let message = match decode_message(data) {
+            Ok(msg) => msg,
+            Err(e) => {
+                debug!(
+                    "Failed to decode message: {}, data length: {}",
+                    e,
+                    data.len()
+                );
+                return Ok(None);
+            }
+        };
+
+        debug!(
+            "Received message type {:?} from peer {}, sender {:?}, payload length: {}",
+            message.message_type,
+            peer,
+            message.sender,
+            message.payload.len()
+        );
+
+        // SECURITY: Verify message signature before trusting sender identity.
+        if !self.sender_signature_acceptable(&message) {
+            return Ok(None);
+        }
+
+        self.dispatch_request(&message).await
+    }
+
+    /// Whether a message's signature verifies against the sender's known key.
+    /// While the sender's key is not yet known (bootstrap), verification is skipped.
+    fn sender_signature_acceptable(&self, message: &nodalync_wire::Message) -> bool {
+        let Some(pubkey) = self.known_peer_key(&message.sender) else {
+            // Peer key not yet known — soft-fail during bootstrap.
+            tracing::debug!(
+                sender = %message.sender,
+                "No public key for sender - skipping signature verification"
+            );
+            return true;
+        };
+        if !nodalync_wire::verify_message_signature(message, &pubkey) {
+            tracing::warn!(
+                sender = %message.sender,
+                msg_type = ?message.message_type,
+                "Message signature verification FAILED - rejecting"
+            );
+            return false;
+        }
+        true
+    }
+
+    /// Handle the request based on message type.
+    async fn dispatch_request(
+        &mut self,
+        message: &nodalync_wire::Message,
+    ) -> OpsResult<Option<(MessageType, Vec<u8>)>> {
+        let nodalync_peer = message.sender;
+        let payload = &message.payload;
+        match message.message_type {
+            MessageType::PreviewRequest => self.on_preview_request(&nodalync_peer, payload),
+            MessageType::QueryRequest => self.on_query_request(&nodalync_peer, payload).await,
+            MessageType::VersionRequest => self.on_version_request(&nodalync_peer, payload),
+            MessageType::ChannelOpen => self.on_channel_open(&nodalync_peer, payload).await,
+            MessageType::ChannelClose => self.on_channel_close(&nodalync_peer, payload),
+            MessageType::ChannelCloseAck => {
+                // This is handled by the initiator when they receive the response
+                // No action needed here as it's processed in close_payment_channel()
+                debug!("Received channel close ack (handled by initiator)");
+                Ok(None)
+            }
+            MessageType::ChannelAccept => self.on_channel_accept(&nodalync_peer, payload),
+            MessageType::Search => self.on_search_request(&nodalync_peer, payload),
             _ => {
-                // Other events don't require action from ops layer
+                debug!("Unhandled message type: {:?}", message.message_type);
                 Ok(None)
             }
         }
     }
+
+    fn on_preview_request(
+        &mut self,
+        nodalync_peer: &PeerId,
+        payload: &[u8],
+    ) -> OpsResult<Option<(MessageType, Vec<u8>)>> {
+        let request: PreviewRequestPayload = decode_request(payload)?;
+        debug!("Received preview request for hash: {}", request.hash);
+        let response = self.handle_preview_request(nodalync_peer, &request)?;
+        encode_response(MessageType::PreviewResponse, &response)
+    }
+
+    /// Handle a query request, converting errors to QueryError responses.
+    async fn on_query_request(
+        &mut self,
+        nodalync_peer: &PeerId,
+        payload: &[u8],
+    ) -> OpsResult<Option<(MessageType, Vec<u8>)>> {
+        let request: QueryRequestPayload = decode_request(payload)?;
+        debug!("Received query request for hash: {}", request.hash);
+
+        match self.handle_query_request(nodalync_peer, &request).await {
+            Ok(response) => encode_response(MessageType::QueryResponse, &response),
+            Err(OpsError::ChannelRequired) => {
+                // Return QueryError with our peer IDs so client can open channel
+                let error_payload = self.channel_required_error(nodalync_peer, request.hash);
+                encode_response(MessageType::QueryError, &error_payload)
+            }
+            Err(e) => {
+                // For other errors, return QueryError without peer info
+                let error_payload = nodalync_wire::QueryErrorPayload {
+                    hash: request.hash,
+                    error_code: e.error_code(),
+                    message: Some(e.to_string()),
+                    required_channel_peer_id: None,
+                    required_channel_libp2p_peer: None,
+                };
+                encode_response(MessageType::QueryError, &error_payload)
+            }
+        }
+    }
+
+    /// The QueryError telling a requester to open a channel with us, with our peer IDs.
+    fn channel_required_error(
+        &self,
+        requester: &PeerId,
+        hash: Hash,
+    ) -> nodalync_wire::QueryErrorPayload {
+        let error_payload = nodalync_wire::QueryErrorPayload {
+            hash,
+            error_code: nodalync_types::ErrorCode::ChannelNotFound,
+            message: Some("Payment channel required for paid content".to_string()),
+            required_channel_peer_id: Some(self.peer_id()),
+            required_channel_libp2p_peer: self.network().map(|n| n.local_peer_id().to_string()),
+        };
+        info!(
+            requester = %requester,
+            our_peer_id = %self.peer_id(),
+            "Returning ChannelRequired error with peer info"
+        );
+        error_payload
+    }
+
+    fn on_version_request(
+        &mut self,
+        nodalync_peer: &PeerId,
+        payload: &[u8],
+    ) -> OpsResult<Option<(MessageType, Vec<u8>)>> {
+        let request: VersionRequestPayload = decode_request(payload)?;
+        debug!(
+            "Received version request for root: {}",
+            request.version_root
+        );
+        let response = self.handle_version_request(nodalync_peer, &request)?;
+        encode_response(MessageType::VersionResponse, &response)
+    }
+
+    async fn on_channel_open(
+        &mut self,
+        nodalync_peer: &PeerId,
+        payload: &[u8],
+    ) -> OpsResult<Option<(MessageType, Vec<u8>)>> {
+        let request: ChannelOpenPayload = decode_request(payload)?;
+        debug!("Received channel open request");
+        let response = self.handle_channel_open(nodalync_peer, &request).await?;
+        encode_response(MessageType::ChannelAccept, &response)
+    }
+
+    fn on_channel_close(
+        &mut self,
+        nodalync_peer: &PeerId,
+        payload: &[u8],
+    ) -> OpsResult<Option<(MessageType, Vec<u8>)>> {
+        let request: ChannelClosePayload = decode_request(payload)?;
+        debug!("Received channel close request");
+
+        let Some(pk) = self.private_key().cloned() else {
+            return Err(OpsError::invalid_operation(
+                "private key required for channel close",
+            ));
+        };
+        let ack = self.handle_channel_close_request(nodalync_peer, &request, &pk)?;
+        encode_response(MessageType::ChannelCloseAck, &ack)
+    }
+
+    fn on_channel_accept(
+        &mut self,
+        nodalync_peer: &PeerId,
+        payload: &[u8],
+    ) -> OpsResult<Option<(MessageType, Vec<u8>)>> {
+        let response: ChannelAcceptPayload = decode_request(payload)?;
+        debug!("Received channel accept response");
+        self.handle_channel_accept(nodalync_peer, &response)?;
+        Ok(None) // No response needed for accept
+    }
+
+    fn on_search_request(
+        &mut self,
+        nodalync_peer: &PeerId,
+        payload: &[u8],
+    ) -> OpsResult<Option<(MessageType, Vec<u8>)>> {
+        let request: SearchPayload = decode_request(payload)?;
+        debug!("Received search request for query: {}", request.query);
+        let response = self.handle_search_request(nodalync_peer, &request)?;
+        encode_response(MessageType::SearchResponse, &response)
+    }
+}
+
+/// Decode a request payload, reporting failure as an invalid operation.
+fn decode_request<T: serde::de::DeserializeOwned>(payload: &[u8]) -> OpsResult<T> {
+    decode_payload(payload).map_err(|e| OpsError::invalid_operation(format!("decode error: {}", e)))
+}
+
+/// Encode a response payload to send back as `message_type`.
+fn encode_response<T: serde::Serialize>(
+    message_type: MessageType,
+    response: &T,
+) -> OpsResult<Option<(MessageType, Vec<u8>)>> {
+    let bytes = nodalync_wire::encode_payload(response)
+        .map_err(|e| OpsError::invalid_operation(format!("encoding error: {}", e)))?;
+    Ok(Some((message_type, bytes)))
+}
+
+/// Full payment validation on an open channel: signature, nonce, amount, provenance,
+/// and a payment nonce strictly greater than the channel's (replay prevention).
+fn validate_channel_payment(
+    request: &QueryRequestPayload,
+    channel: &Channel,
+    manifest: &nodalync_types::Manifest,
+    requester_pubkey: Option<nodalync_crypto::PublicKey>,
+) -> OpsResult<()> {
+    nodalync_valid::validate_payment(
+        &request.payment,
+        channel,
+        manifest,
+        requester_pubkey.as_ref(),
+        request.payment_nonce,
+    )
+    .map_err(|e| OpsError::PaymentValidationFailed(e.to_string()))?;
+
+    // Verify payment nonce is strictly greater than channel nonce (replay prevention)
+    if request.payment_nonce <= channel.nonce {
+        return Err(OpsError::PaymentValidationFailed(format!(
+            "payment nonce {} must be > channel nonce {}",
+            request.payment_nonce, channel.nonce
+        )));
+    }
+    Ok(())
+}
+
+/// Calculate the 95/5 distribution (CORE PROTOCOL FEATURE) and log it for transparency:
+/// - 5% synthesis fee goes to the content owner
+/// - 95% root pool is distributed proportionally to foundational L0/L1 contributors
+///
+/// Returns the number of recipients.
+fn log_revenue_distribution(
+    payment_amount: u64,
+    manifest: &nodalync_types::Manifest,
+    payment_id: &Hash,
+) -> usize {
+    let distributions = distribute_revenue(
+        payment_amount,
+        &manifest.owner,
+        &manifest.provenance.root_l0l1,
+    );
+
+    // Log the distribution split for transparency
+    for dist in &distributions {
+        tracing::debug!(
+            recipient = %dist.recipient,
+            amount = dist.amount,
+            source_hash = %dist.source_hash,
+            "Distribution calculated for settlement"
+        );
+    }
+
+    tracing::info!(
+        payment_id = %payment_id,
+        total_amount = payment_amount,
+        num_recipients = distributions.len(),
+        "95/5 distribution calculated: 5% synthesis fee to owner, 95% to {} root contributors",
+        manifest.provenance.root_l0l1.len()
+    );
+    distributions.len()
+}
+
+/// The content type a search asks for: the first listed in its filters, if any.
+fn requested_content_type(request: &SearchPayload) -> Option<nodalync_types::ContentType> {
+    request
+        .filters
+        .as_ref()?
+        .content_types
+        .as_ref()?
+        .first()
+        .copied()
+}
+
+/// A close request applies to an open, undisputed channel with the same ID.
+fn ensure_close_request_applies(channel: &Channel, request: &ChannelClosePayload) -> OpsResult<()> {
+    // Verify channel ID matches
+    if channel.channel_id != request.channel_id {
+        return Err(OpsError::invalid_operation("channel ID mismatch"));
+    }
+
+    // Cannot close already closed channel
+    if channel.is_closed() {
+        return Err(OpsError::invalid_operation("channel already closed"));
+    }
+
+    // Cannot close if already disputing
+    if channel.pending_dispute.is_some() {
+        return Err(OpsError::invalid_operation("channel has pending dispute"));
+    }
+    Ok(())
+}
+
+/// Verify the initiator's signature on a close request when their key is known;
+/// with no known key, verification is skipped.
+fn verify_close_request_signature(
+    requester: &PeerId,
+    request: &ChannelClosePayload,
+    requester_pubkey: Option<nodalync_crypto::PublicKey>,
+) -> OpsResult<()> {
+    let Some(pubkey) = requester_pubkey else {
+        tracing::debug!(
+            requester = %requester,
+            "No public key for close requester - skipping signature verification"
+        );
+        return Ok(());
+    };
+    let valid = nodalync_valid::verify_channel_close_signature(
+        &pubkey,
+        &request.channel_id,
+        request.nonce,
+        request.final_balances.initiator,
+        request.final_balances.responder,
+        &request.initiator_signature,
+    );
+    if !valid {
+        return Err(OpsError::invalid_operation(
+            "invalid initiator signature on close request",
+        ));
+    }
+    Ok(())
+}
+
+/// Verify proposed balances match our local state, and the nonce is not lower than ours.
+///
+/// From our perspective as responder, the initiator's balance should equal what
+/// THEY have (their_balance) and the responder's balance what WE have (my_balance).
+/// A higher nonce is allowed (they may have payments we haven't seen yet), a lower
+/// one is not (potential replay attack).
+fn verify_close_request_state(channel: &Channel, request: &ChannelClosePayload) -> OpsResult<()> {
+    if request.final_balances.initiator != channel.their_balance
+        || request.final_balances.responder != channel.my_balance
+    {
+        tracing::warn!(
+            channel_id = %channel.channel_id,
+            proposed_initiator = request.final_balances.initiator,
+            proposed_responder = request.final_balances.responder,
+            our_their_balance = channel.their_balance,
+            our_my_balance = channel.my_balance,
+            "Close request balances don't match local state"
+        );
+        return Err(OpsError::invalid_operation(
+            "proposed balances don't match local state",
+        ));
+    }
+
+    // Verify nonce matches
+    if request.nonce != channel.nonce {
+        tracing::warn!(
+            channel_id = %channel.channel_id,
+            proposed_nonce = request.nonce,
+            our_nonce = channel.nonce,
+            "Close request nonce doesn't match"
+        );
+        if request.nonce < channel.nonce {
+            return Err(OpsError::invalid_operation(
+                "proposed nonce is lower than local state",
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1835,6 +1988,63 @@ mod tests {
             "Should find at least one matching result"
         );
         assert!(response.results.iter().any(|r| r.hash == hash));
+    }
+
+    #[test]
+    fn test_close_request_state_checks() {
+        let mut channel = Channel::accepted(content_hash(b"ch"), test_peer_id(), 70, 30, 1000);
+        channel.nonce = 5;
+        let request = |initiator, responder, nonce| ChannelClosePayload {
+            channel_id: channel.channel_id,
+            nonce,
+            final_balances: ChannelBalances::new(initiator, responder),
+            initiator_signature: Signature::from_bytes([0u8; 64]),
+        };
+
+        // initiator balance is their_balance, responder balance is my_balance
+        assert!(verify_close_request_state(&channel, &request(70, 30, 5)).is_ok());
+        // A higher nonce is allowed (payments we haven't seen yet), a lower one is not.
+        assert!(verify_close_request_state(&channel, &request(70, 30, 6)).is_ok());
+        assert!(verify_close_request_state(&channel, &request(70, 30, 4)).is_err());
+        assert!(verify_close_request_state(&channel, &request(30, 70, 5)).is_err());
+
+        assert!(ensure_close_request_applies(&channel, &request(70, 30, 5)).is_ok());
+        let mut other = request(70, 30, 5);
+        other.channel_id = content_hash(b"other");
+        assert!(ensure_close_request_applies(&channel, &other).is_err());
+        // Unknown requester key: signature verification is skipped.
+        assert!(verify_close_request_signature(&test_peer_id(), &other, None).is_ok());
+    }
+
+    #[test]
+    fn test_requested_content_type_uses_first_filter() {
+        let mut request = SearchPayload {
+            query: "x".to_string(),
+            filters: None,
+            limit: 10,
+            offset: 0,
+        };
+        assert_eq!(requested_content_type(&request), None);
+        request.filters = Some(nodalync_wire::SearchFilters {
+            content_types: Some(vec![
+                nodalync_types::ContentType::L3,
+                nodalync_types::ContentType::L0,
+            ]),
+            ..Default::default()
+        });
+        assert_eq!(
+            requested_content_type(&request),
+            Some(nodalync_types::ContentType::L3)
+        );
+    }
+
+    #[test]
+    fn test_decode_request_reports_decode_error() {
+        let result: OpsResult<SearchPayload> = decode_request(&[0xff, 0x00]);
+        match result {
+            Err(OpsError::InvalidOperation(msg)) => assert!(msg.starts_with("decode error: ")),
+            other => panic!("expected decode error, got {:?}", other.map(|_| ())),
+        }
     }
 
     #[test]

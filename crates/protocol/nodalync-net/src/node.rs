@@ -346,39 +346,7 @@ impl NetworkNode {
 
         // Add bootstrap nodes to the routing table AND dial them
         for (peer_id, addr) in &self.config.bootstrap_nodes {
-            tracing::info!("Adding bootstrap node {} at {}", peer_id, addr);
-
-            // Add address to Kademlia routing table
-            self.command_tx
-                .send(SwarmCommand::AddAddress {
-                    peer: *peer_id,
-                    addr: addr.clone(),
-                })
-                .await
-                .map_err(|_| NetworkError::ChannelClosed)?;
-
-            // Actually dial the bootstrap node
-            let (tx, rx) = oneshot::channel();
-            self.command_tx
-                .send(SwarmCommand::Dial {
-                    addr: addr.clone(),
-                    response: tx,
-                })
-                .await
-                .map_err(|_| NetworkError::ChannelClosed)?;
-
-            // Wait for dial to complete (or fail)
-            match rx.await {
-                Ok(Ok(())) => {
-                    tracing::info!("Successfully dialed bootstrap node {}", peer_id);
-                }
-                Ok(Err(e)) => {
-                    tracing::warn!("Failed to dial bootstrap node {}: {}", peer_id, e);
-                }
-                Err(_) => {
-                    tracing::warn!("Dial channel closed for bootstrap node {}", peer_id);
-                }
-            }
+            self.add_and_dial_bootstrap_node(peer_id, addr).await?;
         }
 
         // Wait for connections to establish and routing table to populate
@@ -403,6 +371,51 @@ impl NetworkNode {
         );
 
         bootstrap_result
+    }
+
+    /// Add one bootstrap node to the Kademlia routing table and dial it.
+    ///
+    /// A failed dial is logged, not returned: bootstrap carries on with the other nodes.
+    /// Only a closed command channel is an error.
+    async fn add_and_dial_bootstrap_node(
+        &self,
+        peer_id: &libp2p::PeerId,
+        addr: &Multiaddr,
+    ) -> NetworkResult<()> {
+        tracing::info!("Adding bootstrap node {} at {}", peer_id, addr);
+
+        // Add address to Kademlia routing table
+        self.command_tx
+            .send(SwarmCommand::AddAddress {
+                peer: *peer_id,
+                addr: addr.clone(),
+            })
+            .await
+            .map_err(|_| NetworkError::ChannelClosed)?;
+
+        // Actually dial the bootstrap node
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(SwarmCommand::Dial {
+                addr: addr.clone(),
+                response: tx,
+            })
+            .await
+            .map_err(|_| NetworkError::ChannelClosed)?;
+
+        // Wait for dial to complete (or fail)
+        match rx.await {
+            Ok(Ok(())) => {
+                tracing::info!("Successfully dialed bootstrap node {}", peer_id);
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("Failed to dial bootstrap node {}: {}", peer_id, e);
+            }
+            Err(_) => {
+                tracing::warn!("Dial channel closed for bootstrap node {}", peer_id);
+            }
+        }
+        Ok(())
     }
 
     /// Subscribe to the announcement topic.
@@ -586,30 +599,7 @@ impl Network for NetworkNode {
             MessageType::QueryResponse => {
                 decode_payload(&response.payload).map_err(|e| NetworkError::Decoding(e.to_string()))
             }
-            MessageType::QueryError => {
-                // Parse the error payload and return appropriate error
-                let error_payload: QueryErrorPayload = decode_payload(&response.payload)
-                    .map_err(|e| NetworkError::Decoding(e.to_string()))?;
-
-                // Check if this is a ChannelRequired error with peer info
-                if error_payload.error_code == nodalync_types::ErrorCode::ChannelNotFound
-                    && (error_payload.required_channel_peer_id.is_some()
-                        || error_payload.required_channel_libp2p_peer.is_some())
-                {
-                    return Err(NetworkError::ChannelRequired {
-                        nodalync_peer_id: error_payload.required_channel_peer_id.map(|p| p.0),
-                        libp2p_peer_id: error_payload.required_channel_libp2p_peer,
-                    });
-                }
-
-                // Return generic query error
-                Err(NetworkError::QueryError {
-                    code: error_payload.error_code,
-                    message: error_payload
-                        .message
-                        .unwrap_or_else(|| "Unknown error".to_string()),
-                })
-            }
+            MessageType::QueryError => Err(query_error_from_payload(&response.payload)),
             _ => Err(NetworkError::InvalidResponseType {
                 expected: "QueryResponse or QueryError".to_string(),
                 got: format!("{:?}", response.message_type),
@@ -975,42 +965,77 @@ fn handle_kademlia_event(
     pending_puts: &mut HashMap<kad::QueryId, oneshot::Sender<NetworkResult<()>>>,
     pending_gets: &mut HashMap<kad::QueryId, oneshot::Sender<NetworkResult<Option<Vec<u8>>>>>,
 ) {
-    if let kad::Event::OutboundQueryProgressed { id, result, .. } = event {
-        match result {
-            QueryResult::PutRecord(Ok(_)) => {
-                if let Some(tx) = pending_puts.remove(&id) {
-                    let _ = tx.send(Ok(()));
-                }
-            }
-            QueryResult::PutRecord(Err(e)) => {
-                if let Some(tx) = pending_puts.remove(&id) {
-                    let _ = tx.send(Err(NetworkError::DhtError(format!("{:?}", e))));
-                }
-            }
-            QueryResult::GetRecord(Ok(kad::GetRecordOk::FoundRecord(peer_record))) => {
-                if let Some(tx) = pending_gets.remove(&id) {
-                    let _ = tx.send(Ok(Some(peer_record.record.value)));
-                }
-            }
-            QueryResult::GetRecord(Ok(kad::GetRecordOk::FinishedWithNoAdditionalRecord {
-                ..
-            })) => {
-                // Query finished but might have already sent a result
-            }
-            QueryResult::GetRecord(Err(e)) => {
-                if let Some(tx) = pending_gets.remove(&id) {
-                    match e {
-                        kad::GetRecordError::NotFound { .. } => {
-                            let _ = tx.send(Ok(None));
-                        }
-                        _ => {
-                            let _ = tx.send(Err(NetworkError::DhtError(format!("{:?}", e))));
-                        }
-                    }
-                }
-            }
-            _ => {}
+    let kad::Event::OutboundQueryProgressed { id, result, .. } = event else {
+        return;
+    };
+    match result {
+        QueryResult::PutRecord(result) => {
+            let outcome = result
+                .map(|_| ())
+                .map_err(|e| NetworkError::DhtError(format!("{:?}", e)));
+            resolve_pending(pending_puts, &id, outcome);
         }
+        QueryResult::GetRecord(result) => {
+            if let Some(outcome) = get_record_outcome(result) {
+                resolve_pending(pending_gets, &id, outcome);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// What a finished DHT get reports to its waiter: the record, `None` when no peer has it,
+/// or an error. `None` when the query finished without adding a record, since it may
+/// already have reported one.
+fn get_record_outcome(
+    result: Result<kad::GetRecordOk, kad::GetRecordError>,
+) -> Option<NetworkResult<Option<Vec<u8>>>> {
+    match result {
+        Ok(kad::GetRecordOk::FoundRecord(peer_record)) => Some(Ok(Some(peer_record.record.value))),
+        Ok(kad::GetRecordOk::FinishedWithNoAdditionalRecord { .. }) => None,
+        Err(kad::GetRecordError::NotFound { .. }) => Some(Ok(None)),
+        Err(e) => Some(Err(NetworkError::DhtError(format!("{:?}", e)))),
+    }
+}
+
+/// Send `value` to the waiter registered for query `id`, if one is still waiting.
+fn resolve_pending<K: std::hash::Hash + Eq, T>(
+    pending: &mut HashMap<K, oneshot::Sender<T>>,
+    id: &K,
+    value: T,
+) {
+    if let Some(tx) = pending.remove(id) {
+        let _ = tx.send(value);
+    }
+}
+
+/// Turn a peer's `QueryError` payload into a `NetworkError`.
+///
+/// A `ChannelNotFound` error that names the peer to open a channel with becomes
+/// `ChannelRequired`; any other error becomes `QueryError`.
+fn query_error_from_payload(payload: &[u8]) -> NetworkError {
+    let error_payload: QueryErrorPayload = match decode_payload(payload) {
+        Ok(error_payload) => error_payload,
+        Err(e) => return NetworkError::Decoding(e.to_string()),
+    };
+
+    // Check if this is a ChannelRequired error with peer info
+    let names_channel_peer = error_payload.required_channel_peer_id.is_some()
+        || error_payload.required_channel_libp2p_peer.is_some();
+    if error_payload.error_code == nodalync_types::ErrorCode::ChannelNotFound && names_channel_peer
+    {
+        return NetworkError::ChannelRequired {
+            nodalync_peer_id: error_payload.required_channel_peer_id.map(|p| p.0),
+            libp2p_peer_id: error_payload.required_channel_libp2p_peer,
+        };
+    }
+
+    // Return generic query error
+    NetworkError::QueryError {
+        code: error_payload.error_code,
+        message: error_payload
+            .message
+            .unwrap_or_else(|| "Unknown error".to_string()),
     }
 }
 
@@ -1114,6 +1139,74 @@ fn handle_ping_event(event: libp2p::ping::Event) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nodalync_types::ErrorCode;
+
+    fn query_error_payload(
+        error_code: ErrorCode,
+        required_channel_peer_id: Option<nodalync_crypto::PeerId>,
+        required_channel_libp2p_peer: Option<String>,
+    ) -> Vec<u8> {
+        encode_payload(&QueryErrorPayload {
+            hash: nodalync_crypto::content_hash(b"content"),
+            error_code,
+            message: None,
+            required_channel_peer_id,
+            required_channel_libp2p_peer,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn test_query_error_channel_not_found_with_peer_is_channel_required() {
+        let payload = query_error_payload(
+            ErrorCode::ChannelNotFound,
+            None,
+            Some("12D3KooWExample".to_string()),
+        );
+        match query_error_from_payload(&payload) {
+            NetworkError::ChannelRequired {
+                nodalync_peer_id,
+                libp2p_peer_id,
+            } => {
+                assert_eq!(nodalync_peer_id, None);
+                assert_eq!(libp2p_peer_id.as_deref(), Some("12D3KooWExample"));
+            }
+            other => panic!("expected ChannelRequired, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_query_error_channel_not_found_without_peer_is_query_error() {
+        let payload = query_error_payload(ErrorCode::ChannelNotFound, None, None);
+        match query_error_from_payload(&payload) {
+            NetworkError::QueryError { code, message } => {
+                assert_eq!(code, ErrorCode::ChannelNotFound);
+                assert_eq!(message, "Unknown error");
+            }
+            other => panic!("expected QueryError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_query_error_undecodable_payload_is_decoding_error() {
+        assert!(matches!(
+            query_error_from_payload(&[0xff, 0x00]),
+            NetworkError::Decoding(_)
+        ));
+    }
+
+    #[test]
+    fn test_resolve_pending_sends_once() {
+        let mut pending = HashMap::new();
+        let id = 0u64;
+        let (tx, mut rx) = oneshot::channel::<u8>();
+        pending.insert(id, tx);
+        resolve_pending(&mut pending, &id, 7);
+        assert!(pending.is_empty());
+        assert_eq!(rx.try_recv().unwrap(), 7);
+        // A second result for the same query has no waiter and is dropped.
+        resolve_pending(&mut pending, &id, 8);
+    }
 
     #[tokio::test]
     async fn test_create_node() {

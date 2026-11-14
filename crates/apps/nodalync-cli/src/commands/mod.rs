@@ -1,31 +1,27 @@
 //! CLI command implementations.
 
 pub mod balance;
-pub mod build_l2;
 pub mod channel;
 pub mod completions;
-pub mod delete;
+pub mod content;
 pub mod deposit;
 pub mod earnings;
 pub mod init;
-pub mod list;
 pub mod mcp_server;
-pub mod merge_l2;
-pub mod preview;
-pub mod publish;
 pub mod query;
-pub mod reference;
 pub mod search;
 pub mod settle;
 pub mod start;
 pub mod status;
 pub mod stop;
-pub mod synthesize;
-pub mod update;
-pub mod versions;
-pub mod visibility;
 pub mod whoami;
 pub mod withdraw;
+
+// Content command modules keep their `commands::<name>` paths
+pub use content::{
+    build_l2, delete, list, merge_l2, preview, publish, reference, synthesize, update, versions,
+    visibility,
+};
 
 // Re-export command handlers
 pub use balance::balance;

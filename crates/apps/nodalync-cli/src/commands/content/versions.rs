@@ -1,7 +1,7 @@
 //! Show content versions command.
 
 use crate::config::CliConfig;
-use crate::context::{parse_hash, NodeContext};
+use crate::context::{parse_hash, require_manifest, NodeContext};
 use crate::error::{CliError, CliResult};
 use crate::output::{OutputFormat, Render, VersionInfo, VersionsOutput};
 
@@ -14,10 +14,7 @@ pub fn versions(config: CliConfig, format: OutputFormat, hash_str: &str) -> CliR
     let ctx = NodeContext::local(config)?;
 
     // Get content manifest to find version root
-    let manifest = ctx
-        .ops
-        .get_content_manifest(&hash)?
-        .ok_or_else(|| CliError::NotFound(hash_str.to_string()))?;
+    let manifest = require_manifest(&ctx.ops, &hash, hash_str)?;
 
     let version_root = manifest.version.root;
 

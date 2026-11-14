@@ -30,24 +30,29 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
         .ok();
 
     match current_version {
-        None => {
-            // Fresh database - create all tables
-            create_tables(conn)?;
-            conn.execute(
-                "INSERT INTO schema_version (version) VALUES (?1)",
-                [SCHEMA_VERSION],
-            )?;
-        }
-        Some(version) if version < SCHEMA_VERSION => {
-            // Apply migrations
-            migrate_schema(conn, version)?;
-            conn.execute("UPDATE schema_version SET version = ?1", [SCHEMA_VERSION])?;
-        }
-        Some(_) => {
-            // Current version is up to date
-        }
+        // Fresh database - create all tables
+        None => create_fresh_schema(conn),
+        // Apply migrations
+        Some(version) if version < SCHEMA_VERSION => upgrade_schema(conn, version),
+        // Current version is up to date
+        Some(_) => Ok(()),
     }
+}
 
+/// Create every table in an empty database and record the current schema version.
+fn create_fresh_schema(conn: &Connection) -> Result<()> {
+    create_tables(conn)?;
+    conn.execute(
+        "INSERT INTO schema_version (version) VALUES (?1)",
+        [SCHEMA_VERSION],
+    )?;
+    Ok(())
+}
+
+/// Migrate a database from `version` and record the current schema version.
+fn upgrade_schema(conn: &Connection, version: u32) -> Result<()> {
+    migrate_schema(conn, version)?;
+    conn.execute("UPDATE schema_version SET version = ?1", [SCHEMA_VERSION])?;
     Ok(())
 }
 
@@ -56,37 +61,36 @@ fn migrate_schema(conn: &Connection, from_version: u32) -> Result<()> {
     // Migration from version 1 to 2: Add pending_close and pending_dispute columns to channels
     if from_version < 2 {
         // Add pending_close column (stores JSON)
-        if let Err(e) = conn.execute("ALTER TABLE channels ADD COLUMN pending_close TEXT", []) {
-            if !e.to_string().contains("duplicate column") {
-                tracing::warn!(error = %e, "Failed to add pending_close column to channels");
-            }
-        }
+        add_column(
+            conn,
+            "ALTER TABLE channels ADD COLUMN pending_close TEXT",
+            "Failed to add pending_close column to channels",
+        );
 
         // Add pending_dispute column (stores JSON)
-        if let Err(e) = conn.execute("ALTER TABLE channels ADD COLUMN pending_dispute TEXT", []) {
-            if !e.to_string().contains("duplicate column") {
-                tracing::warn!(error = %e, "Failed to add pending_dispute column to channels");
-            }
-        }
+        add_column(
+            conn,
+            "ALTER TABLE channels ADD COLUMN pending_dispute TEXT",
+            "Failed to add pending_dispute column to channels",
+        );
     }
 
     // Migration from version 2 to 3: Add funding_tx_id column to channels
     if from_version < 3 {
-        if let Err(e) = conn.execute("ALTER TABLE channels ADD COLUMN funding_tx_id TEXT", []) {
-            if !e.to_string().contains("duplicate column") {
-                tracing::warn!(error = %e, "Failed to add funding_tx_id column to channels");
-            }
-        }
+        add_column(
+            conn,
+            "ALTER TABLE channels ADD COLUMN funding_tx_id TEXT",
+            "Failed to add funding_tx_id column to channels",
+        );
     }
 
     Ok(())
 }
 
-/// Create all database tables.
-fn create_tables(conn: &Connection) -> Result<()> {
+/// Statements that create every table and index, in order. Each is idempotent.
+const CREATE_TABLE_STATEMENTS: &[&str] = &[
     // Manifests table
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS manifests (
+    "CREATE TABLE IF NOT EXISTS manifests (
             hash BLOB PRIMARY KEY,
             content_type INTEGER NOT NULL,
             owner BLOB NOT NULL,
@@ -108,52 +112,20 @@ fn create_tables(conn: &Connection) -> Result<()> {
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
         )",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_manifests_visibility ON manifests(visibility)",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_manifests_version_root ON manifests(version_root)",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_manifests_created ON manifests(created_at)",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_manifests_owner ON manifests(owner)",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_manifests_content_type ON manifests(content_type)",
-        [],
-    )?;
-
+    "CREATE INDEX IF NOT EXISTS idx_manifests_visibility ON manifests(visibility)",
+    "CREATE INDEX IF NOT EXISTS idx_manifests_version_root ON manifests(version_root)",
+    "CREATE INDEX IF NOT EXISTS idx_manifests_created ON manifests(created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_manifests_owner ON manifests(owner)",
+    "CREATE INDEX IF NOT EXISTS idx_manifests_content_type ON manifests(content_type)",
     // Provenance forward edges table
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS derived_from (
+    "CREATE TABLE IF NOT EXISTS derived_from (
             content_hash BLOB NOT NULL,
             source_hash BLOB NOT NULL,
             PRIMARY KEY (content_hash, source_hash)
         )",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_derived_from_source ON derived_from(source_hash)",
-        [],
-    )?;
-
+    "CREATE INDEX IF NOT EXISTS idx_derived_from_source ON derived_from(source_hash)",
     // Cached flattened roots table
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS root_cache (
+    "CREATE TABLE IF NOT EXISTS root_cache (
             content_hash BLOB NOT NULL,
             root_hash BLOB NOT NULL,
             owner BLOB NOT NULL,
@@ -161,12 +133,8 @@ fn create_tables(conn: &Connection) -> Result<()> {
             weight INTEGER NOT NULL DEFAULT 1,
             PRIMARY KEY (content_hash, root_hash)
         )",
-        [],
-    )?;
-
     // Payment channels table
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS channels (
+    "CREATE TABLE IF NOT EXISTS channels (
             peer_id BLOB PRIMARY KEY,
             channel_id BLOB NOT NULL,
             state INTEGER NOT NULL,
@@ -178,12 +146,8 @@ fn create_tables(conn: &Connection) -> Result<()> {
             pending_dispute TEXT,
             funding_tx_id TEXT
         )",
-        [],
-    )?;
-
     // Pending payments table
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS payments (
+    "CREATE TABLE IF NOT EXISTS payments (
             id BLOB PRIMARY KEY,
             channel_peer BLOB NOT NULL,
             channel_id BLOB NOT NULL,
@@ -195,61 +159,29 @@ fn create_tables(conn: &Connection) -> Result<()> {
             signature BLOB NOT NULL,
             settled INTEGER NOT NULL DEFAULT 0
         )",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_payments_channel ON payments(channel_peer)",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_payments_settled ON payments(settled)",
-        [],
-    )?;
-
+    "CREATE INDEX IF NOT EXISTS idx_payments_channel ON payments(channel_peer)",
+    "CREATE INDEX IF NOT EXISTS idx_payments_settled ON payments(settled)",
     // Peers table
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS peers (
+    "CREATE TABLE IF NOT EXISTS peers (
             peer_id BLOB PRIMARY KEY,
             public_key BLOB NOT NULL,
             addresses TEXT NOT NULL,
             last_seen INTEGER NOT NULL,
             reputation INTEGER NOT NULL DEFAULT 0
         )",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_peers_last_seen ON peers(last_seen)",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_peers_reputation ON peers(reputation)",
-        [],
-    )?;
-
+    "CREATE INDEX IF NOT EXISTS idx_peers_last_seen ON peers(last_seen)",
+    "CREATE INDEX IF NOT EXISTS idx_peers_reputation ON peers(reputation)",
     // Cache metadata table (content stored on filesystem)
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS cache (
+    "CREATE TABLE IF NOT EXISTS cache (
             hash BLOB PRIMARY KEY,
             source_peer BLOB NOT NULL,
             queried_at INTEGER NOT NULL,
             size_bytes INTEGER NOT NULL,
             payment_receipt TEXT NOT NULL
         )",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_cache_queried ON cache(queried_at)",
-        [],
-    )?;
-
+    "CREATE INDEX IF NOT EXISTS idx_cache_queried ON cache(queried_at)",
     // Settlement queue table
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS settlement_queue (
+    "CREATE TABLE IF NOT EXISTS settlement_queue (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             payment_id BLOB NOT NULL,
             recipient BLOB NOT NULL,
@@ -259,48 +191,24 @@ fn create_tables(conn: &Connection) -> Result<()> {
             settled INTEGER NOT NULL DEFAULT 0,
             batch_id BLOB
         )",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_settlement_queue_recipient ON settlement_queue(recipient)",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_settlement_queue_settled ON settlement_queue(settled)",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_settlement_queue_payment_id ON settlement_queue(payment_id)",
-        [],
-    )?;
-
+    "CREATE INDEX IF NOT EXISTS idx_settlement_queue_recipient ON settlement_queue(recipient)",
+    "CREATE INDEX IF NOT EXISTS idx_settlement_queue_settled ON settlement_queue(settled)",
+    "CREATE INDEX IF NOT EXISTS idx_settlement_queue_payment_id ON settlement_queue(payment_id)",
     // Settlement metadata table
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS settlement_meta (
+    "CREATE TABLE IF NOT EXISTS settlement_meta (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         )",
-        [],
-    )?;
-
     // L1 summaries table
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS l1_summaries (
+    "CREATE TABLE IF NOT EXISTS l1_summaries (
             l0_hash BLOB PRIMARY KEY,
             mention_count INTEGER NOT NULL,
             preview_mentions TEXT NOT NULL,
             primary_topics TEXT NOT NULL,
             summary TEXT NOT NULL
         )",
-        [],
-    )?;
-
     // Announcements table (content discovered from network)
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS announcements (
+    "CREATE TABLE IF NOT EXISTS announcements (
             hash BLOB PRIMARY KEY,
             content_type INTEGER NOT NULL,
             title TEXT NOT NULL,
@@ -310,13 +218,14 @@ fn create_tables(conn: &Connection) -> Result<()> {
             received_at INTEGER NOT NULL,
             publisher_peer_id TEXT
         )",
-        [],
-    )?;
+    "CREATE INDEX IF NOT EXISTS idx_announcements_received ON announcements(received_at)",
+];
 
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_announcements_received ON announcements(received_at)",
-        [],
-    )?;
+/// Create all database tables.
+fn create_tables(conn: &Connection) -> Result<()> {
+    for statement in CREATE_TABLE_STATEMENTS {
+        conn.execute(statement, [])?;
+    }
 
     // Migration: Add publisher_peer_id column if it doesn't exist (for existing DBs)
     // SQLite doesn't have IF NOT EXISTS for ALTER TABLE, so we check first
@@ -324,18 +233,24 @@ fn create_tables(conn: &Connection) -> Result<()> {
         .prepare("SELECT publisher_peer_id FROM announcements LIMIT 1")
         .is_ok();
     if !has_publisher_peer_id {
-        if let Err(e) = conn.execute(
+        // Column may already exist from a concurrent migration - only warn for unexpected errors
+        add_column(
+            conn,
             "ALTER TABLE announcements ADD COLUMN publisher_peer_id TEXT",
-            [],
-        ) {
-            // Column may already exist from a concurrent migration - only warn for unexpected errors
-            if !e.to_string().contains("duplicate column") {
-                tracing::warn!(error = %e, "Failed to add publisher_peer_id column to announcements");
-            }
-        }
+            "Failed to add publisher_peer_id column to announcements",
+        );
     }
 
     Ok(())
+}
+
+/// Run an `ALTER TABLE … ADD COLUMN`, logging `failure` unless the column already exists.
+fn add_column(conn: &Connection, alter_sql: &str, failure: &str) {
+    if let Err(e) = conn.execute(alter_sql, []) {
+        if !e.to_string().contains("duplicate column") {
+            tracing::warn!(error = %e, "{}", failure);
+        }
+    }
 }
 
 #[cfg(test)]

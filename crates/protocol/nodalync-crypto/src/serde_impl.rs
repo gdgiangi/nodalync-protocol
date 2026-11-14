@@ -26,6 +26,34 @@ fn from_hex(s: &str) -> Result<Vec<u8>, String> {
         .collect()
 }
 
+/// Read a hex string in human-readable formats (JSON) or raw bytes in binary formats (CBOR).
+fn deserialize_hex_or_bytes<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    if deserializer.is_human_readable() {
+        let s = String::deserialize(deserializer)?;
+        from_hex(&s).map_err(de::Error::custom)
+    } else {
+        Vec::deserialize(deserializer)
+    }
+}
+
+/// Copy `bytes` into a fixed-size array, naming `type_name` in the error when the length is wrong.
+fn to_fixed_array<const N: usize, E: de::Error>(
+    bytes: &[u8],
+    type_name: &str,
+) -> Result<[u8; N], E> {
+    <[u8; N]>::try_from(bytes).map_err(|_| {
+        E::custom(format!(
+            "{} must be {} bytes, got {}",
+            type_name,
+            N,
+            bytes.len()
+        ))
+    })
+}
+
 // Hash serialization
 impl Serialize for Hash {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -45,30 +73,8 @@ impl<'de> Deserialize<'de> for Hash {
     where
         D: Deserializer<'de>,
     {
-        if deserializer.is_human_readable() {
-            let s = String::deserialize(deserializer)?;
-            let bytes = from_hex(&s).map_err(de::Error::custom)?;
-            if bytes.len() != 32 {
-                return Err(de::Error::custom(format!(
-                    "Hash must be 32 bytes, got {}",
-                    bytes.len()
-                )));
-            }
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&bytes);
-            Ok(Hash(arr))
-        } else {
-            let bytes: Vec<u8> = Vec::deserialize(deserializer)?;
-            if bytes.len() != 32 {
-                return Err(de::Error::custom(format!(
-                    "Hash must be 32 bytes, got {}",
-                    bytes.len()
-                )));
-            }
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&bytes);
-            Ok(Hash(arr))
-        }
+        let bytes = deserialize_hex_or_bytes(deserializer)?;
+        to_fixed_array(&bytes, "Hash").map(Hash)
     }
 }
 
@@ -97,15 +103,7 @@ impl<'de> Deserialize<'de> for PeerId {
             crate::peer_id_from_string(&s).map_err(de::Error::custom)
         } else {
             let bytes: Vec<u8> = Vec::deserialize(deserializer)?;
-            if bytes.len() != 20 {
-                return Err(de::Error::custom(format!(
-                    "PeerId must be 20 bytes, got {}",
-                    bytes.len()
-                )));
-            }
-            let mut arr = [0u8; 20];
-            arr.copy_from_slice(&bytes);
-            Ok(PeerId(arr))
+            to_fixed_array(&bytes, "PeerId").map(PeerId)
         }
     }
 }
@@ -129,30 +127,8 @@ impl<'de> Deserialize<'de> for PublicKey {
     where
         D: Deserializer<'de>,
     {
-        if deserializer.is_human_readable() {
-            let s = String::deserialize(deserializer)?;
-            let bytes = from_hex(&s).map_err(de::Error::custom)?;
-            if bytes.len() != 32 {
-                return Err(de::Error::custom(format!(
-                    "PublicKey must be 32 bytes, got {}",
-                    bytes.len()
-                )));
-            }
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&bytes);
-            Ok(PublicKey(arr))
-        } else {
-            let bytes: Vec<u8> = Vec::deserialize(deserializer)?;
-            if bytes.len() != 32 {
-                return Err(de::Error::custom(format!(
-                    "PublicKey must be 32 bytes, got {}",
-                    bytes.len()
-                )));
-            }
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&bytes);
-            Ok(PublicKey(arr))
-        }
+        let bytes = deserialize_hex_or_bytes(deserializer)?;
+        to_fixed_array(&bytes, "PublicKey").map(PublicKey)
     }
 }
 
@@ -175,30 +151,8 @@ impl<'de> Deserialize<'de> for Signature {
     where
         D: Deserializer<'de>,
     {
-        if deserializer.is_human_readable() {
-            let s = String::deserialize(deserializer)?;
-            let bytes = from_hex(&s).map_err(de::Error::custom)?;
-            if bytes.len() != 64 {
-                return Err(de::Error::custom(format!(
-                    "Signature must be 64 bytes, got {}",
-                    bytes.len()
-                )));
-            }
-            let mut arr = [0u8; 64];
-            arr.copy_from_slice(&bytes);
-            Ok(Signature(arr))
-        } else {
-            let bytes: Vec<u8> = Vec::deserialize(deserializer)?;
-            if bytes.len() != 64 {
-                return Err(de::Error::custom(format!(
-                    "Signature must be 64 bytes, got {}",
-                    bytes.len()
-                )));
-            }
-            let mut arr = [0u8; 64];
-            arr.copy_from_slice(&bytes);
-            Ok(Signature(arr))
-        }
+        let bytes = deserialize_hex_or_bytes(deserializer)?;
+        to_fixed_array(&bytes, "Signature").map(Signature)
     }
 }
 
@@ -274,6 +228,27 @@ mod tests {
     fn test_invalid_hash_length() {
         let result: Result<Hash, _> = serde_json::from_str("\"aabbccdd\"");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_invalid_length_errors_name_type_and_sizes() {
+        let hash: Result<Hash, _> = serde_json::from_str("\"aabbccdd\"");
+        assert!(hash
+            .unwrap_err()
+            .to_string()
+            .contains("Hash must be 32 bytes, got 4"));
+
+        let key: Result<PublicKey, _> = serde_json::from_str("\"aabb\"");
+        assert!(key
+            .unwrap_err()
+            .to_string()
+            .contains("PublicKey must be 32 bytes, got 2"));
+
+        let sig: Result<Signature, _> = serde_json::from_str("\"aa\"");
+        assert!(sig
+            .unwrap_err()
+            .to_string()
+            .contains("Signature must be 64 bytes, got 1"));
     }
 
     #[test]

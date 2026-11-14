@@ -8,7 +8,9 @@
 
 use std::collections::HashSet;
 
-use nodalync_types::{ContentType, Hash, Manifest, ProvenanceEntry, MAX_PROVENANCE_DEPTH};
+use nodalync_types::{
+    ContentType, Hash, Manifest, Provenance, ProvenanceEntry, MAX_PROVENANCE_DEPTH,
+};
 
 use crate::error::{ValidationError, ValidationResult};
 
@@ -93,6 +95,12 @@ fn validate_l0_provenance(manifest: &Manifest) -> ValidationResult<()> {
 
 /// Validate L3 provenance (derived content).
 fn validate_l3_provenance(manifest: &Manifest, sources: &[Manifest]) -> ValidationResult<()> {
+    validate_l3_structure(manifest)?;
+    validate_l3_against_sources(&manifest.provenance, sources)
+}
+
+/// An L3 manifest has roots and sources, and does not list itself in either.
+fn validate_l3_structure(manifest: &Manifest) -> ValidationResult<()> {
     let prov = &manifest.provenance;
 
     // Must have at least one root
@@ -114,7 +122,11 @@ fn validate_l3_provenance(manifest: &Manifest, sources: &[Manifest]) -> Validati
     if prov.root_l0l1.iter().any(|e| e.hash == manifest.hash) {
         return Err(ValidationError::SelfRoot);
     }
+    Ok(())
+}
 
+/// The provenance's derived_from, roots and depth agree with the source manifests.
+fn validate_l3_against_sources(prov: &Provenance, sources: &[Manifest]) -> ValidationResult<()> {
     // All derived_from must exist in sources
     let source_hashes: HashSet<&Hash> = sources.iter().map(|s| &s.hash).collect();
     for df_hash in &prov.derived_from {

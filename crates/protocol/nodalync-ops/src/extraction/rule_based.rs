@@ -41,6 +41,9 @@ impl RuleBasedExtractor {
     }
 
     /// Split text into sentences.
+    ///
+    /// Each sentence is paired with its 1-based paragraph number; a blank line starts a
+    /// new paragraph and ends any unfinished sentence.
     fn split_sentences(text: &str) -> Vec<(usize, String)> {
         let mut sentences = Vec::new();
         let mut current = String::new();
@@ -49,94 +52,47 @@ impl RuleBasedExtractor {
         for line in text.lines() {
             let trimmed = line.trim();
             if trimmed.is_empty() {
-                if !current.is_empty() {
-                    sentences.push((para_num, current.clone()));
-                    current.clear();
-                }
+                flush_sentence(&mut sentences, &mut current, para_num);
                 para_num += 1;
-            } else {
-                // Simple sentence splitting on . ! ?
-                for sentence in split_on_terminators(trimmed) {
-                    if !sentence.is_empty() {
-                        if !current.is_empty() {
-                            current.push(' ');
-                        }
-                        current.push_str(&sentence);
-
-                        // Check if this is a complete sentence
-                        if sentence.ends_with('.')
-                            || sentence.ends_with('!')
-                            || sentence.ends_with('?')
-                        {
-                            sentences.push((para_num, current.clone()));
-                            current.clear();
-                        }
-                    }
-                }
+                continue;
+            }
+            // Simple sentence splitting on . ! ?
+            for fragment in split_on_terminators(trimmed) {
+                push_fragment(&mut sentences, &mut current, para_num, &fragment);
             }
         }
 
         // Don't forget the last sentence
-        if !current.is_empty() {
-            sentences.push((para_num, current));
-        }
+        flush_sentence(&mut sentences, &mut current, para_num);
 
         sentences
     }
 
     /// Classify a sentence based on keywords.
+    ///
+    /// The first keyword group that matches decides; with no match, a sentence with a
+    /// digit is a statistic and anything else a claim.
     fn classify_sentence(sentence: &str) -> Classification {
         let lower = sentence.to_lowercase();
 
         // Check for specific patterns
-        if lower.contains("we found")
-            || lower.contains("results show")
-            || lower.contains("data indicates")
-        {
-            return Classification::Result;
-        }
+        let keyword_match = CLASSIFICATION_KEYWORDS
+            .iter()
+            .find(|(keywords, _)| keywords.iter().any(|keyword| lower.contains(keyword)))
+            .map(|(_, classification)| *classification);
 
-        if lower.contains("claim")
-            || lower.contains("argue")
-            || lower.contains("assert")
-            || lower.contains("believe")
-        {
-            return Classification::Claim;
+        match keyword_match {
+            Some(classification) => classification,
+            None if has_numbers(&lower) => Classification::Statistic,
+            // Default to claim
+            None => Classification::Claim,
         }
-
-        if lower.contains("observed")
-            || lower.contains("measured")
-            || lower.contains("recorded")
-            || lower.contains("noted")
-        {
-            return Classification::Observation;
-        }
-
-        if lower.contains("define")
-            || lower.contains("definition")
-            || lower.contains("is a")
-            || lower.contains("refers to")
-        {
-            return Classification::Definition;
-        }
-
-        if lower.contains("said") || lower.contains("stated") || lower.contains("according to") {
-            return Classification::Observation; // Treat quotes as observations
-        }
-
-        if lower.contains("statistic")
-            || lower.contains("percent")
-            || lower.contains("%")
-            || has_numbers(&lower)
-        {
-            return Classification::Statistic;
-        }
-
-        // Default to claim
-        Classification::Claim
     }
 
     /// Extract entities (capitalized words) from text.
+    ///
+    /// Runs of capitalized words that are not common words form one entity; entities
+    /// of a single character are dropped.
     fn extract_entities(&self, sentence: &str) -> Vec<String> {
         let mut entities = Vec::new();
         let mut current_entity = String::new();
@@ -147,25 +103,16 @@ impl RuleBasedExtractor {
                 continue;
             }
 
-            let first_char = clean_word.chars().next().unwrap();
-            if first_char.is_uppercase() && !is_common_word(clean_word) {
-                if !current_entity.is_empty() {
-                    current_entity.push(' ');
-                }
-                current_entity.push_str(clean_word);
-            } else if !current_entity.is_empty() {
+            if is_entity_word(clean_word) {
+                append_word(&mut current_entity, clean_word);
+            } else {
                 // End of entity
-                if current_entity.len() > 1 {
-                    entities.push(current_entity.clone());
-                }
-                current_entity.clear();
+                finish_entity(&mut entities, &mut current_entity);
             }
         }
 
         // Don't forget last entity
-        if !current_entity.is_empty() && current_entity.len() > 1 {
-            entities.push(current_entity);
-        }
+        finish_entity(&mut entities, &mut current_entity);
 
         // Deduplicate and limit
         entities.sort();
@@ -173,6 +120,80 @@ impl RuleBasedExtractor {
         entities.truncate(self.max_entities);
 
         entities
+    }
+}
+
+/// Keyword groups, checked in order, and the classification each implies.
+const CLASSIFICATION_KEYWORDS: &[(&[&str], Classification)] = &[
+    (
+        &["we found", "results show", "data indicates"],
+        Classification::Result,
+    ),
+    (
+        &["claim", "argue", "assert", "believe"],
+        Classification::Claim,
+    ),
+    (
+        &["observed", "measured", "recorded", "noted"],
+        Classification::Observation,
+    ),
+    (
+        &["define", "definition", "is a", "refers to"],
+        Classification::Definition,
+    ),
+    // Treat quotes as observations
+    (
+        &["said", "stated", "according to"],
+        Classification::Observation,
+    ),
+    (&["statistic", "percent", "%"], Classification::Statistic),
+];
+
+/// Push the unfinished sentence, if any, and start a new one.
+fn flush_sentence(sentences: &mut Vec<(usize, String)>, current: &mut String, para_num: usize) {
+    if !current.is_empty() {
+        sentences.push((para_num, std::mem::take(current)));
+    }
+}
+
+/// Append a fragment to the current sentence, ending the sentence if the fragment
+/// ends with a terminator.
+fn push_fragment(
+    sentences: &mut Vec<(usize, String)>,
+    current: &mut String,
+    para_num: usize,
+    fragment: &str,
+) {
+    if fragment.is_empty() {
+        return;
+    }
+    append_word(current, fragment);
+
+    // Check if this is a complete sentence
+    if fragment.ends_with(['.', '!', '?']) {
+        flush_sentence(sentences, current, para_num);
+    }
+}
+
+/// Append `word` to `text`, separated by a space when `text` is not empty.
+fn append_word(text: &mut String, word: &str) {
+    if !text.is_empty() {
+        text.push(' ');
+    }
+    text.push_str(word);
+}
+
+/// Whether a cleaned word can be part of an entity: capitalized and not a common word.
+fn is_entity_word(word: &str) -> bool {
+    let starts_upper = word.chars().next().is_some_and(char::is_uppercase);
+    starts_upper && !is_common_word(word)
+}
+
+/// End the current entity, keeping it if it is longer than one character.
+fn finish_entity(entities: &mut Vec<String>, current: &mut String) {
+    let entity = std::mem::take(current);
+    if entity.len() > 1 {
+        entities.push(entity);
     }
 }
 
@@ -255,36 +276,40 @@ fn strip_link_syntax(text: &str) -> String {
     let mut chars = text.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch == '[' {
-            let mut link_text = String::new();
-            let mut found_close = false;
-            for inner in chars.by_ref() {
-                if inner == ']' {
-                    found_close = true;
-                    break;
-                }
-                link_text.push(inner);
-            }
-            if found_close && chars.peek() == Some(&'(') {
-                chars.next(); // consume '('
-                for inner in chars.by_ref() {
-                    if inner == ')' {
-                        break;
-                    }
-                }
-                result.push_str(&link_text);
-            } else {
-                // Not a real link, preserve original
-                result.push('[');
-                result.push_str(&link_text);
-                if found_close {
-                    result.push(']');
-                }
-            }
+            result.push_str(&take_bracketed(&mut chars));
         } else {
             result.push(ch);
         }
     }
     result
+}
+
+/// After a `[`, consume a link's `text](url)` and return `text`; for anything that is
+/// not a link, return what was consumed unchanged (with its `[`).
+fn take_bracketed(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> String {
+    let (link_text, found_close) = take_until(chars, ']');
+    if found_close && chars.peek() == Some(&'(') {
+        chars.next(); // consume '('
+        take_until(chars, ')');
+        return link_text;
+    }
+
+    // Not a real link, preserve original
+    let close = if found_close { "]" } else { "" };
+    format!("[{}{}", link_text, close)
+}
+
+/// Consume characters up to and including `close`. Returns the characters before it
+/// and whether `close` was found.
+fn take_until(chars: &mut impl Iterator<Item = char>, close: char) -> (String, bool) {
+    let mut taken = String::new();
+    for ch in chars.by_ref() {
+        if ch == close {
+            return (taken, true);
+        }
+        taken.push(ch);
+    }
+    (taken, false)
 }
 
 /// Split text on sentence terminators while preserving the terminator.
@@ -532,6 +557,114 @@ mod tests {
         for mention in &mentions {
             assert!(!mention.content.contains('#'));
             assert!(!mention.content.contains("**"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod golden_tests {
+    //! Outputs recorded from the extractor before it was split into helper
+    //! functions; they must not change.
+    use super::*;
+
+    const TEXT: &str = "# Heading Here\n\nWe found that Alice Smith met Bob in Paris. The data indicates 42% growth!\nIs this a test? Researchers claim New York is big\n\n> Quoted text said by John Doe.\nSee [the docs](http://x.y) and [not a link] and [open\n\nThe rate is 3 per day. Nothing special here at all\nObserved values were recorded. A definition refers to meaning.";
+
+    #[test]
+    fn test_golden_sentences_classes_and_entities() {
+        let clean = strip_markdown(TEXT);
+        assert_eq!(clean, "Heading Here\n\nWe found that Alice Smith met Bob in Paris. The data indicates 42% growth!\nIs this a test? Researchers claim New York is big\n\nQuoted text said by John Doe.\nSee the docs and [not a link] and [open\n\nThe rate is 3 per day. Nothing special here at all\nObserved values were recorded. A definition refers to meaning.\n");
+
+        let sentences = RuleBasedExtractor::split_sentences(&clean);
+        let expected: Vec<(usize, &str, Classification, Vec<&str>)> = vec![
+            (
+                1,
+                "Heading Here",
+                Classification::Claim,
+                vec!["Heading Here"],
+            ),
+            (
+                2,
+                "We found that Alice Smith met Bob in Paris.",
+                Classification::Result,
+                vec!["Alice Smith", "Bob", "Paris"],
+            ),
+            (
+                2,
+                "The data indicates 42% growth!",
+                Classification::Result,
+                vec![],
+            ),
+            (2, "Is this a test?", Classification::Definition, vec![]),
+            (
+                2,
+                "Researchers claim New York is big",
+                Classification::Claim,
+                vec!["New York", "Researchers"],
+            ),
+            (
+                3,
+                "Quoted text said by John Doe.",
+                Classification::Observation,
+                vec!["John Doe", "Quoted"],
+            ),
+            (
+                3,
+                "See the docs and [not a link] and [open",
+                Classification::Claim,
+                vec!["See"],
+            ),
+            (
+                4,
+                "The rate is 3 per day.",
+                Classification::Statistic,
+                vec![],
+            ),
+            (
+                4,
+                "Nothing special here at all Observed values were recorded.",
+                Classification::Observation,
+                vec!["Nothing", "Observed"],
+            ),
+            (
+                4,
+                "A definition refers to meaning.",
+                Classification::Definition,
+                vec![],
+            ),
+        ];
+        assert_eq!(sentences.len(), expected.len());
+
+        let extractor = RuleBasedExtractor::with_settings(10, 3);
+        for ((para, sentence), (exp_para, exp_sentence, exp_class, exp_entities)) in
+            sentences.iter().zip(expected)
+        {
+            assert_eq!(*para, exp_para);
+            assert_eq!(sentence, exp_sentence);
+            assert_eq!(
+                RuleBasedExtractor::classify_sentence(sentence),
+                exp_class,
+                "{}",
+                sentence
+            );
+            assert_eq!(
+                extractor.extract_entities(sentence),
+                exp_entities,
+                "{}",
+                sentence
+            );
+        }
+    }
+
+    #[test]
+    fn test_golden_link_stripping() {
+        for (input, expected) in [
+            ("[a](b)c", "ac"),
+            ("[a]x", "[a]x"),
+            ("[abc", "[abc"),
+            ("x[a](b", "xa"),
+            ("[[a]](b)", "[[a]](b)"),
+        ] {
+            assert_eq!(strip_link_syntax(input), expected, "{}", input);
         }
     }
 }

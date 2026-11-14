@@ -20,6 +20,15 @@ pub fn spinner(msg: &str) -> ProgressBar {
     pb
 }
 
+/// A spinner showing `msg` for human output; a hidden progress bar otherwise.
+pub fn for_format(format: crate::output::OutputFormat, msg: &str) -> ProgressBar {
+    if format == crate::output::OutputFormat::Human {
+        spinner(msg)
+    } else {
+        hidden()
+    }
+}
+
 /// Create a hidden progress bar (no-op).
 ///
 /// Use this when running in non-interactive mode or JSON output.

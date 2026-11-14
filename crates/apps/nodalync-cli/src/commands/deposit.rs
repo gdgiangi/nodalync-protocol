@@ -1,7 +1,7 @@
 //! Deposit tokens command.
 
 use crate::config::{ndl_to_units, CliConfig};
-use crate::context::NodeContext;
+use crate::context::{require_settlement, NodeContext};
 use crate::error::CliResult;
 use crate::output::{OutputFormat, Render, TransactionOutput};
 
@@ -18,12 +18,7 @@ pub async fn deposit(
     let ctx = NodeContext::with_network(config).await?;
 
     // Get settlement (requires Hedera configuration)
-    let settlement = ctx.settlement.as_ref().ok_or_else(|| {
-        crate::error::CliError::config(
-            "Hedera settlement not configured. Set HEDERA_ACCOUNT_ID, HEDERA_PRIVATE_KEY, \
-             and HEDERA_CONTRACT_ID environment variables.",
-        )
-    })?;
+    let settlement = require_settlement(&ctx)?;
 
     // Perform deposit
     let tx_id = settlement.deposit(amount).await?;

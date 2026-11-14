@@ -33,17 +33,7 @@ async function main() {
   console.log("=".repeat(60));
 
   // Get credentials from environment
-  const accountIdStr = process.env.HEDERA_ACCOUNT_ID;
-  const privateKeyStr = process.env.HEDERA_PRIVATE_KEY;
-
-  if (!accountIdStr || !privateKeyStr) {
-    console.error("ERROR: Missing environment variables");
-    console.log("Required:");
-    console.log("  HEDERA_ACCOUNT_ID=0.0.XXXXXXX");
-    console.log("  HEDERA_PRIVATE_KEY=0x...");
-    process.exit(1);
-  }
-
+  const { accountIdStr, privateKeyStr } = readCredentials();
   console.log(`Account ID: ${accountIdStr}`);
 
   // Parse credentials
@@ -54,15 +44,68 @@ async function main() {
 
   console.log(`Public Key: ${privateKey.publicKey.toString()}`);
 
-  // Create client for testnet
+  const client = createTestnetClient(accountId, privateKey);
+
+  // Read compiled bytecode
+  const bytecode = loadBytecode();
+
+  // Deploy contract
+  const { contractId, transactionId } = await deployContract(
+    client,
+    bytecode,
+    privateKey
+  );
+
+  // Get EVM address for the contract
+  const evmAddress = contractId.toSolidityAddress();
+  console.log(`EVM Address: 0x${evmAddress}`);
+
+  // Verify contract is working
+  await verifyContract(client, contractId);
+
+  printNextSteps(contractId, accountIdStr, privateKeyStr);
+
+  // Save deployment info
+  saveDeployment({
+    network: "hedera-testnet",
+    contractId: contractId.toString(),
+    evmAddress: `0x${evmAddress}`,
+    deployer: accountIdStr,
+    deployedAt: new Date().toISOString(),
+    transactionId,
+  });
+
+  client.close();
+}
+
+/** Read the Hedera credentials from the environment, exiting if either is missing. */
+function readCredentials() {
+  const accountIdStr = process.env.HEDERA_ACCOUNT_ID;
+  const privateKeyStr = process.env.HEDERA_PRIVATE_KEY;
+
+  if (!accountIdStr || !privateKeyStr) {
+    console.error("ERROR: Missing environment variables");
+    console.log("Required:");
+    console.log("  HEDERA_ACCOUNT_ID=0.0.XXXXXXX");
+    console.log("  HEDERA_PRIVATE_KEY=0x...");
+    process.exit(1);
+  }
+  return { accountIdStr, privateKeyStr };
+}
+
+/** Create a testnet client with the operator and fee limits set. */
+function createTestnetClient(accountId, privateKey) {
   const client = Client.forTestnet();
   client.setOperator(accountId, privateKey);
   client.setDefaultMaxTransactionFee(new Hbar(100));
   client.setMaxQueryPayment(new Hbar(10));
 
   console.log("Connected to Hedera Testnet");
+  return client;
+}
 
-  // Read compiled bytecode
+/** The compiled contract's bytecode, compiling with Hardhat first if needed. Exits if it is empty. */
+function loadBytecode() {
   console.log("\nChecking for compiled contract...");
 
   const artifactPath = path.join(
@@ -91,8 +134,11 @@ async function main() {
   }
 
   console.log(`Bytecode size: ${(bytecode.length - 2) / 2} bytes`);
+  return bytecode;
+}
 
-  // Deploy contract
+/** Deploy the contract and return its ID and the transaction ID. */
+async function deployContract(client, bytecode, privateKey) {
   console.log("\nDeploying NodalyncSettlement contract...");
 
   const contractTx = new ContractCreateFlow()
@@ -112,11 +158,14 @@ async function main() {
   console.log(`Contract ID: ${contractId.toString()}`);
   console.log(`Transaction ID: ${contractResponse.transactionId.toString()}`);
 
-  // Get EVM address for the contract
-  const evmAddress = contractId.toSolidityAddress();
-  console.log(`EVM Address: 0x${evmAddress}`);
+  return {
+    contractId,
+    transactionId: contractResponse.transactionId.toString(),
+  };
+}
 
-  // Verify contract is working
+/** Query DISPUTE_PERIOD to check the contract responds; a failure is only noted. */
+async function verifyContract(client, contractId) {
   console.log("\nVerifying contract...");
 
   try {
@@ -131,7 +180,9 @@ async function main() {
   } catch (e) {
     console.log("Note: Could not query DISPUTE_PERIOD (this is OK, contract is deployed)");
   }
+}
 
+function printNextSteps(contractId, accountIdStr, privateKeyStr) {
   console.log("\n" + "=".repeat(60));
   console.log("Next Steps:");
   console.log("=".repeat(60));
@@ -154,17 +205,10 @@ async function main() {
 5. Update your .env file:
    echo "HEDERA_CONTRACT_ID=${contractId.toString()}" >> .env
 `);
+}
 
-  // Save deployment info
-  const deploymentInfo = {
-    network: "hedera-testnet",
-    contractId: contractId.toString(),
-    evmAddress: `0x${evmAddress}`,
-    deployer: accountIdStr,
-    deployedAt: new Date().toISOString(),
-    transactionId: contractResponse.transactionId.toString(),
-  };
-
+/** Write the deployment info to ./deployments/hedera-testnet-sdk.json. */
+function saveDeployment(deploymentInfo) {
   // Create deployments directory if it doesn't exist
   if (!fs.existsSync("./deployments")) {
     fs.mkdirSync("./deployments");
@@ -173,8 +217,6 @@ async function main() {
   const deploymentPath = "./deployments/hedera-testnet-sdk.json";
   fs.writeFileSync(deploymentPath, JSON.stringify(deploymentInfo, null, 2));
   console.log(`Deployment info saved to: ${deploymentPath}`);
-
-  client.close();
 }
 
 main()

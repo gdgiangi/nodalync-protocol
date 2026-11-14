@@ -59,6 +59,18 @@ impl FsContentStore {
         }
         Ok(())
     }
+
+    /// Write `content` to the file for `hash`, creating its shard directory, and sync it to disk.
+    fn write_content(&self, hash: &Hash, content: &[u8]) -> Result<()> {
+        // Ensure parent directory exists
+        self.ensure_parent_dir(hash)?;
+
+        // Write content to file
+        let mut file = File::create(self.content_path(hash))?;
+        file.write_all(content)?;
+        file.sync_all()?;
+        Ok(())
+    }
 }
 
 impl ContentStore for FsContentStore {
@@ -70,14 +82,7 @@ impl ContentStore for FsContentStore {
             return Ok(hash);
         }
 
-        // Ensure parent directory exists
-        self.ensure_parent_dir(&hash)?;
-
-        // Write content to file
-        let path = self.content_path(&hash);
-        let mut file = File::create(&path)?;
-        file.write_all(content)?;
-        file.sync_all()?;
+        self.write_content(&hash, content)?;
 
         Ok(hash)
     }
@@ -97,16 +102,7 @@ impl ContentStore for FsContentStore {
             return Ok(());
         }
 
-        // Ensure parent directory exists
-        self.ensure_parent_dir(hash)?;
-
-        // Write content to file
-        let path = self.content_path(hash);
-        let mut file = File::create(&path)?;
-        file.write_all(content)?;
-        file.sync_all()?;
-
-        Ok(())
+        self.write_content(hash, content)
     }
 
     fn load(&self, hash: &Hash) -> Result<Option<Vec<u8>>> {

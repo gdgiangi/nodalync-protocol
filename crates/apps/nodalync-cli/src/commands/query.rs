@@ -19,41 +19,60 @@ pub async fn query(
     let hash = parse_hash(hash_str)?;
 
     // Create spinner for human output
-    let spinner = if format == OutputFormat::Human {
-        progress::spinner("Connecting to network...")
-    } else {
-        progress::hidden()
-    };
+    let spinner = progress::for_format(format, "Connecting to network...");
 
-    // Initialize context with network
-    let mut ctx = NodeContext::with_network(config.clone()).await?;
-
-    // Bootstrap to find peers
-    ctx.bootstrap().await?;
+    // Initialize context with network and bootstrap to find peers
+    let mut ctx = NodeContext::connected(config.clone()).await?;
 
     spinner.set_message("Fetching content metadata...");
 
     // Get manifest first to know price
-    let manifest = match ctx.ops.get_content_manifest(&hash)? {
-        Some(m) => m,
-        None => {
-            // Try preview for remote content (does DHT lookup)
-            ctx.ops
-                .preview_content(&hash)
-                .await
-                .map(|p| p.manifest)
-                .map_err(|_| CliError::NotFound(hash_str.to_string()))?
-        }
-    };
-
+    let manifest = find_manifest(&mut ctx, &hash, hash_str).await?;
     let price = manifest.economics.price;
-    let title = manifest.metadata.title.clone();
 
     // Query content
     spinner.set_message("Querying content...");
     let response = ctx.ops.query_content(&hash, price, None).await?;
     spinner.set_message("Saving content...");
 
+    let save_path = save_content(&config, output_path, hash_str, &response.content)?;
+    spinner.finish_and_clear();
+
+    let output = QueryOutput {
+        hash: hash.to_string(),
+        title: manifest.metadata.title,
+        price_paid: price,
+        saved_to: save_path.display().to_string(),
+    };
+
+    Ok(output.render(format))
+}
+
+/// The manifest for `hash`: the local one, else from a preview of remote content
+/// (which does a DHT lookup).
+async fn find_manifest(
+    ctx: &mut NodeContext,
+    hash: &nodalync_crypto::Hash,
+    hash_str: &str,
+) -> CliResult<nodalync_types::Manifest> {
+    if let Some(manifest) = ctx.ops.get_content_manifest(hash)? {
+        return Ok(manifest);
+    }
+    ctx.ops
+        .preview_content(hash)
+        .await
+        .map(|p| p.manifest)
+        .map_err(|_| CliError::NotFound(hash_str.to_string()))
+}
+
+/// Save queried content to `output_path`, or by default to the cache directory
+/// under its hash. Returns where it was saved.
+fn save_content(
+    config: &CliConfig,
+    output_path: Option<PathBuf>,
+    hash_str: &str,
+    content: &[u8],
+) -> CliResult<PathBuf> {
     // Determine output path
     let save_path = output_path.unwrap_or_else(|| {
         let cache_dir = config.storage.cache_dir.clone();
@@ -65,17 +84,8 @@ pub async fn query(
     if let Some(parent) = save_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&save_path, &response.content)?;
-    spinner.finish_and_clear();
-
-    let output = QueryOutput {
-        hash: hash.to_string(),
-        title,
-        price_paid: price,
-        saved_to: save_path.display().to_string(),
-    };
-
-    Ok(output.render(format))
+    std::fs::write(&save_path, content)?;
+    Ok(save_path)
 }
 
 #[cfg(test)]

@@ -82,18 +82,7 @@ pub async fn start(
     health_port: u16,
 ) -> CliResult<String> {
     let base_dir = config.base_dir();
-
-    // Check identity exists BEFORE checking PID file (Issue #45).
-    // Without this order, a missing identity hits the stale PID check first
-    // and reports "Node is already running" instead of "Identity not initialized."
-    if !crate::context::identity_exists(&config) {
-        return Err(CliError::IdentityNotInitialized);
-    }
-
-    // Check for existing running node
-    if check_existing_node(&base_dir).is_some() {
-        return Err(CliError::NodeAlreadyRunning);
-    }
+    check_can_start(&config)?;
 
     if daemon {
         // Daemon mode should be handled by start_daemon_sync before the runtime starts.
@@ -104,38 +93,13 @@ pub async fn start(
     }
 
     // Foreground mode: create context and run
-    let mut ctx = NodeContext::with_network(config.clone()).await?;
-
-    // Auto-deposit if settlement is configured and balance is low
-    if let Some(ref settlement) = ctx.settlement {
-        match maybe_auto_deposit(settlement, &config).await {
-            Ok(Some(tx_id)) => {
-                println!("Auto-deposited to settlement contract (tx: {})", tx_id);
-            }
-            Ok(None) => {}
-            Err(e) => {
-                warn!(error = %e, "Auto-deposit failed, continuing anyway");
-            }
-        }
-    }
-
-    // Bootstrap
-    ctx.bootstrap().await?;
-
-    // Subscribe to announcements
-    if let Some(ref network) = ctx.network {
-        network.subscribe_announcements().await?;
-    }
+    let mut ctx = prepare_foreground_node(&config).await?;
 
     // Get info for output
-    let listen_addresses = config.network.listen_addresses.clone();
-    let connected_peers = ctx.connected_peers() as u32;
-    let peer_id = ctx.peer_id().to_string();
-
     let output = StartOutput {
-        peer_id,
-        listen_addresses,
-        connected_peers,
+        peer_id: ctx.peer_id().to_string(),
+        listen_addresses: config.network.listen_addresses.clone(),
+        connected_peers: ctx.connected_peers() as u32,
         daemon,
     };
 
@@ -144,35 +108,99 @@ pub async fn start(
     write_pid_file_with_start_time(&pid_path)?;
 
     // Print status and run event loop
-    let output_str = output.render(format);
+    print_start_banner(&output.render(format), health, health_port);
+
+    let health_config = health_config(&config, health, health_port);
+    run_until_shutdown(&mut ctx, &base_dir, &pid_path, health_config).await?;
+
+    Ok("Node stopped gracefully.".to_string())
+}
+
+/// Check identity exists BEFORE checking the PID file (Issue #45): without this order,
+/// a missing identity hits the stale PID check first and reports "Node is already
+/// running" instead of "Identity not initialized." Then check no node is running.
+fn check_can_start(config: &CliConfig) -> CliResult<()> {
+    if !crate::context::identity_exists(config) {
+        return Err(CliError::IdentityNotInitialized);
+    }
+
+    // Check for existing running node
+    if check_existing_node(&config.base_dir()).is_some() {
+        return Err(CliError::NodeAlreadyRunning);
+    }
+    Ok(())
+}
+
+/// Create the node context, auto-deposit if needed, bootstrap and subscribe to announcements.
+async fn prepare_foreground_node(config: &CliConfig) -> CliResult<NodeContext> {
+    let ctx = NodeContext::with_network(config.clone()).await?;
+
+    // Auto-deposit if settlement is configured and balance is low
+    auto_deposit_foreground(&ctx, config).await;
+
+    // Bootstrap
+    ctx.bootstrap().await?;
+
+    // Subscribe to announcements
+    if let Some(ref network) = ctx.network {
+        network.subscribe_announcements().await?;
+    }
+    Ok(ctx)
+}
+
+/// Auto-deposit if settlement is configured and the balance is low; a failure is
+/// logged and the node starts anyway.
+async fn auto_deposit_foreground(ctx: &NodeContext, config: &CliConfig) {
+    let Some(ref settlement) = ctx.settlement else {
+        return;
+    };
+    match maybe_auto_deposit(settlement, config).await {
+        Ok(Some(tx_id)) => {
+            println!("Auto-deposited to settlement contract (tx: {})", tx_id);
+        }
+        Ok(None) => {}
+        Err(e) => {
+            warn!(error = %e, "Auto-deposit failed, continuing anyway");
+        }
+    }
+}
+
+fn print_start_banner(output_str: &str, health: bool, health_port: u16) {
     println!("{}", output_str);
     if health {
         println!("Health endpoint: http://0.0.0.0:{}/health", health_port);
     }
     println!("\nPress Ctrl+C to stop the node...\n");
+}
 
-    // Set up shutdown signal handler
-    let shutdown_rx = shutdown_signal();
-
-    // Configure health endpoint with alerting
-    let health_config = HealthConfig {
+/// Configure health endpoint with alerting.
+fn health_config(config: &CliConfig, health: bool, health_port: u16) -> HealthConfig {
+    HealthConfig {
         enabled: health,
         port: health_port,
         alerting: config.alerting.clone(),
-    };
+    }
+}
 
-    // Run the event loop with status file updates and health endpoint
-    let result =
-        run_event_loop_with_health(&mut ctx, shutdown_rx, Some(&base_dir), health_config).await;
+/// Run the event loop (with status file updates and health endpoint) until a
+/// shutdown signal, then remove the PID and status files.
+async fn run_until_shutdown(
+    ctx: &mut NodeContext,
+    base_dir: &std::path::Path,
+    pid_path: &std::path::Path,
+    health_config: HealthConfig,
+) -> CliResult<()> {
+    // Set up shutdown signal handler
+    let shutdown_rx = shutdown_signal();
+
+    let result = run_event_loop_with_health(ctx, shutdown_rx, Some(base_dir), health_config).await;
 
     // Cleanup on exit
     info!("Cleaning up...");
-    let _ = remove_pid_file(&pid_path);
-    let _ = remove_status_file(&status_file_path(&base_dir));
+    let _ = remove_pid_file(pid_path);
+    let _ = remove_status_file(&status_file_path(base_dir));
 
-    result?;
-
-    Ok("Node stopped gracefully.".to_string())
+    result
 }
 
 /// Start the node in daemon mode (synchronous, Unix only).
@@ -188,31 +216,12 @@ pub fn start_daemon_sync(
     health_port: u16,
 ) -> CliResult<String> {
     use daemonize::Daemonize;
-    use std::fs::File;
 
     let base_dir = config.base_dir();
-
-    // Check identity exists BEFORE checking PID file (Issue #45)
-    if !crate::context::identity_exists(&config) {
-        return Err(CliError::IdentityNotInitialized);
-    }
-
-    // Check for existing running node
-    if check_existing_node(&base_dir).is_some() {
-        return Err(CliError::NodeAlreadyRunning);
-    }
-
-    let pid_path = pid_file_path(&base_dir);
+    check_can_start(&config)?;
 
     // Create log files for stdout/stderr
-    let stdout_path = base_dir.join("node.stdout.log");
-    let stderr_path = base_dir.join("node.stderr.log");
-
-    // Ensure base directory exists
-    std::fs::create_dir_all(&base_dir)?;
-
-    let stdout = File::create(&stdout_path)?;
-    let stderr = File::create(&stderr_path)?;
+    let (stdout, stderr, stderr_path) = daemon_log_files(&base_dir)?;
 
     // Configure daemonize - note: we don't use pid_file here because we want
     // to write it ourselves with the start time
@@ -238,87 +247,7 @@ pub fn start_daemon_sync(
             let rt = tokio::runtime::Runtime::new()
                 .map_err(|e| CliError::config(format!("Failed to create runtime: {}", e)))?;
 
-            rt.block_on(async {
-                // Now create the context in the fresh runtime
-                let mut ctx = match NodeContext::with_network(config.clone()).await {
-                    Ok(ctx) => ctx,
-                    Err(e) => {
-                        eprintln!("Failed to initialize node: {}", e);
-                        std::process::exit(1);
-                    }
-                };
-
-                // Auto-deposit if settlement is configured and balance is low
-                if let Some(ref settlement) = ctx.settlement {
-                    match maybe_auto_deposit(settlement, &config).await {
-                        Ok(Some(tx_id)) => {
-                            eprintln!("Auto-deposited to settlement contract (tx: {})", tx_id);
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            eprintln!("Warning: Auto-deposit failed: {}", e);
-                            // Continue anyway - node can still serve content
-                        }
-                    }
-                }
-
-                // Bootstrap
-                if let Err(e) = ctx.bootstrap().await {
-                    eprintln!("Failed to bootstrap: {}", e);
-                    std::process::exit(1);
-                }
-
-                // Subscribe to announcements
-                if let Some(ref network) = ctx.network {
-                    if let Err(e) = network.subscribe_announcements().await {
-                        eprintln!("Failed to subscribe to announcements: {}", e);
-                        std::process::exit(1);
-                    }
-                }
-
-                // Write PID file with start time (after successful init)
-                if let Err(e) = write_pid_file_with_start_time(&pid_path) {
-                    eprintln!("Failed to write PID file: {}", e);
-                    std::process::exit(1);
-                }
-
-                // Log startup info
-                let peer_id = ctx.peer_id().to_string();
-                eprintln!("Nodalync daemon started (PID: {})", std::process::id());
-                eprintln!("PeerId: {}", peer_id);
-                if health {
-                    eprintln!("Health endpoint: http://0.0.0.0:{}/health", health_port);
-                }
-
-                // Set up shutdown signal handler
-                let shutdown_rx = shutdown_signal();
-
-                // Configure health endpoint with alerting
-                let health_config = HealthConfig {
-                    enabled: health,
-                    port: health_port,
-                    alerting: config.alerting.clone(),
-                };
-
-                // Run the event loop with status file updates and health endpoint
-                let result = run_event_loop_with_health(
-                    &mut ctx,
-                    shutdown_rx,
-                    Some(&base_dir),
-                    health_config,
-                )
-                .await;
-
-                // Cleanup
-                let _ = remove_pid_file(&pid_path);
-                let _ = remove_status_file(&status_file_path(&base_dir));
-
-                if let Err(e) = result {
-                    eprintln!("Node error: {}", e);
-                    std::process::exit(1);
-                }
-            });
-
+            rt.block_on(run_daemon(config, health, health_port));
             std::process::exit(0);
         }
         Err(e) => {
@@ -326,6 +255,101 @@ pub fn start_daemon_sync(
             Err(CliError::user(format!("Failed to daemonize: {}", e)))
         }
     }
+}
+
+/// Create the daemon's stdout and stderr log files in the base directory (creating it).
+/// Returns the files and the stderr log path.
+#[cfg(unix)]
+fn daemon_log_files(
+    base_dir: &std::path::Path,
+) -> CliResult<(std::fs::File, std::fs::File, std::path::PathBuf)> {
+    let stdout_path = base_dir.join("node.stdout.log");
+    let stderr_path = base_dir.join("node.stderr.log");
+
+    // Ensure base directory exists
+    std::fs::create_dir_all(base_dir)?;
+
+    let stdout = std::fs::File::create(&stdout_path)?;
+    let stderr = std::fs::File::create(&stderr_path)?;
+    Ok((stdout, stderr, stderr_path))
+}
+
+/// The daemon's body, in the fresh runtime: initialize, run until shutdown and clean up.
+/// Any failure is printed to stderr and exits the process with status 1.
+#[cfg(unix)]
+async fn run_daemon(config: CliConfig, health: bool, health_port: u16) {
+    let base_dir = config.base_dir();
+    let pid_path = pid_file_path(&base_dir);
+
+    // Now create the context in the fresh runtime
+    let mut ctx = prepare_daemon_node(&config).await;
+
+    // Write PID file with start time (after successful init)
+    if let Err(e) = write_pid_file_with_start_time(&pid_path) {
+        exit_with_error(&format!("Failed to write PID file: {}", e));
+    }
+
+    // Log startup info
+    eprintln!("Nodalync daemon started (PID: {})", std::process::id());
+    eprintln!("PeerId: {}", ctx.peer_id());
+    if health {
+        eprintln!("Health endpoint: http://0.0.0.0:{}/health", health_port);
+    }
+
+    let health_config = health_config(&config, health, health_port);
+    if let Err(e) = run_until_shutdown(&mut ctx, &base_dir, &pid_path, health_config).await {
+        exit_with_error(&format!("Node error: {}", e));
+    }
+}
+
+/// Create the daemon's context, auto-deposit if needed, bootstrap and subscribe to
+/// announcements; exit on any failure but the auto-deposit.
+#[cfg(unix)]
+async fn prepare_daemon_node(config: &CliConfig) -> NodeContext {
+    let ctx = NodeContext::with_network(config.clone())
+        .await
+        .unwrap_or_else(|e| exit_with_error(&format!("Failed to initialize node: {}", e)));
+
+    // Auto-deposit if settlement is configured and balance is low
+    if let Some(ref settlement) = ctx.settlement {
+        match maybe_auto_deposit(settlement, config).await {
+            Ok(Some(tx_id)) => {
+                eprintln!("Auto-deposited to settlement contract (tx: {})", tx_id);
+            }
+            Ok(None) => {}
+            Err(e) => {
+                // Continue anyway - node can still serve content
+                eprintln!("Warning: Auto-deposit failed: {}", e);
+            }
+        }
+    }
+
+    // Bootstrap
+    if let Err(e) = ctx.bootstrap().await {
+        exit_with_error(&format!("Failed to bootstrap: {}", e));
+    }
+
+    // Subscribe to announcements
+    if let Err(e) = subscribe_announcements(&ctx).await {
+        exit_with_error(&format!("Failed to subscribe to announcements: {}", e));
+    }
+    ctx
+}
+
+/// Subscribe to announcements when the network is enabled.
+#[cfg(unix)]
+async fn subscribe_announcements(ctx: &NodeContext) -> Result<(), nodalync_net::NetworkError> {
+    match ctx.network {
+        Some(ref network) => network.subscribe_announcements().await,
+        None => Ok(()),
+    }
+}
+
+/// Print `message` to stderr and exit the daemon with status 1.
+#[cfg(unix)]
+fn exit_with_error(message: &str) -> ! {
+    eprintln!("{}", message);
+    std::process::exit(1);
 }
 
 /// Start the node in daemon mode (non-Unix stub).

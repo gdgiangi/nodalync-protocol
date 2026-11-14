@@ -1,9 +1,7 @@
 //! Merge L2 Entity Graphs command.
 
-use nodalync_store::ContentStore;
-
 use crate::config::CliConfig;
-use crate::context::{parse_hash, NodeContext};
+use crate::context::{load_entity_graph, parse_hashes, require_manifest, NodeContext};
 use crate::error::{CliError, CliResult};
 use crate::output::{MergeL2Output, OutputFormat, Render};
 
@@ -15,39 +13,13 @@ pub fn merge_l2(
     _title: Option<String>,
 ) -> CliResult<String> {
     // Parse graph hashes
-    let graphs: Vec<_> = graph_strs
-        .iter()
-        .map(|s| parse_hash(s))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    if graphs.len() < 2 {
-        return Err(CliError::User(
-            "At least two L2 graphs are required for merging".to_string(),
-        ));
-    }
+    let graphs = parse_graphs_to_merge(graph_strs)?;
 
     // Initialize context
     let mut ctx = NodeContext::local(config)?;
 
-    // Verify graphs exist and are L2
-    for graph in &graphs {
-        let manifest = ctx
-            .ops
-            .get_content_manifest(graph)?
-            .ok_or_else(|| CliError::NotFound(graph.to_string()))?;
-
-        if manifest.content_type != nodalync_types::ContentType::L2 {
-            return Err(CliError::User(format!(
-                "Content {} is not an L2 Entity Graph",
-                graph
-            )));
-        }
-
-        // Check ownership
-        if manifest.owner != ctx.peer_id() {
-            return Err(CliError::User(format!("You don't own L2 graph {}", graph)));
-        }
-    }
+    // Verify graphs exist, are L2 and are ours
+    check_owned_l2_graphs(&ctx, &graphs)?;
 
     // Store graph count before consuming
     let merged_count = graphs.len();
@@ -57,15 +29,7 @@ pub fn merge_l2(
     let hash = ctx.ops.merge_l2(graphs, Some(merge_config))?;
 
     // Get merged graph to count
-    let content = ctx
-        .ops
-        .state
-        .content
-        .load(&hash)?
-        .ok_or_else(|| CliError::NotFound(hash.to_string()))?;
-
-    let graph: nodalync_types::L2EntityGraph = ciborium::from_reader(&content[..])
-        .map_err(|e| CliError::User(format!("Failed to parse merged graph: {}", e)))?;
+    let graph = load_entity_graph(&ctx, &hash, "merged graph")?;
 
     let output = MergeL2Output {
         hash: hash.to_string(),
@@ -75,6 +39,43 @@ pub fn merge_l2(
     };
 
     Ok(output.render(format))
+}
+
+/// Parse the graph hashes; at least two are required.
+fn parse_graphs_to_merge(graph_strs: &[String]) -> CliResult<Vec<nodalync_crypto::Hash>> {
+    let graphs = parse_hashes(graph_strs)?;
+    if graphs.len() < 2 {
+        return Err(CliError::User(
+            "At least two L2 graphs are required for merging".to_string(),
+        ));
+    }
+    Ok(graphs)
+}
+
+/// Every graph must exist, be an L2 entity graph, and be ours.
+fn check_owned_l2_graphs(ctx: &NodeContext, graphs: &[nodalync_crypto::Hash]) -> CliResult<()> {
+    for graph in graphs {
+        check_owned_l2_graph(ctx, graph)?;
+    }
+    Ok(())
+}
+
+/// The graph must exist, be an L2 entity graph, and be ours.
+fn check_owned_l2_graph(ctx: &NodeContext, graph: &nodalync_crypto::Hash) -> CliResult<()> {
+    let manifest = require_manifest(&ctx.ops, graph, &graph.to_string())?;
+
+    if manifest.content_type != nodalync_types::ContentType::L2 {
+        return Err(CliError::User(format!(
+            "Content {} is not an L2 Entity Graph",
+            graph
+        )));
+    }
+
+    // Check ownership
+    if manifest.owner != ctx.peer_id() {
+        return Err(CliError::User(format!("You don't own L2 graph {}", graph)));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -5,8 +5,8 @@
 
 use nodalync_crypto::Hash;
 use nodalync_econ::{create_settlement_batch, should_settle};
-use nodalync_store::SettlementQueueStore;
-use nodalync_types::Payment;
+use nodalync_store::{QueuedDistribution, SettlementQueueStore};
+use nodalync_types::{Payment, SettlementBatch};
 use nodalync_valid::Validator;
 use nodalync_wire::SettleConfirmPayload;
 use tracing::{info, warn};
@@ -54,67 +54,10 @@ where
             return Ok(None);
         }
 
-        // Convert QueuedDistribution to Payment for batch creation
-        // Note: In a full implementation, we'd have the actual Payment objects
-        // For MVP, we create synthetic payments from the queued distributions
-        let payments: Vec<Payment> = pending
-            .iter()
-            .map(|d| {
-                Payment::new(
-                    d.payment_id,
-                    Hash([0u8; 32]), // No channel for batch settlement
-                    d.amount,
-                    d.recipient,
-                    d.source_hash,
-                    vec![], // Provenance already computed
-                    d.queued_at,
-                    nodalync_crypto::Signature::from_bytes([0u8; 64]),
-                )
-            })
-            .collect();
-
-        // 3. Create batch via create_settlement_batch
-        let batch = create_settlement_batch(&payments);
-        let batch_id = batch.batch_id;
-
-        // 4. Submit to Hedera if settlement configured
-        let transaction_id = if let Some(settlement) = self.settlement().cloned() {
-            match settlement.settle_batch(&batch).await {
-                Ok(tx_id) => {
-                    info!(batch_id = %batch_id, tx_id = %tx_id, "Batch settled on-chain");
-                    tx_id.to_string()
-                }
-                Err(e) => {
-                    warn!(batch_id = %batch_id, error = %e, "On-chain settlement failed, keeping queue intact");
-                    return Err(crate::error::OpsError::SettlementFailed(e.to_string()));
-                }
-            }
-        } else {
-            format!("local-{}", batch_id) // No settlement configured
-        };
-
-        // 5. Broadcast settlement confirmation (if network available)
-        if let Some(network) = self.network().cloned() {
-            let confirm = SettleConfirmPayload {
-                batch_id,
-                transaction_id: transaction_id.clone(),
-                block_number: 0, // Hedera doesn't use block numbers
-                timestamp,
-            };
-            // Best effort broadcast
-            let _ = network.broadcast_settlement_confirm(confirm).await;
-        }
-
-        // 6. Mark as settled
-        let payment_ids: Vec<Hash> = pending.iter().map(|d| d.payment_id).collect();
-        self.state
-            .settlement
-            .mark_settled(&payment_ids, &batch_id)?;
-
-        // 7. Update last_settlement_time
-        self.state.settlement.set_last_settlement_time(timestamp)?;
-
-        Ok(Some(batch_id))
+        // 3-7. Batch, submit, broadcast, mark settled, update last_settlement_time
+        self.settle_pending(&pending, timestamp, false)
+            .await
+            .map(Some)
     }
 
     /// Check if settlement should be triggered.
@@ -146,53 +89,37 @@ where
             return Ok(None);
         }
 
-        // Create payments from distributions
-        let payments: Vec<Payment> = pending
-            .iter()
-            .map(|d| {
-                Payment::new(
-                    d.payment_id,
-                    Hash([0u8; 32]),
-                    d.amount,
-                    d.recipient,
-                    d.source_hash,
-                    vec![],
-                    d.queued_at,
-                    nodalync_crypto::Signature::from_bytes([0u8; 64]),
-                )
-            })
-            .collect();
+        self.settle_pending(&pending, timestamp, true)
+            .await
+            .map(Some)
+    }
 
-        // Create batch
+    /// Settle a non-empty set of pending distributions and return the batch ID.
+    ///
+    /// Creates the batch, submits it on-chain when settlement is configured (a failure
+    /// leaves the queue intact), broadcasts the confirmation best-effort, then marks the
+    /// distributions settled and records the settlement time.
+    async fn settle_pending(
+        &mut self,
+        pending: &[QueuedDistribution],
+        timestamp: u64,
+        forced: bool,
+    ) -> OpsResult<Hash> {
+        // Convert QueuedDistribution to Payment for batch creation
+        // Note: In a full implementation, we'd have the actual Payment objects
+        // For MVP, we create synthetic payments from the queued distributions
+        let payments: Vec<Payment> = pending.iter().map(distribution_payment).collect();
+
+        // Create batch via create_settlement_batch
         let batch = create_settlement_batch(&payments);
         let batch_id = batch.batch_id;
 
         // Submit to Hedera if settlement configured
-        let transaction_id = if let Some(settlement) = self.settlement().cloned() {
-            match settlement.settle_batch(&batch).await {
-                Ok(tx_id) => {
-                    info!(batch_id = %batch_id, tx_id = %tx_id, "Force batch settled on-chain");
-                    tx_id.to_string()
-                }
-                Err(e) => {
-                    warn!(batch_id = %batch_id, error = %e, "On-chain force settlement failed, keeping queue intact");
-                    return Err(crate::error::OpsError::SettlementFailed(e.to_string()));
-                }
-            }
-        } else {
-            format!("local-force-{}", batch_id) // No settlement configured
-        };
+        let transaction_id = self.submit_batch(&batch, forced).await?;
 
         // Broadcast settlement confirmation (if network available)
-        if let Some(network) = self.network().cloned() {
-            let confirm = SettleConfirmPayload {
-                batch_id,
-                transaction_id,
-                block_number: 0,
-                timestamp,
-            };
-            let _ = network.broadcast_settlement_confirm(confirm).await;
-        }
+        self.broadcast_settlement(batch_id, transaction_id, timestamp)
+            .await;
 
         // Mark as settled
         let payment_ids: Vec<Hash> = pending.iter().map(|d| d.payment_id).collect();
@@ -203,7 +130,81 @@ where
         // Update last settlement time
         self.state.settlement.set_last_settlement_time(timestamp)?;
 
-        Ok(Some(batch_id))
+        Ok(batch_id)
+    }
+
+    /// Submit the batch on-chain and return its transaction ID; without settlement
+    /// configured, return a local ID instead.
+    async fn submit_batch(&self, batch: &SettlementBatch, forced: bool) -> OpsResult<String> {
+        let batch_id = batch.batch_id;
+        let Some(settlement) = self.settlement().cloned() else {
+            // No settlement configured
+            return Ok(local_transaction_id(&batch_id, forced));
+        };
+        match settlement.settle_batch(batch).await {
+            Ok(tx_id) => {
+                log_batch_settled(&batch_id, &tx_id.to_string(), forced);
+                Ok(tx_id.to_string())
+            }
+            Err(e) => {
+                log_batch_failed(&batch_id, &e.to_string(), forced);
+                Err(crate::error::OpsError::SettlementFailed(e.to_string()))
+            }
+        }
+    }
+
+    /// Broadcast the settlement confirmation, best effort, if a network is available.
+    async fn broadcast_settlement(&self, batch_id: Hash, transaction_id: String, timestamp: u64) {
+        if let Some(network) = self.network().cloned() {
+            let confirm = SettleConfirmPayload {
+                batch_id,
+                transaction_id,
+                block_number: 0, // Hedera doesn't use block numbers
+                timestamp,
+            };
+            // Best effort broadcast
+            let _ = network.broadcast_settlement_confirm(confirm).await;
+        }
+    }
+}
+
+/// A synthetic payment for a queued distribution: no channel, no provenance (already
+/// computed) and no signature.
+fn distribution_payment(d: &QueuedDistribution) -> Payment {
+    Payment::new(
+        d.payment_id,
+        Hash([0u8; 32]), // No channel for batch settlement
+        d.amount,
+        d.recipient,
+        d.source_hash,
+        vec![], // Provenance already computed
+        d.queued_at,
+        nodalync_crypto::Signature::from_bytes([0u8; 64]),
+    )
+}
+
+/// The transaction ID recorded for a batch settled without on-chain settlement.
+fn local_transaction_id(batch_id: &Hash, forced: bool) -> String {
+    if forced {
+        format!("local-force-{}", batch_id)
+    } else {
+        format!("local-{}", batch_id)
+    }
+}
+
+fn log_batch_settled(batch_id: &Hash, tx_id: &str, forced: bool) {
+    if forced {
+        info!(batch_id = %batch_id, tx_id = %tx_id, "Force batch settled on-chain");
+    } else {
+        info!(batch_id = %batch_id, tx_id = %tx_id, "Batch settled on-chain");
+    }
+}
+
+fn log_batch_failed(batch_id: &Hash, error: &str, forced: bool) {
+    if forced {
+        warn!(batch_id = %batch_id, error = %error, "On-chain force settlement failed, keeping queue intact");
+    } else {
+        warn!(batch_id = %batch_id, error = %error, "On-chain settlement failed, keeping queue intact");
     }
 }
 
@@ -464,6 +465,59 @@ mod tests {
         // Verify the mock received the batch
         let batches = mock_settle.settled_batches();
         assert_eq!(batches.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_failed_onchain_settlement_keeps_queue_intact() {
+        use nodalync_test_utils::*;
+
+        let mock_settle = MockSettlement::new().with_balance(10000).with_failure();
+        let (mut ops, _temp) =
+            create_test_ops_with_settlement(std::sync::Arc::new(mock_settle.clone()));
+
+        let dist = QueuedDistribution::new(
+            content_hash(b"failing-payment"),
+            test_peer_id(),
+            500,
+            content_hash(b"failing-source"),
+            current_timestamp(),
+        );
+        ops.state.settlement.enqueue(dist).unwrap();
+
+        let result = ops.force_settlement().await;
+
+        let error = result.expect_err("on-chain failure must be reported");
+        assert!(format!("{:?}", error).starts_with("SettlementFailed"));
+        assert_eq!(ops.get_pending_settlement_total().unwrap(), 500);
+        assert_eq!(
+            ops.state.settlement.get_last_settlement_time().unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn test_local_settlement_ids_name_the_trigger() {
+        let (mut ops, _temp) = create_test_ops();
+        let dist = QueuedDistribution::new(
+            content_hash(b"local-payment"),
+            test_peer_id(),
+            500,
+            content_hash(b"local-source"),
+            current_timestamp(),
+        );
+        ops.state.settlement.enqueue(dist).unwrap();
+
+        let batch_id = ops.force_settlement().await.unwrap().unwrap();
+
+        assert_eq!(
+            local_transaction_id(&batch_id, true),
+            format!("local-force-{}", batch_id)
+        );
+        assert_eq!(
+            local_transaction_id(&batch_id, false),
+            format!("local-{}", batch_id)
+        );
+        assert_eq!(ops.get_pending_settlement_total().unwrap(), 0);
     }
 
     #[tokio::test]

@@ -163,6 +163,43 @@ pub struct ManifestSummary {
     pub content_type: String,
 }
 
+/// Formats one manifest as a line of the content list.
+type LineFormat = fn(&ManifestSummary) -> String;
+
+/// Add the manifests with `visibility` under a header with `label` and their count;
+/// nothing when there are none.
+fn push_visibility_group(
+    lines: &mut Vec<String>,
+    manifests: &[ManifestSummary],
+    (visibility, label): (&str, colored::ColoredString),
+    format_line: LineFormat,
+    trailing_blank: bool,
+) {
+    let group: Vec<_> = manifests
+        .iter()
+        .filter(|m| m.visibility == visibility)
+        .collect();
+    if group.is_empty() {
+        return;
+    }
+    lines.push(format!("{} ({})", label, group.len()));
+    lines.extend(group.into_iter().map(format_line));
+    if trailing_blank {
+        lines.push(String::new());
+    }
+}
+
+/// A line for offline content: dimmed and tagged "[offline]".
+fn format_offline_line(m: &ManifestSummary) -> String {
+    format!(
+        "  {} \"{}\" v{} {}",
+        short_hash(&m.hash).dimmed(),
+        m.title.as_str().dimmed(),
+        m.version,
+        "[offline]".dimmed()
+    )
+}
+
 impl Render for ListOutput {
     fn render_human(&self) -> String {
         if self.manifests.is_empty() {
@@ -171,68 +208,41 @@ impl Render for ListOutput {
 
         let mut lines = vec![];
 
-        // Group by visibility
-        let shared: Vec<_> = self
-            .manifests
-            .iter()
-            .filter(|m| m.visibility == "Shared")
-            .collect();
-        let unlisted: Vec<_> = self
-            .manifests
-            .iter()
-            .filter(|m| m.visibility == "Unlisted")
-            .collect();
-        let private: Vec<_> = self
-            .manifests
-            .iter()
-            .filter(|m| m.visibility == "Private")
-            .collect();
-
-        if !shared.is_empty() {
-            lines.push(format!("{} ({})", "SHARED".green().bold(), shared.len()));
-            for m in shared {
-                lines.push(format_manifest_line(m));
-            }
-            lines.push(String::new());
-        }
-
-        if !unlisted.is_empty() {
-            lines.push(format!(
-                "{} ({})",
+        // Group by visibility; every group but the last (offline) ends with a blank line
+        let groups = [
+            (
+                "Shared",
+                "SHARED".green().bold(),
+                format_manifest_line as LineFormat,
+                true,
+            ),
+            (
+                "Unlisted",
                 "UNLISTED".yellow().bold(),
-                unlisted.len()
-            ));
-            for m in unlisted {
-                lines.push(format_manifest_line(m));
-            }
-            lines.push(String::new());
-        }
-
-        if !private.is_empty() {
-            lines.push(format!("{} ({})", "PRIVATE".dimmed().bold(), private.len()));
-            for m in private {
-                lines.push(format_manifest_line(m));
-            }
-            lines.push(String::new());
-        }
-
-        let offline: Vec<_> = self
-            .manifests
-            .iter()
-            .filter(|m| m.visibility == "Offline")
-            .collect();
-
-        if !offline.is_empty() {
-            lines.push(format!("{} ({})", "OFFLINE".dimmed().bold(), offline.len()));
-            for m in offline {
-                lines.push(format!(
-                    "  {} \"{}\" v{} {}",
-                    short_hash(&m.hash).dimmed(),
-                    m.title.as_str().dimmed(),
-                    m.version,
-                    "[offline]".dimmed()
-                ));
-            }
+                format_manifest_line,
+                true,
+            ),
+            (
+                "Private",
+                "PRIVATE".dimmed().bold(),
+                format_manifest_line,
+                true,
+            ),
+            (
+                "Offline",
+                "OFFLINE".dimmed().bold(),
+                format_offline_line,
+                false,
+            ),
+        ];
+        for (visibility, label, format_line, trailing_blank) in groups {
+            push_visibility_group(
+                &mut lines,
+                &self.manifests,
+                (visibility, label),
+                format_line,
+                trailing_blank,
+            );
         }
 
         lines.join("\n")
@@ -1121,6 +1131,42 @@ impl Render for SearchOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_list_groups_by_visibility_in_order() {
+        colored::control::set_override(false);
+        let item = |hash: &str, visibility: &str| ManifestSummary {
+            hash: hash.repeat(64),
+            title: format!("{} doc", visibility),
+            version: 1,
+            visibility: visibility.to_string(),
+            price: 0,
+            queries: 0,
+            content_type: "L0".to_string(),
+        };
+        let output = ListOutput {
+            manifests: vec![
+                item("a", "Offline"),
+                item("b", "Private"),
+                item("c", "Shared"),
+            ],
+            total: 3,
+        };
+        let text = output.render_human();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], "SHARED (1)");
+        assert_eq!(lines[2], "");
+        assert_eq!(lines[3], "PRIVATE (1)");
+        assert_eq!(lines[6], "OFFLINE (1)");
+        assert!(lines[7].ends_with("[offline]"));
+        assert_eq!(
+            lines.len(),
+            8,
+            "no blank line after the last group: {:?}",
+            lines
+        );
+        colored::control::unset_override();
+    }
 
     #[test]
     fn test_output_format_parse() {

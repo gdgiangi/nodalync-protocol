@@ -58,42 +58,21 @@ async fn create_hedera_settlement(
     network: &str,
 ) -> CliResult<Arc<dyn Settlement>> {
     // Get account ID from config or environment
-    let account_id = config
-        .settlement
-        .account_id
-        .clone()
-        .or_else(|| std::env::var("HEDERA_ACCOUNT_ID").ok())
-        .ok_or_else(|| {
-            CliError::config(
-                "Hedera account ID required. Set in config or HEDERA_ACCOUNT_ID env var",
-            )
-        })?;
+    let account_id = hedera_setting(
+        config.settlement.account_id.clone(),
+        "HEDERA_ACCOUNT_ID",
+        "Hedera account ID required. Set in config or HEDERA_ACCOUNT_ID env var",
+    )?;
 
     // Get contract ID from config or environment
-    let contract_id = config
-        .settlement
-        .contract_id
-        .clone()
-        .or_else(|| std::env::var("HEDERA_CONTRACT_ID").ok())
-        .ok_or_else(|| {
-            CliError::config(
-                "Hedera contract ID required. Set in config or HEDERA_CONTRACT_ID env var",
-            )
-        })?;
+    let contract_id = hedera_setting(
+        config.settlement.contract_id.clone(),
+        "HEDERA_CONTRACT_ID",
+        "Hedera contract ID required. Set in config or HEDERA_CONTRACT_ID env var",
+    )?;
 
     // Get private key path from config or write env var to temp file
-    let private_key_path = if let Some(ref path) = config.settlement.key_path {
-        path.clone()
-    } else if let Ok(key) = std::env::var("HEDERA_PRIVATE_KEY") {
-        // Write private key to a temporary file
-        let key_path = config.base_dir().join("hedera.key");
-        std::fs::write(&key_path, key.trim())?;
-        key_path
-    } else {
-        return Err(CliError::config(
-            "Hedera private key required. Set key_path in config or HEDERA_PRIVATE_KEY env var",
-        ));
-    };
+    let private_key_path = hedera_key_path(config)?;
 
     // Create Hedera config
     let hedera_config = if network == "hedera-mainnet" {
@@ -114,6 +93,36 @@ async fn create_hedera_settlement(
         .map_err(|e| CliError::config(format!("Failed to initialize Hedera: {}", e)))?;
 
     Ok(Arc::new(settlement))
+}
+
+/// A Hedera setting from the config file, else from environment variable `env_var`.
+#[cfg(feature = "hedera-sdk")]
+fn hedera_setting(
+    from_config: Option<String>,
+    env_var: &str,
+    missing: &'static str,
+) -> CliResult<String> {
+    from_config
+        .or_else(|| std::env::var(env_var).ok())
+        .ok_or_else(|| CliError::config(missing))
+}
+
+/// The Hedera private key file: `key_path` from the config, else HEDERA_PRIVATE_KEY
+/// written to `hedera.key` in the base directory.
+#[cfg(feature = "hedera-sdk")]
+fn hedera_key_path(config: &CliConfig) -> CliResult<std::path::PathBuf> {
+    if let Some(ref path) = config.settlement.key_path {
+        return Ok(path.clone());
+    }
+    let Ok(key) = std::env::var("HEDERA_PRIVATE_KEY") else {
+        return Err(CliError::config(
+            "Hedera private key required. Set key_path in config or HEDERA_PRIVATE_KEY env var",
+        ));
+    };
+    // Write private key to a temporary file
+    let key_path = config.base_dir().join("hedera.key");
+    std::fs::write(&key_path, key.trim())?;
+    Ok(key_path)
 }
 
 /// Convert a nodalync private key to a libp2p keypair.
@@ -153,17 +162,7 @@ impl NodeContext {
     ///
     /// Does not start networking or settlement. Use this for commands like `list`, `versions`.
     pub fn local(config: CliConfig) -> CliResult<Self> {
-        let base_dir = config.base_dir();
-
-        // Open storage
-        let state_config = NodeStateConfig::new(&base_dir);
-        let state = NodeState::open(state_config)?;
-
-        // Get peer ID (must exist)
-        if !state.identity.exists() {
-            return Err(CliError::IdentityNotInitialized);
-        }
-        let peer_id = state.identity.peer_id()?;
+        let (state, peer_id) = open_state_with_identity(&config)?;
 
         // Create operations without network or settlement
         let ops = DefaultNodeOperations::with_defaults(state, peer_id);
@@ -185,130 +184,25 @@ impl NodeContext {
     ///
     /// Starts the network node. Use this for commands like `publish`, `query`, `start`.
     pub async fn with_network(config: CliConfig) -> CliResult<Self> {
-        let base_dir = config.base_dir();
-
-        // Open storage
-        let state_config = NodeStateConfig::new(&base_dir);
-        let state = NodeState::open(state_config)?;
-
-        // Get peer ID (must exist)
-        if !state.identity.exists() {
-            return Err(CliError::IdentityNotInitialized);
-        }
-        let peer_id = state.identity.peer_id()?;
+        let (state, peer_id) = open_state_with_identity(&config)?;
 
         // Load identity for network operations (requires password)
-        let (private_key, public_key) = if config.network.enabled {
-            let password = get_identity_password()?;
-            state.identity.load(&password).map_err(|e| {
-                // Issue #46: Surface encryption errors clearly instead of letting
-                // them propagate as generic store errors that confuse users into
-                // thinking their identity doesn't exist (and re-running init).
-                if matches!(e, nodalync_store::StoreError::Encryption(_)) {
-                    CliError::User(e.to_string())
-                } else {
-                    CliError::from(e)
-                }
-            })?
-        } else {
-            // For local-only, we don't need the private key
-            (
-                PrivateKey::from_bytes([0u8; 32]),
-                PublicKey::from_bytes([0u8; 32]),
-            )
-        };
+        let (private_key, public_key) = network_keys(&config, &state)?;
 
         // Create network node
-        let network = if config.network.enabled {
-            let mut net_config = NetworkConfig::default();
-
-            // Parse listen addresses
-            for addr_str in &config.network.listen_addresses {
-                if let Ok(addr) = addr_str.parse() {
-                    net_config.listen_addresses.push(addr);
-                }
-            }
-
-            // Parse bootstrap nodes
-            // Format: /ip4/x.x.x.x/tcp/port/p2p/PeerId
-            for bootstrap_str in &config.network.bootstrap_nodes {
-                // Extract peer ID from the end of the multiaddr string
-                if let Some(p2p_idx) = bootstrap_str.rfind("/p2p/") {
-                    let peer_id_str = &bootstrap_str[p2p_idx + 5..];
-                    let addr_str = &bootstrap_str[..p2p_idx];
-
-                    // Parse peer ID
-                    if let Ok(peer_id) = peer_id_str.parse::<nodalync_net::PeerId>() {
-                        // Parse address
-                        if let Ok(addr) = addr_str.parse::<nodalync_net::Multiaddr>() {
-                            net_config.bootstrap_nodes.push((peer_id, addr.clone()));
-                            tracing::info!("Added bootstrap node: {} at {}", peer_id, addr);
-                        }
-                    }
-                }
-            }
-
-            // Convert nodalync keypair to libp2p keypair for consistent peer ID
-            let libp2p_keypair = to_libp2p_keypair(&private_key)?;
-            let node = NetworkNode::with_keypair(
-                private_key.clone(),
-                public_key,
-                libp2p_keypair,
-                net_config,
-            )
-            .await?;
-            Some(Arc::new(node))
-        } else {
-            None
-        };
+        let network = create_network(&config, &private_key, public_key).await?;
 
         // Create settlement based on config (may fail if not configured)
-        let settlement = match create_settlement(&config).await {
-            Ok(s) => Some(s),
-            Err(e) => {
-                tracing::warn!("Failed to create settlement: {}", e);
-                None
-            }
-        };
-
-        // Build OpsConfig from CLI settlement values
-        let ops_config = OpsConfig::default().with_channel(
-            ChannelConfig::default()
-                .with_max_accept_deposit(hbar_to_tinybars(
-                    config.settlement.max_accept_deposit_hbar,
-                ))
-                .with_auto_deposit(config.settlement.auto_deposit)
-                .with_auto_deposit_amount(hbar_to_tinybars(
-                    config.settlement.auto_deposit_amount_hbar,
-                ))
-                .with_auto_deposit_min_balance(hbar_to_tinybars(
-                    config.settlement.min_contract_balance_hbar,
-                )),
-        );
+        let settlement = optional_settlement(&config).await;
 
         // Create operations with network and/or settlement using config variants
-        let mut ops = match (&network, &settlement) {
-            (Some(net), Some(settle)) => DefaultNodeOperations::with_config_network_and_settlement(
-                state,
-                peer_id,
-                ops_config,
-                Arc::clone(net) as Arc<dyn Network>,
-                Arc::clone(settle),
-            ),
-            (Some(net), None) => DefaultNodeOperations::with_config_and_network(
-                state,
-                peer_id,
-                ops_config,
-                Arc::clone(net) as Arc<dyn Network>,
-            ),
-            (None, Some(settle)) => DefaultNodeOperations::with_config_and_settlement(
-                state,
-                peer_id,
-                ops_config,
-                Arc::clone(settle),
-            ),
-            (None, None) => DefaultNodeOperations::with_config(state, peer_id, ops_config),
-        };
+        let mut ops = build_ops(
+            state,
+            peer_id,
+            ops_config(&config),
+            network.as_ref(),
+            settlement.as_ref(),
+        );
 
         // Set the private key for signing payments
         if config.network.enabled {
@@ -322,6 +216,13 @@ impl NodeContext {
             config,
             private_key,
         })
+    }
+
+    /// Initialize node context with networking and bootstrap to find peers.
+    pub async fn connected(config: CliConfig) -> CliResult<Self> {
+        let ctx = Self::with_network(config).await?;
+        ctx.bootstrap().await?;
+        Ok(ctx)
     }
 
     /// Initialize node context for the `init` command.
@@ -363,6 +264,239 @@ impl NodeContext {
     }
 }
 
+/// Open the node's storage, which must already hold an identity.
+fn open_state_with_identity(config: &CliConfig) -> CliResult<(NodeState, PeerId)> {
+    // Open storage
+    let state_config = NodeStateConfig::new(config.base_dir());
+    let state = NodeState::open(state_config)?;
+
+    // Get peer ID (must exist)
+    if !state.identity.exists() {
+        return Err(CliError::IdentityNotInitialized);
+    }
+    let peer_id = state.identity.peer_id()?;
+    Ok((state, peer_id))
+}
+
+/// Map an error from loading the identity to a CLI error.
+///
+/// Issue #46: Surface encryption errors (a wrong password) clearly instead of letting
+/// them propagate as generic store errors that confuse users into thinking their
+/// identity doesn't exist (and re-running init).
+pub fn identity_load_error(e: nodalync_store::StoreError) -> CliError {
+    if matches!(e, nodalync_store::StoreError::Encryption(_)) {
+        CliError::User(e.to_string())
+    } else {
+        CliError::from(e)
+    }
+}
+
+/// Decrypt the stored identity with the identity password.
+pub fn decrypt_identity(state: &NodeState) -> CliResult<(PrivateKey, PublicKey)> {
+    let password = get_identity_password()?;
+    state.identity.load(&password).map_err(identity_load_error)
+}
+
+/// The keys for network operations: the decrypted identity when the network is
+/// enabled; for local-only, we don't need the private key, so zero keys.
+fn network_keys(config: &CliConfig, state: &NodeState) -> CliResult<(PrivateKey, PublicKey)> {
+    if config.network.enabled {
+        return decrypt_identity(state);
+    }
+    Ok((
+        PrivateKey::from_bytes([0u8; 32]),
+        PublicKey::from_bytes([0u8; 32]),
+    ))
+}
+
+/// The network node, when the network is enabled. It uses the identity's key so the
+/// libp2p peer ID stays the same.
+async fn create_network(
+    config: &CliConfig,
+    private_key: &PrivateKey,
+    public_key: PublicKey,
+) -> CliResult<Option<Arc<NetworkNode>>> {
+    if !config.network.enabled {
+        return Ok(None);
+    }
+    let net_config = build_network_config(config);
+
+    // Convert nodalync keypair to libp2p keypair for consistent peer ID
+    let libp2p_keypair = to_libp2p_keypair(private_key)?;
+    let node =
+        NetworkNode::with_keypair(private_key.clone(), public_key, libp2p_keypair, net_config)
+            .await?;
+    Ok(Some(Arc::new(node)))
+}
+
+/// Network configuration from the CLI config. Listen addresses and bootstrap nodes
+/// that do not parse are skipped.
+fn build_network_config(config: &CliConfig) -> NetworkConfig {
+    let mut net_config = NetworkConfig::default();
+
+    // Parse listen addresses
+    net_config.listen_addresses.extend(
+        config
+            .network
+            .listen_addresses
+            .iter()
+            .filter_map(|addr_str| addr_str.parse().ok()),
+    );
+
+    // Parse bootstrap nodes
+    for bootstrap_str in &config.network.bootstrap_nodes {
+        if let Some((peer_id, addr)) = parse_bootstrap_node(bootstrap_str) {
+            tracing::info!("Added bootstrap node: {} at {}", peer_id, addr);
+            net_config.bootstrap_nodes.push((peer_id, addr));
+        }
+    }
+    net_config
+}
+
+/// Split a bootstrap node `/ip4/x.x.x.x/tcp/port/p2p/PeerId` into its peer ID and address.
+fn parse_bootstrap_node(
+    bootstrap_str: &str,
+) -> Option<(nodalync_net::PeerId, nodalync_net::Multiaddr)> {
+    // Extract peer ID from the end of the multiaddr string
+    let p2p_idx = bootstrap_str.rfind("/p2p/")?;
+    let peer_id = bootstrap_str[p2p_idx + 5..]
+        .parse::<nodalync_net::PeerId>()
+        .ok()?;
+    let addr = bootstrap_str[..p2p_idx]
+        .parse::<nodalync_net::Multiaddr>()
+        .ok()?;
+    Some((peer_id, addr))
+}
+
+/// The settlement layer, or `None` (with a warning) when it cannot be created.
+async fn optional_settlement(config: &CliConfig) -> Option<Arc<dyn Settlement>> {
+    match create_settlement(config).await {
+        Ok(s) => Some(s),
+        Err(e) => {
+            tracing::warn!("Failed to create settlement: {}", e);
+            None
+        }
+    }
+}
+
+/// Build OpsConfig from CLI settlement values.
+fn ops_config(config: &CliConfig) -> OpsConfig {
+    OpsConfig::default().with_channel(
+        ChannelConfig::default()
+            .with_max_accept_deposit(hbar_to_tinybars(config.settlement.max_accept_deposit_hbar))
+            .with_auto_deposit(config.settlement.auto_deposit)
+            .with_auto_deposit_amount(hbar_to_tinybars(config.settlement.auto_deposit_amount_hbar))
+            .with_auto_deposit_min_balance(hbar_to_tinybars(
+                config.settlement.min_contract_balance_hbar,
+            )),
+    )
+}
+
+/// Create operations with network and/or settlement.
+fn build_ops(
+    state: NodeState,
+    peer_id: PeerId,
+    ops_config: OpsConfig,
+    network: Option<&Arc<NetworkNode>>,
+    settlement: Option<&Arc<dyn Settlement>>,
+) -> DefaultNodeOperations {
+    match (network, settlement) {
+        (Some(net), Some(settle)) => DefaultNodeOperations::with_config_network_and_settlement(
+            state,
+            peer_id,
+            ops_config,
+            Arc::clone(net) as Arc<dyn Network>,
+            Arc::clone(settle),
+        ),
+        (Some(net), None) => DefaultNodeOperations::with_config_and_network(
+            state,
+            peer_id,
+            ops_config,
+            Arc::clone(net) as Arc<dyn Network>,
+        ),
+        (None, Some(settle)) => DefaultNodeOperations::with_config_and_settlement(
+            state,
+            peer_id,
+            ops_config,
+            Arc::clone(settle),
+        ),
+        (None, None) => DefaultNodeOperations::with_config(state, peer_id, ops_config),
+    }
+}
+
+/// The manifest for `hash`; `NotFound` (naming `hash_str`) when there is none.
+pub fn require_manifest(
+    ops: &DefaultNodeOperations,
+    hash: &nodalync_crypto::Hash,
+    hash_str: &str,
+) -> CliResult<nodalync_types::Manifest> {
+    ops.get_content_manifest(hash)?
+        .ok_or_else(|| CliError::NotFound(hash_str.to_string()))
+}
+
+/// The manifest for `hash`, which we must own.
+pub fn require_owned_manifest(
+    ctx: &NodeContext,
+    hash: &nodalync_crypto::Hash,
+    hash_str: &str,
+) -> CliResult<nodalync_types::Manifest> {
+    let manifest = require_manifest(&ctx.ops, hash, hash_str)?;
+    // Check ownership
+    if manifest.owner != ctx.peer_id() {
+        return Err(CliError::User("You don't own this content".to_string()));
+    }
+    Ok(manifest)
+}
+
+/// The settlement layer, which deposit and withdraw require.
+pub fn require_settlement(ctx: &NodeContext) -> CliResult<&Arc<dyn Settlement>> {
+    ctx.settlement.as_ref().ok_or_else(|| {
+        CliError::config(
+            "Hedera settlement not configured. Set HEDERA_ACCOUNT_ID, HEDERA_PRIVATE_KEY, \
+             and HEDERA_CONTRACT_ID environment variables.",
+        )
+    })
+}
+
+/// Fail with `FileNotFound` unless `path` exists.
+pub fn require_file(path: &std::path::Path) -> CliResult<()> {
+    if !path.exists() {
+        return Err(CliError::FileNotFound(path.display().to_string()));
+    }
+    Ok(())
+}
+
+/// Read an input file, which must exist.
+pub fn read_input_file(path: &std::path::Path) -> CliResult<Vec<u8>> {
+    require_file(path)?;
+    Ok(std::fs::read(path)?)
+}
+
+/// Parse each hash string, failing on the first invalid one.
+pub fn parse_hashes(hash_strs: &[String]) -> CliResult<Vec<nodalync_crypto::Hash>> {
+    hash_strs.iter().map(|s| parse_hash(s)).collect()
+}
+
+/// Load and decode a stored L2 entity graph; a decode failure is reported as
+/// "Failed to parse <label>: ...".
+pub fn load_entity_graph(
+    ctx: &NodeContext,
+    hash: &nodalync_crypto::Hash,
+    label: &str,
+) -> CliResult<nodalync_types::L2EntityGraph> {
+    use nodalync_store::ContentStore;
+
+    let content = ctx
+        .ops
+        .state
+        .content
+        .load(hash)?
+        .ok_or_else(|| CliError::NotFound(hash.to_string()))?;
+
+    ciborium::from_reader(&content[..])
+        .map_err(|e| CliError::User(format!("Failed to parse {}: {}", label, e)))
+}
+
 /// Check if identity exists in the default location.
 pub fn identity_exists(config: &CliConfig) -> bool {
     let base_dir = config.base_dir();
@@ -394,6 +528,37 @@ pub fn parse_hash(hash_str: &str) -> CliResult<nodalync_crypto::Hash> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_bootstrap_node() {
+        let peer = "12D3KooWEyoppNCUx8Yx66oV9fJnriXwCcXwDDUA2kj6vnc6iDEp";
+        let (peer_id, addr) =
+            parse_bootstrap_node(&format!("/ip4/10.0.0.1/tcp/9000/p2p/{}", peer)).unwrap();
+        assert_eq!(peer_id.to_string(), peer);
+        assert_eq!(addr.to_string(), "/ip4/10.0.0.1/tcp/9000");
+        assert!(parse_bootstrap_node("/ip4/10.0.0.1/tcp/9000").is_none());
+        assert!(parse_bootstrap_node("/ip4/10.0.0.1/tcp/9000/p2p/not-a-peer").is_none());
+    }
+
+    #[test]
+    fn test_build_network_config_skips_invalid_entries() {
+        let mut config = CliConfig::default();
+        config.network.listen_addresses = vec!["/ip4/0.0.0.0/tcp/9000".into(), "garbage".into()];
+        config.network.bootstrap_nodes = vec!["no-p2p-part".into()];
+        let net_config = build_network_config(&config);
+        // The valid address is added to the defaults; the invalid one is skipped.
+        assert_eq!(
+            net_config.listen_addresses.len(),
+            NetworkConfig::default().listen_addresses.len() + 1
+        );
+        assert!(net_config.bootstrap_nodes.is_empty());
+    }
+
+    #[test]
+    fn test_identity_load_error_wrong_password_is_user_error() {
+        let err = identity_load_error(nodalync_store::StoreError::Encryption("bad".into()));
+        assert!(matches!(err, CliError::User(_)));
+    }
 
     #[test]
     fn test_identity_exists() {

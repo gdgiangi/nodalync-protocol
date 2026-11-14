@@ -68,99 +68,14 @@ where
         let _config = config.unwrap_or_default();
 
         // 1. Validate source count
-        if source_l1_hashes.is_empty() {
-            return Err(OpsError::invalid_operation(
-                "build_l2 requires at least one L1 source",
-            ));
-        }
-        if source_l1_hashes.len() > MAX_SOURCE_L1S_PER_L2 {
-            return Err(OpsError::invalid_operation(format!(
-                "build_l2 has too many sources: {} exceeds maximum {}",
-                source_l1_hashes.len(),
-                MAX_SOURCE_L1S_PER_L2
-            )));
-        }
+        check_build_source_count(source_l1_hashes.len())?;
 
         // 2. Load and verify all L1 sources
-        let mut source_manifests: Vec<Manifest> = Vec::new();
-        let mut l1_references: Vec<L1Reference> = Vec::new();
-
-        for l1_hash in &source_l1_hashes {
-            let manifest = self
-                .state
-                .manifests
-                .load(l1_hash)?
-                .ok_or(OpsError::NotFound(*l1_hash))?;
-
-            // Verify it's L1 content
-            if manifest.content_type != ContentType::L1 {
-                return Err(OpsError::invalid_operation(format!(
-                    "source {} is {:?} content, but build-l2 requires L1 hashes. \
-                     Use 'nodalync preview <hash>' to see L1 mentions extracted from your L0 content, \
-                     then pass those L1 hashes to build-l2.",
-                    l1_hash, manifest.content_type
-                )));
-            }
-
-            // Verify ownership or previous query
-            let is_owned = manifest.owner == self.peer_id();
-            let is_cached = self.state.cache.is_cached(l1_hash);
-            if !is_owned && !is_cached {
-                return Err(OpsError::SourceNotQueried(*l1_hash));
-            }
-
-            // Get the L0 hash from provenance (first root entry for L1)
-            let l0_hash = manifest
-                .provenance
-                .root_l0l1
-                .first()
-                .map(|e| e.hash)
-                .unwrap_or(*l1_hash);
-
-            l1_references.push(L1Reference::new(*l1_hash, l0_hash));
-            source_manifests.push(manifest);
-        }
+        let (source_manifests, l1_references) = self.load_l1_sources(&source_l1_hashes)?;
 
         // 3-5. Extract entities and relationships
         // For MVP, we create a simple graph with extracted mentions
-        let mut entities: Vec<Entity> = Vec::new();
-        let mut entity_id_counter = 0u32;
-
-        for (idx, l1_hash) in source_l1_hashes.iter().enumerate() {
-            // Try to get L1 summary for extraction
-            if let Ok(l1_summary) = self.extract_l1_summary(l1_hash) {
-                for mention in &l1_summary.preview_mentions {
-                    // Each unique mention becomes an entity
-                    // Truncate label to MAX_CANONICAL_LABEL_LENGTH (200 chars)
-                    let label = if mention.content.len() > 200 {
-                        let truncated: String = mention.content.chars().take(197).collect();
-                        format!("{}...", truncated)
-                    } else {
-                        mention.content.clone()
-                    };
-                    let entity =
-                        Entity::new(format!("e{}", entity_id_counter), label).with_confidence(0.8);
-
-                    entities.push(entity);
-                    entity_id_counter += 1;
-                }
-            }
-            // Also add a placeholder entity for the source itself
-            if entities.is_empty() || entities.len() <= idx {
-                let entity = Entity::new(
-                    format!("e{}", entity_id_counter),
-                    format!("Source {}", idx + 1),
-                )
-                .with_confidence(1.0);
-                entities.push(entity);
-                entity_id_counter += 1;
-            }
-        }
-
-        // Ensure we have at least one entity
-        if entities.is_empty() {
-            entities.push(Entity::new("e0", "Root Entity").with_confidence(1.0));
-        }
+        let entities = self.entities_from_l1_sources(&source_l1_hashes);
 
         // 6. Build L2EntityGraph structure
         // First, serialize to compute hash
@@ -171,17 +86,10 @@ where
         graph.sync_counts();
 
         // 7. Compute hash
-        // Since the graph's id is included in serialization, we compute the hash
-        // from the content, then update graph.id to match, re-serialize, and use
-        // that final content. The hash stored in graph.id won't match the content's
-        // hash (circular dependency), but we use the content's actual hash for storage.
-        let content = serde_json::to_vec(&graph).map_err(|e| {
-            OpsError::invalid_operation(format!("failed to serialize L2 graph: {}", e))
-        })?;
-        let hash = content_hash(&content);
-
-        // Update graph.id for validation (validator checks graph.id == manifest.hash)
-        graph.id = hash;
+        // The graph's id is included in serialization, so the content is serialized
+        // with the placeholder id; graph.id is then set to the stored content's hash
+        // for validation (validator checks graph.id == manifest.hash).
+        let content = serialize_graph(&graph)?;
 
         // Build provenance from L1 sources
         let provenance_sources: Vec<_> = source_manifests
@@ -190,44 +98,135 @@ where
             .collect();
         let provenance = Provenance::from_sources(&provenance_sources);
 
-        // 8. Create manifest
-        let metadata = Metadata::new("L2 Entity Graph", content.len() as u64);
-        let version = Version::new_v1(hash, timestamp);
+        // 8-10. Create manifest, validate and store
+        self.store_l2(
+            &mut graph,
+            &content,
+            provenance,
+            "L2 Entity Graph",
+            &source_l1_hashes,
+            timestamp,
+        )
+    }
 
+    /// Load each L1 source with its L1 reference, in order.
+    fn load_l1_sources(
+        &self,
+        source_l1_hashes: &[Hash],
+    ) -> OpsResult<(Vec<Manifest>, Vec<L1Reference>)> {
+        let mut source_manifests: Vec<Manifest> = Vec::new();
+        let mut l1_references: Vec<L1Reference> = Vec::new();
+
+        for l1_hash in source_l1_hashes {
+            let (manifest, l1_reference) = self.load_l1_source(l1_hash)?;
+            l1_references.push(l1_reference);
+            source_manifests.push(manifest);
+        }
+        Ok((source_manifests, l1_references))
+    }
+
+    /// Load an L1 source, which must be L1 content we own or have queried.
+    fn load_l1_source(&self, l1_hash: &Hash) -> OpsResult<(Manifest, L1Reference)> {
+        let manifest = self
+            .state
+            .manifests
+            .load(l1_hash)?
+            .ok_or(OpsError::NotFound(*l1_hash))?;
+
+        // Verify it's L1 content
+        if manifest.content_type != ContentType::L1 {
+            return Err(OpsError::invalid_operation(format!(
+                "source {} is {:?} content, but build-l2 requires L1 hashes. \
+                 Use 'nodalync preview <hash>' to see L1 mentions extracted from your L0 content, \
+                 then pass those L1 hashes to build-l2.",
+                l1_hash, manifest.content_type
+            )));
+        }
+
+        // Verify ownership or previous query
+        let is_owned = manifest.owner == self.peer_id();
+        if !is_owned && !self.state.cache.is_cached(l1_hash) {
+            return Err(OpsError::SourceNotQueried(*l1_hash));
+        }
+
+        // Get the L0 hash from provenance (first root entry for L1)
+        let l0_hash = manifest
+            .provenance
+            .root_l0l1
+            .first()
+            .map(|e| e.hash)
+            .unwrap_or(*l1_hash);
+
+        Ok((manifest, L1Reference::new(*l1_hash, l0_hash)))
+    }
+
+    /// One entity per previewed mention of each source, plus a placeholder entity for
+    /// a source that has not yet produced one; at least one entity overall.
+    fn entities_from_l1_sources(&mut self, source_l1_hashes: &[Hash]) -> Vec<Entity> {
+        let mut entities: Vec<Entity> = Vec::new();
+
+        for (idx, l1_hash) in source_l1_hashes.iter().enumerate() {
+            // Try to get L1 summary for extraction
+            if let Ok(l1_summary) = self.extract_l1_summary(l1_hash) {
+                push_mention_entities(&mut entities, &l1_summary);
+            }
+            // Also add a placeholder entity for the source itself
+            if entities.is_empty() || entities.len() <= idx {
+                let entity = Entity::new(
+                    format!("e{}", entities.len()),
+                    format!("Source {}", idx + 1),
+                )
+                .with_confidence(1.0);
+                entities.push(entity);
+            }
+        }
+
+        // Ensure we have at least one entity
+        if entities.is_empty() {
+            entities.push(Entity::new("e0", "Root Entity").with_confidence(1.0));
+        }
+        entities
+    }
+
+    /// Store an L2 graph's content and a Private, free manifest for it.
+    ///
+    /// Sets `graph.id` to the stored content hash, validates the graph against the
+    /// manifest, then stores the manifest and records `sources` in the provenance graph.
+    fn store_l2(
+        &mut self,
+        graph: &mut L2EntityGraph,
+        content: &[u8],
+        provenance: Provenance,
+        title: &str,
+        sources: &[Hash],
+        timestamp: nodalync_crypto::Timestamp,
+    ) -> OpsResult<Hash> {
+        // Store content first (compute actual hash from serialized content)
+        let stored_hash = self.state.content.store(content)?;
+
+        // Update graph with the actual stored hash
+        graph.id = stored_hash;
+
+        // Create manifest with the stored hash
         let manifest = Manifest {
-            hash,
+            hash: stored_hash,
             content_type: ContentType::L2,
             owner: self.peer_id(),
-            version,
+            version: Version::new_v1(stored_hash, timestamp),
             visibility: Visibility::Private, // L2 is ALWAYS Private
             access: Default::default(),
-            metadata,
+            metadata: Metadata::new(title, content.len() as u64),
             economics: Default::default(), // price = 0
             provenance,
             created_at: timestamp,
             updated_at: timestamp,
         };
 
-        // 9. Store content and manifest
-        let stored_hash = self.state.content.store(&content)?;
-
-        // Update manifest hash to match stored content hash
-        graph.id = stored_hash;
-        let manifest = Manifest {
-            hash: stored_hash,
-            ..manifest
-        };
-        let version = Version::new_v1(stored_hash, timestamp);
-        let manifest = Manifest {
-            version,
-            ..manifest
-        };
-
-        // 10. Validate L2 content
-        validate_l2_content(&graph, &manifest)?;
+        // Validate L2 content
+        validate_l2_content(graph, &manifest)?;
 
         self.state.manifests.store(&manifest)?;
-        self.state.provenance.add(&stored_hash, &source_l1_hashes)?;
+        self.state.provenance.add(&stored_hash, sources)?;
 
         Ok(stored_hash)
     }
@@ -273,204 +272,261 @@ where
         let _config = config.unwrap_or_default();
 
         // 1. Validate source count
-        if source_l2_hashes.len() < 2 {
-            return Err(OpsError::invalid_operation(
-                "merge_l2 requires at least two L2 sources",
-            ));
-        }
-        if source_l2_hashes.len() > MAX_SOURCE_L2S_PER_MERGE {
-            return Err(OpsError::invalid_operation(format!(
-                "merge_l2 has too many sources: {} exceeds maximum {}",
-                source_l2_hashes.len(),
-                MAX_SOURCE_L2S_PER_MERGE
-            )));
-        }
+        check_merge_source_count(source_l2_hashes.len())?;
 
         // 2-3. Load all L2 sources and verify ownership
-        let mut source_graphs: Vec<L2EntityGraph> = Vec::new();
-        let mut source_manifests: Vec<Manifest> = Vec::new();
-        let mut all_l1_refs: Vec<L1Reference> = Vec::new();
-
-        for l2_hash in &source_l2_hashes {
-            let manifest = self
-                .state
-                .manifests
-                .load(l2_hash)?
-                .ok_or(OpsError::NotFound(*l2_hash))?;
-
-            // Verify it's L2 content
-            if manifest.content_type != ContentType::L2 {
-                return Err(OpsError::invalid_operation(format!(
-                    "source {} is not L2 content (is {:?})",
-                    l2_hash, manifest.content_type
-                )));
-            }
-
-            // 3. Verify ownership
-            if manifest.owner != self.peer_id() {
-                return Err(OpsError::AccessDenied);
-            }
-
-            // Load the L2 graph content
-            let content = self
-                .state
-                .content
-                .load(l2_hash)?
-                .ok_or(OpsError::NotFound(*l2_hash))?;
-
-            let graph: L2EntityGraph = serde_json::from_slice(&content).map_err(|e| {
-                OpsError::invalid_operation(format!("failed to parse L2 graph: {}", e))
-            })?;
-
-            // Collect L1 references
-            all_l1_refs.extend(graph.source_l1s.clone());
-
-            source_graphs.push(graph);
-            source_manifests.push(manifest);
-        }
+        let (source_graphs, source_manifests) = self.load_l2_sources(&source_l2_hashes)?;
 
         // 4. Unify prefix mappings (use default + any custom from sources)
-        let prefixes = nodalync_types::PrefixMap::default();
-
         // 5-6. Merge entities and relationships
-        let mut merged_entities: Vec<Entity> = Vec::new();
-        let mut entity_id_map: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        let mut entity_counter = 0u32;
-
-        for (graph_idx, graph) in source_graphs.iter().enumerate() {
-            for entity in &graph.entities {
-                // Create new ID to avoid conflicts
-                let new_id = format!("e{}", entity_counter);
-                entity_id_map.insert(format!("{}:{}", graph_idx, entity.id), new_id.clone());
-
-                let mut merged_entity = entity.clone();
-                merged_entity.id = new_id;
-                merged_entities.push(merged_entity);
-                entity_counter += 1;
-            }
-        }
-
-        // Merge relationships (update entity refs)
-        let mut merged_relationships: Vec<nodalync_types::Relationship> = Vec::new();
-        let mut rel_counter = 0u32;
-
-        for (graph_idx, graph) in source_graphs.iter().enumerate() {
-            for rel in &graph.relationships {
-                let new_id = format!("r{}", rel_counter);
-
-                // Map subject and object entity IDs
-                let new_subject = entity_id_map
-                    .get(&format!("{}:{}", graph_idx, rel.subject))
-                    .cloned()
-                    .unwrap_or_else(|| rel.subject.clone());
-
-                let new_object = match &rel.object {
-                    nodalync_types::RelationshipObject::Entity { entity_id } => {
-                        let mapped_id = entity_id_map
-                            .get(&format!("{}:{}", graph_idx, entity_id))
-                            .cloned()
-                            .unwrap_or_else(|| entity_id.clone());
-                        nodalync_types::RelationshipObject::entity(mapped_id)
-                    }
-                    other => other.clone(),
-                };
-
-                let mut merged_rel = nodalync_types::Relationship::new(
-                    new_id,
-                    new_subject,
-                    rel.predicate.clone(),
-                    new_object,
-                );
-                merged_rel.confidence = rel.confidence;
-                merged_rel.mention_refs = rel.mention_refs.clone();
-                merged_relationships.push(merged_rel);
-                rel_counter += 1;
-            }
-        }
+        let (merged_entities, entity_id_map) = merge_entities(&source_graphs);
+        let merged_relationships = merge_relationships(&source_graphs, &entity_id_map);
 
         // 7. Deduplicate L1 refs
-        let mut unique_l1_refs: Vec<L1Reference> = Vec::new();
-        let mut seen_l1_hashes: std::collections::HashSet<Hash> = std::collections::HashSet::new();
-        for l1_ref in all_l1_refs {
-            if !seen_l1_hashes.contains(&l1_ref.l1_hash) {
-                seen_l1_hashes.insert(l1_ref.l1_hash);
-                unique_l1_refs.push(l1_ref);
-            }
-        }
+        let all_l1_refs = source_graphs
+            .iter()
+            .flat_map(|graph| graph.source_l1s.iter().cloned());
 
         // Build the merged graph
         let temp_hash = content_hash(b"temp");
         let mut graph = L2EntityGraph::new(temp_hash);
-        graph.prefixes = prefixes;
-        graph.source_l1s = unique_l1_refs;
+        graph.prefixes = nodalync_types::PrefixMap::default();
+        graph.source_l1s = dedupe_l1_refs(all_l1_refs);
         graph.source_l2s = source_l2_hashes.clone();
         graph.entities = merged_entities;
         graph.relationships = merged_relationships;
         graph.sync_counts();
 
         // Serialize content for hashing and storage
-        let content = serde_json::to_vec(&graph).map_err(|e| {
-            OpsError::invalid_operation(format!("failed to serialize L2 graph: {}", e))
-        })?;
+        let content = serialize_graph(&graph)?;
 
         // 8. Compute provenance from source L2s
-        // For merged L2s, we collect all the root_l0l1 entries from sources
-        let mut merged_roots: Vec<ProvenanceEntry> = Vec::new();
-        for source_manifest in &source_manifests {
-            for root in &source_manifest.provenance.root_l0l1 {
-                // Check if already exists and accumulate weight
-                if let Some(existing) = merged_roots.iter_mut().find(|r| r.hash == root.hash) {
-                    existing.weight += root.weight;
-                } else {
-                    merged_roots.push(root.clone());
-                }
-            }
+        let provenance = merged_provenance(&source_manifests, &source_l2_hashes);
+
+        // 9-10. Create manifest, validate and store
+        self.store_l2(
+            &mut graph,
+            &content,
+            provenance,
+            "Merged L2 Entity Graph",
+            &source_l2_hashes,
+            timestamp,
+        )
+    }
+
+    /// Load each L2 source's graph and manifest, in order.
+    fn load_l2_sources(
+        &self,
+        source_l2_hashes: &[Hash],
+    ) -> OpsResult<(Vec<L2EntityGraph>, Vec<Manifest>)> {
+        let mut source_graphs: Vec<L2EntityGraph> = Vec::new();
+        let mut source_manifests: Vec<Manifest> = Vec::new();
+
+        for l2_hash in source_l2_hashes {
+            let manifest = self.load_owned_l2_manifest(l2_hash)?;
+            source_graphs.push(self.load_l2_graph(l2_hash)?);
+            source_manifests.push(manifest);
+        }
+        Ok((source_graphs, source_manifests))
+    }
+
+    /// Load the manifest of an L2 source, which must be L2 content we own.
+    fn load_owned_l2_manifest(&self, l2_hash: &Hash) -> OpsResult<Manifest> {
+        let manifest = self
+            .state
+            .manifests
+            .load(l2_hash)?
+            .ok_or(OpsError::NotFound(*l2_hash))?;
+
+        // Verify it's L2 content
+        if manifest.content_type != ContentType::L2 {
+            return Err(OpsError::invalid_operation(format!(
+                "source {} is not L2 content (is {:?})",
+                l2_hash, manifest.content_type
+            )));
         }
 
-        let max_depth = source_manifests
-            .iter()
-            .map(|m| m.provenance.depth)
-            .max()
-            .unwrap_or(0);
+        // 3. Verify ownership
+        if manifest.owner != self.peer_id() {
+            return Err(OpsError::AccessDenied);
+        }
+        Ok(manifest)
+    }
 
-        let provenance = Provenance {
-            root_l0l1: merged_roots,
-            derived_from: source_l2_hashes.clone(),
-            depth: max_depth + 1,
-        };
+    /// Load and parse the stored graph of an L2 source.
+    fn load_l2_graph(&self, l2_hash: &Hash) -> OpsResult<L2EntityGraph> {
+        let content = self
+            .state
+            .content
+            .load(l2_hash)?
+            .ok_or(OpsError::NotFound(*l2_hash))?;
 
-        // 9. Store content first (compute actual hash from serialized content)
-        let stored_hash = self.state.content.store(&content)?;
+        serde_json::from_slice(&content)
+            .map_err(|e| OpsError::invalid_operation(format!("failed to parse L2 graph: {}", e)))
+    }
+}
 
-        // Update graph with the actual stored hash
-        graph.id = stored_hash;
+/// build_l2 takes between 1 and MAX_SOURCE_L1S_PER_L2 sources.
+fn check_build_source_count(count: usize) -> OpsResult<()> {
+    if count == 0 {
+        return Err(OpsError::invalid_operation(
+            "build_l2 requires at least one L1 source",
+        ));
+    }
+    if count > MAX_SOURCE_L1S_PER_L2 {
+        return Err(OpsError::invalid_operation(format!(
+            "build_l2 has too many sources: {} exceeds maximum {}",
+            count, MAX_SOURCE_L1S_PER_L2
+        )));
+    }
+    Ok(())
+}
 
-        // Create manifest with the stored hash
-        let metadata = Metadata::new("Merged L2 Entity Graph", content.len() as u64);
-        let version = Version::new_v1(stored_hash, timestamp);
+/// merge_l2 takes between 2 and MAX_SOURCE_L2S_PER_MERGE sources.
+fn check_merge_source_count(count: usize) -> OpsResult<()> {
+    if count < 2 {
+        return Err(OpsError::invalid_operation(
+            "merge_l2 requires at least two L2 sources",
+        ));
+    }
+    if count > MAX_SOURCE_L2S_PER_MERGE {
+        return Err(OpsError::invalid_operation(format!(
+            "merge_l2 has too many sources: {} exceeds maximum {}",
+            count, MAX_SOURCE_L2S_PER_MERGE
+        )));
+    }
+    Ok(())
+}
 
-        let manifest = Manifest {
-            hash: stored_hash,
-            content_type: ContentType::L2,
-            owner: self.peer_id(),
-            version,
-            visibility: Visibility::Private,
-            access: Default::default(),
-            metadata,
-            economics: Default::default(),
-            provenance,
-            created_at: timestamp,
-            updated_at: timestamp,
-        };
+/// Serialize an L2 graph to the JSON bytes that are hashed and stored.
+fn serialize_graph(graph: &L2EntityGraph) -> OpsResult<Vec<u8>> {
+    serde_json::to_vec(graph)
+        .map_err(|e| OpsError::invalid_operation(format!("failed to serialize L2 graph: {}", e)))
+}
 
-        // 10. Validate L2 content
-        validate_l2_content(&graph, &manifest)?;
+/// Add an entity for each previewed mention, numbering IDs on from the entities so far.
+fn push_mention_entities(entities: &mut Vec<Entity>, l1_summary: &nodalync_types::L1Summary) {
+    for mention in &l1_summary.preview_mentions {
+        // Each unique mention becomes an entity
+        let entity = Entity::new(
+            format!("e{}", entities.len()),
+            entity_label(&mention.content),
+        )
+        .with_confidence(0.8);
+        entities.push(entity);
+    }
+}
 
-        self.state.manifests.store(&manifest)?;
-        self.state.provenance.add(&stored_hash, &source_l2_hashes)?;
+/// A mention's text as an entity label, truncated to MAX_CANONICAL_LABEL_LENGTH (200 bytes)
+/// as its first 197 characters plus "...".
+fn entity_label(content: &str) -> String {
+    if content.len() > 200 {
+        let truncated: String = content.chars().take(197).collect();
+        format!("{}...", truncated)
+    } else {
+        content.to_string()
+    }
+}
 
-        Ok(stored_hash)
+/// Every entity of every graph, renumbered e0, e1, … in order, and a map from
+/// "<graph index>:<old id>" to the new ID.
+fn merge_entities(
+    source_graphs: &[L2EntityGraph],
+) -> (Vec<Entity>, std::collections::HashMap<String, String>) {
+    let mut merged_entities: Vec<Entity> = Vec::new();
+    let mut entity_id_map: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+
+    for (graph_idx, graph) in source_graphs.iter().enumerate() {
+        for entity in &graph.entities {
+            // Create new ID to avoid conflicts
+            let new_id = format!("e{}", merged_entities.len());
+            entity_id_map.insert(format!("{}:{}", graph_idx, entity.id), new_id.clone());
+
+            let mut merged_entity = entity.clone();
+            merged_entity.id = new_id;
+            merged_entities.push(merged_entity);
+        }
+    }
+    (merged_entities, entity_id_map)
+}
+
+/// Every relationship of every graph, renumbered r0, r1, … in order, with entity
+/// references mapped through `entity_id_map` (unmapped references are kept as they are).
+fn merge_relationships(
+    source_graphs: &[L2EntityGraph],
+    entity_id_map: &std::collections::HashMap<String, String>,
+) -> Vec<nodalync_types::Relationship> {
+    let mut merged_relationships: Vec<nodalync_types::Relationship> = Vec::new();
+
+    for (graph_idx, graph) in source_graphs.iter().enumerate() {
+        for rel in &graph.relationships {
+            let new_id = format!("r{}", merged_relationships.len());
+            let map_id = |id: &String| {
+                entity_id_map
+                    .get(&format!("{}:{}", graph_idx, id))
+                    .cloned()
+                    .unwrap_or_else(|| id.clone())
+            };
+
+            // Map subject and object entity IDs
+            let new_subject = map_id(&rel.subject);
+            let new_object = match &rel.object {
+                nodalync_types::RelationshipObject::Entity { entity_id } => {
+                    nodalync_types::RelationshipObject::entity(map_id(entity_id))
+                }
+                other => other.clone(),
+            };
+
+            let mut merged_rel = nodalync_types::Relationship::new(
+                new_id,
+                new_subject,
+                rel.predicate.clone(),
+                new_object,
+            );
+            merged_rel.confidence = rel.confidence;
+            merged_rel.mention_refs = rel.mention_refs.clone();
+            merged_relationships.push(merged_rel);
+        }
+    }
+    merged_relationships
+}
+
+/// L1 references with repeated L1 hashes removed, keeping the first of each.
+fn dedupe_l1_refs(l1_refs: impl IntoIterator<Item = L1Reference>) -> Vec<L1Reference> {
+    let mut seen_l1_hashes: std::collections::HashSet<Hash> = std::collections::HashSet::new();
+    l1_refs
+        .into_iter()
+        .filter(|l1_ref| seen_l1_hashes.insert(l1_ref.l1_hash))
+        .collect()
+}
+
+/// Provenance of a merged L2: the sources' roots, with weights of repeated roots summed,
+/// derived from `source_l2_hashes`, one level deeper than the deepest source.
+fn merged_provenance(source_manifests: &[Manifest], source_l2_hashes: &[Hash]) -> Provenance {
+    // For merged L2s, we collect all the root_l0l1 entries from sources
+    let mut merged_roots: Vec<ProvenanceEntry> = Vec::new();
+    for root in source_manifests
+        .iter()
+        .flat_map(|m| m.provenance.root_l0l1.iter())
+    {
+        // Check if already exists and accumulate weight
+        match merged_roots.iter_mut().find(|r| r.hash == root.hash) {
+            Some(existing) => existing.weight += root.weight,
+            None => merged_roots.push(root.clone()),
+        }
+    }
+
+    let max_depth = source_manifests
+        .iter()
+        .map(|m| m.provenance.depth)
+        .max()
+        .unwrap_or(0);
+
+    Provenance {
+        root_l0l1: merged_roots,
+        derived_from: source_l2_hashes.to_vec(),
+        depth: max_depth + 1,
     }
 }
 
@@ -556,5 +612,96 @@ mod tests {
         let fake_hash2 = content_hash(b"fake2");
         let result = ops.merge_l2(vec![fake_hash1, fake_hash2], None);
         assert!(matches!(result, Err(OpsError::NotFound(_))));
+    }
+
+    /// Store `content` and relabel it as an L1 we own, so it can feed build_l2.
+    fn create_l1(ops: &mut DefaultNodeOperations, content: &[u8], title: &str) -> Hash {
+        let hash = ops
+            .create_content_with_timestamp(
+                content,
+                Metadata::new(title, content.len() as u64),
+                1000,
+            )
+            .unwrap();
+        let mut manifest = ops.state.manifests.load(&hash).unwrap().unwrap();
+        manifest.content_type = ContentType::L1;
+        ops.state.manifests.update(&manifest).unwrap();
+        hash
+    }
+
+    /// Build two L2s and merge them; returns (l2_a, l2_b, merged).
+    fn build_and_merge(ops: &mut DefaultNodeOperations) -> (Hash, Hash, Hash) {
+        let l1_a = create_l1(
+            ops,
+            b"We found that Alice Smith leads the Paris lab. Results show 40% growth.",
+            "A",
+        );
+        let l1_b = create_l1(
+            ops,
+            b"Researchers claim Bob Jones measured the effect. The definition refers to scope.",
+            "B",
+        );
+        let l2_a = ops.build_l2_with_timestamp(vec![l1_a], None, 2000).unwrap();
+        let l2_b = ops
+            .build_l2_with_timestamp(vec![l1_a, l1_b], None, 3000)
+            .unwrap();
+        let merged = ops
+            .merge_l2_with_timestamp(vec![l2_a, l2_b], None, 4000)
+            .unwrap();
+        (l2_a, l2_b, merged)
+    }
+
+    #[test]
+    fn test_build_and_merge_l2_content_is_unchanged() {
+        // Hashes recorded before build_l2/merge_l2 were split into helpers: the stored
+        // graph bytes, and so the hashes, must not change.
+        let (mut ops, _temp) = create_test_ops();
+        let (a, b, m) = build_and_merge(&mut ops);
+        assert_eq!(
+            a.to_string(),
+            "bbb0f2102ea2de964a95e67e0f4763a3834c0cddf8bcc014ffcf01236bb5c60d"
+        );
+        assert_eq!(
+            b.to_string(),
+            "ae5cc8c4ca2afda5ffd13250d5d630d85035fc9e85e4a18e230a0423ef713b02"
+        );
+        assert_eq!(
+            m.to_string(),
+            "1fc53db9753a0dfde39923caf760942e0a39775ec0d5ade81b92f9f6d815b272"
+        );
+
+        let merged = ops.state.manifests.load(&m).unwrap().unwrap();
+        let roots: Vec<(String, u32)> = merged
+            .provenance
+            .root_l0l1
+            .iter()
+            .map(|r| (r.hash.to_string(), r.weight))
+            .collect();
+        assert_eq!(
+            roots,
+            vec![
+                (
+                    "7ec74f48b9ba04c0ecb65fa9c8fc1ba7fd33f368f5f41ba8beb38afd617fb435".to_string(),
+                    4
+                ),
+                (
+                    "df5da93e59631173f89019fddf6fde56caf072e8ff449016a3fa90788d1e44e5".to_string(),
+                    2
+                ),
+            ]
+        );
+        assert_eq!(merged.provenance.depth, 2);
+        assert_eq!(merged.provenance.derived_from, vec![a, b]);
+        assert_eq!(merged.visibility, Visibility::Private);
+        assert_eq!(merged.economics.price, 0);
+    }
+
+    #[test]
+    fn test_entity_label_truncates_long_mentions() {
+        assert_eq!(entity_label("short"), "short");
+        let long = "x".repeat(250);
+        let label = entity_label(&long);
+        assert_eq!(label.len(), 200);
+        assert!(label.ends_with("..."));
     }
 }

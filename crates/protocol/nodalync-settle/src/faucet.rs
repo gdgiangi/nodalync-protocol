@@ -135,14 +135,35 @@ impl HederaFaucet {
         // Build the request URL
         let url = format!("{}/account/{}", self.endpoint, account_id);
 
+        let response = self.send_faucet_request(&url).await?;
+        let response = check_faucet_status(account_id, response).await?;
+
+        // Parse the response
+        let body = response
+            .text()
+            .await
+            .map_err(|e| SettleError::network(format!("Failed to read faucet response: {}", e)))?;
+        let result = parse_faucet_body(account_id, &body)?;
+
+        info!(
+            account_id,
+            amount_hbar = result.amount_hbar,
+            "Successfully requested HBAR from faucet"
+        );
+
+        Ok(result)
+    }
+
+    /// POST to the faucet URL, mapping a timeout and other transport failures to errors.
+    async fn send_faucet_request(&self, url: &str) -> SettleResult<reqwest::Response> {
         // Make the HTTP request using reqwest
         let client = reqwest::Client::builder()
             .timeout(self.timeout)
             .build()
             .map_err(|e| SettleError::network(format!("Failed to create HTTP client: {}", e)))?;
 
-        let response = client
-            .post(&url)
+        client
+            .post(url)
             .header("Content-Type", "application/json")
             .send()
             .await
@@ -152,78 +173,7 @@ impl HederaFaucet {
                 } else {
                     SettleError::network(format!("Faucet request failed: {}", e))
                 }
-            })?;
-
-        let status = response.status();
-
-        // Handle rate limiting
-        if status.as_u16() == 429 {
-            warn!(account_id, "Faucet rate limit reached");
-            return Err(SettleError::network(
-                "Faucet rate limit reached. Please try again later.",
-            ));
-        }
-
-        // Handle other non-success status codes
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            warn!(
-                account_id,
-                status = status.as_u16(),
-                body,
-                "Faucet request failed"
-            );
-            return Err(SettleError::network(format!(
-                "Faucet request failed with status {}: {}",
-                status, body
-            )));
-        }
-
-        // Parse the response
-        let body = response
-            .text()
-            .await
-            .map_err(|e| SettleError::network(format!("Failed to read faucet response: {}", e)))?;
-
-        // Try to parse as JSON, but handle plain text responses too
-        let result = if body.starts_with('{') {
-            match serde_json::from_str::<FaucetResponse>(&body) {
-                Ok(FaucetResponse::Success {
-                    transaction_id,
-                    amount,
-                }) => FaucetResult {
-                    account_id: account_id.to_string(),
-                    amount_hbar: amount.unwrap_or(100.0), // Default testnet faucet amount
-                    transaction_id,
-                },
-                Ok(FaucetResponse::Error { error }) => {
-                    return Err(SettleError::network(format!("Faucet error: {}", error)));
-                }
-                Err(_) => {
-                    // If JSON parsing fails, treat as success with default values
-                    FaucetResult {
-                        account_id: account_id.to_string(),
-                        amount_hbar: 100.0,
-                        transaction_id: None,
-                    }
-                }
-            }
-        } else {
-            // Plain text response - treat as success
-            FaucetResult {
-                account_id: account_id.to_string(),
-                amount_hbar: 100.0,
-                transaction_id: None,
-            }
-        };
-
-        info!(
-            account_id,
-            amount_hbar = result.amount_hbar,
-            "Successfully requested HBAR from faucet"
-        );
-
-        Ok(result)
+            })
     }
 
     /// Check if an account can be funded (not rate-limited).
@@ -273,9 +223,105 @@ pub async fn request_testnet_hbar(account_id: &str) -> SettleResult<FaucetResult
     HederaFaucet::testnet().request_hbar(account_id).await
 }
 
+/// Reject a rate-limited (429) or otherwise unsuccessful faucet response.
+async fn check_faucet_status(
+    account_id: &str,
+    response: reqwest::Response,
+) -> SettleResult<reqwest::Response> {
+    let status = response.status();
+
+    // Handle rate limiting
+    if status.as_u16() == 429 {
+        warn!(account_id, "Faucet rate limit reached");
+        return Err(SettleError::network(
+            "Faucet rate limit reached. Please try again later.",
+        ));
+    }
+
+    // Handle other non-success status codes
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        warn!(
+            account_id,
+            status = status.as_u16(),
+            body,
+            "Faucet request failed"
+        );
+        return Err(SettleError::network(format!(
+            "Faucet request failed with status {}: {}",
+            status, body
+        )));
+    }
+    Ok(response)
+}
+
+/// Read a successful faucet response body.
+///
+/// A JSON error object is an error. A JSON success object gives the transaction and
+/// amount; anything else (plain text, unparseable JSON) counts as success with the
+/// default testnet amount of 100 HBAR.
+fn parse_faucet_body(account_id: &str, body: &str) -> SettleResult<FaucetResult> {
+    let default_result = || FaucetResult {
+        account_id: account_id.to_string(),
+        amount_hbar: 100.0,
+        transaction_id: None,
+    };
+
+    // Try to parse as JSON, but handle plain text responses too
+    if !body.starts_with('{') {
+        // Plain text response - treat as success
+        return Ok(default_result());
+    }
+    match serde_json::from_str::<FaucetResponse>(body) {
+        Ok(FaucetResponse::Success {
+            transaction_id,
+            amount,
+        }) => Ok(FaucetResult {
+            account_id: account_id.to_string(),
+            amount_hbar: amount.unwrap_or(100.0), // Default testnet faucet amount
+            transaction_id,
+        }),
+        Ok(FaucetResponse::Error { error }) => {
+            Err(SettleError::network(format!("Faucet error: {}", error)))
+        }
+        // If JSON parsing fails, treat as success with default values
+        Err(_) => Ok(default_result()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_faucet_body_plain_text_is_default_success() {
+        let result = parse_faucet_body("0.0.1234", "OK").unwrap();
+        assert_eq!(result.account_id, "0.0.1234");
+        assert_eq!(result.amount_hbar, 100.0);
+        assert_eq!(result.transaction_id, None);
+    }
+
+    #[test]
+    fn test_parse_faucet_body_json_success() {
+        let body = r#"{"transactionId":"0.0.2@1.2","amount":50.0}"#;
+        let result = parse_faucet_body("0.0.1234", body).unwrap();
+        assert_eq!(result.amount_hbar, 50.0);
+        assert_eq!(result.transaction_id.as_deref(), Some("0.0.2@1.2"));
+    }
+
+    #[test]
+    fn test_parse_faucet_body_invalid_json_is_default_success() {
+        let result = parse_faucet_body("0.0.1234", "{not json").unwrap();
+        assert_eq!(result.amount_hbar, 100.0);
+    }
+
+    #[test]
+    fn test_parse_faucet_body_error_object_current_behavior() {
+        // FaucetResponse is untagged and Success has only optional fields, so an
+        // error object currently parses as Success. Tracked in ISSUES.md.
+        let result = parse_faucet_body("0.0.1234", r#"{"error":"rate limited"}"#);
+        assert!(result.is_ok());
+    }
 
     #[test]
     fn test_faucet_config_default() {

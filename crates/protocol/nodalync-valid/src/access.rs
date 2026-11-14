@@ -33,59 +33,64 @@ pub fn validate_access(
     manifest: &Manifest,
     bond_checker: Option<&dyn BondChecker>,
 ) -> ValidationResult<()> {
-    // Check visibility rules
+    check_visibility(requester, manifest)?;
+    check_bond(requester, manifest, bond_checker)?;
+    Ok(())
+}
+
+/// Apply the manifest's visibility and its allow/deny lists to `requester`.
+fn check_visibility(requester: &PeerId, manifest: &Manifest) -> ValidationResult<()> {
     match manifest.visibility {
-        Visibility::Private => {
-            // Private content is never accessible externally
-            return Err(ValidationError::ContentPrivate);
-        }
+        // Private content is never accessible externally
+        Visibility::Private => Err(ValidationError::ContentPrivate),
         Visibility::Unlisted => {
-            // Check allowlist if set
-            if let Some(ref allowlist) = manifest.access.allowlist {
-                if !allowlist.contains(requester) {
-                    return Err(ValidationError::NotInAllowlist);
-                }
-            }
-            // Check denylist if set
-            if let Some(ref denylist) = manifest.access.denylist {
-                if denylist.contains(requester) {
-                    return Err(ValidationError::InDenylist);
-                }
-            }
+            check_allowlist(requester, manifest)?;
+            check_denylist(requester, manifest)
         }
-        Visibility::Shared => {
-            // For Shared, allowlist is ignored, only check denylist
-            if let Some(ref denylist) = manifest.access.denylist {
-                if denylist.contains(requester) {
-                    return Err(ValidationError::InDenylist);
-                }
-            }
-        }
+        // For Shared, allowlist is ignored, only check denylist
+        Visibility::Shared => check_denylist(requester, manifest),
         // Handle future visibility variants conservatively (deny by default)
-        _ => {
-            return Err(ValidationError::ContentPrivate);
+        _ => Err(ValidationError::ContentPrivate),
+    }
+}
+
+/// Reject `requester` if an allowlist is set and does not include them.
+fn check_allowlist(requester: &PeerId, manifest: &Manifest) -> ValidationResult<()> {
+    if let Some(ref allowlist) = manifest.access.allowlist {
+        if !allowlist.contains(requester) {
+            return Err(ValidationError::NotInAllowlist);
         }
     }
+    Ok(())
+}
 
-    // Check bond requirement
-    if manifest.access.require_bond {
-        let required_amount = manifest.access.bond_amount.unwrap_or(0);
-        if required_amount > 0 {
-            if let Some(checker) = bond_checker {
-                if !checker.has_bond(requester, required_amount) {
-                    return Err(ValidationError::BondRequired {
-                        required: required_amount,
-                    });
-                }
-            } else {
-                // No bond checker provided but bond is required
-                return Err(ValidationError::BondRequired {
-                    required: required_amount,
-                });
-            }
+/// Reject `requester` if a denylist is set and includes them.
+fn check_denylist(requester: &PeerId, manifest: &Manifest) -> ValidationResult<()> {
+    if let Some(ref denylist) = manifest.access.denylist {
+        if denylist.contains(requester) {
+            return Err(ValidationError::InDenylist);
         }
     }
+    Ok(())
+}
 
+/// When the manifest requires a non-zero bond, require `bond_checker` to confirm
+/// that `requester` holds it. With no checker, a required bond is never met.
+fn check_bond(
+    requester: &PeerId,
+    manifest: &Manifest,
+    bond_checker: Option<&dyn BondChecker>,
+) -> ValidationResult<()> {
+    let required_amount = manifest.access.bond_amount.unwrap_or(0);
+    if !manifest.access.require_bond || required_amount == 0 {
+        return Ok(());
+    }
+    let has_bond = bond_checker.is_some_and(|checker| checker.has_bond(requester, required_amount));
+    if !has_bond {
+        return Err(ValidationError::BondRequired {
+            required: required_amount,
+        });
+    }
     Ok(())
 }
 

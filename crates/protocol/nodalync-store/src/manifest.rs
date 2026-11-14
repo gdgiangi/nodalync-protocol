@@ -104,86 +104,191 @@ impl SqliteManifestStore {
 
     /// Deserialize a manifest from a database row.
     fn deserialize_row(row: &rusqlite::Row) -> rusqlite::Result<Manifest> {
-        let hash_bytes: Vec<u8> = row.get(0)?;
-        let content_type_u8: u8 = row.get(1)?;
-        let owner_bytes: Vec<u8> = row.get(2)?;
-        let version_number: u32 = row.get(3)?;
-        let version_previous_bytes: Option<Vec<u8>> = row.get(4)?;
-        let version_root_bytes: Vec<u8> = row.get(5)?;
-        let version_timestamp: Timestamp = row.get(6)?;
-        let visibility_u8: u8 = row.get(7)?;
-        let title: String = row.get(8)?;
-        let description: Option<String> = row.get(9)?;
-        let tags_json: Option<String> = row.get(10)?;
-        let content_size: u64 = row.get(11)?;
-        let mime_type: Option<String> = row.get(12)?;
-        let price: u64 = row.get(13)?;
-        let total_queries: u64 = row.get(14)?;
-        let total_revenue: u64 = row.get(15)?;
-        let access_control_json: String = row.get(16)?;
-        let provenance_json: String = row.get(17)?;
-        let created_at: Timestamp = row.get(18)?;
-        let updated_at: Timestamp = row.get(19)?;
-
-        // Convert bytes to types
-        let hash = bytes_to_hash(&hash_bytes);
-        let owner = bytes_to_peer_id(&owner_bytes);
-        let version_previous = version_previous_bytes.map(|b| bytes_to_hash(&b));
-        let version_root = bytes_to_hash(&version_root_bytes);
-
-        let content_type = match content_type_u8 {
-            0 => ContentType::L0,
-            1 => ContentType::L1,
-            2 => ContentType::L2,
-            3 => ContentType::L3,
-            _ => ContentType::L0, // Default fallback
-        };
-
-        let visibility = match visibility_u8 {
-            0 => Visibility::Private,
-            1 => Visibility::Unlisted,
-            2 => Visibility::Shared,
-            3 => Visibility::Offline,
-            _ => Visibility::Private, // Default fallback
-        };
-
-        let tags: Vec<String> = tags_json
-            .map(|j| serde_json::from_str(&j).unwrap_or_default())
-            .unwrap_or_default();
-
-        let access: AccessControl = serde_json::from_str(&access_control_json).unwrap_or_default();
-        let provenance: Provenance = serde_json::from_str(&provenance_json).unwrap_or_default();
+        let (hash, content_type, owner, visibility) = Self::read_identity_columns(row)?;
+        let version = Self::read_version_columns(row)?;
+        let metadata = Self::read_metadata_columns(row)?;
+        let economics = Self::read_economics_columns(row)?;
+        let (access, provenance, created_at, updated_at) = Self::read_record_columns(row)?;
 
         Ok(Manifest {
             hash,
             content_type,
             owner,
-            version: Version {
-                number: version_number,
-                previous: version_previous,
-                root: version_root,
-                timestamp: version_timestamp,
-            },
+            version,
             visibility,
             access,
-            metadata: Metadata {
-                title,
-                description,
-                tags,
-                content_size,
-                mime_type,
-            },
-            economics: Economics {
-                price,
-                currency: Currency::HBAR,
-                total_queries,
-                total_revenue,
-            },
+            metadata,
+            economics,
             provenance,
             created_at,
             updated_at,
         })
     }
+
+    /// Columns 0-2 and 7: hash, content_type, owner, visibility.
+    fn read_identity_columns(
+        row: &rusqlite::Row,
+    ) -> rusqlite::Result<(Hash, ContentType, PeerId, Visibility)> {
+        let hash_bytes: Vec<u8> = row.get(0)?;
+        let content_type_u8: u8 = row.get(1)?;
+        let owner_bytes: Vec<u8> = row.get(2)?;
+        let visibility_u8: u8 = row.get(7)?;
+        Ok((
+            bytes_to_hash(&hash_bytes),
+            content_type_from_u8(content_type_u8),
+            bytes_to_peer_id(&owner_bytes),
+            visibility_from_u8(visibility_u8),
+        ))
+    }
+
+    /// Columns 3-6: version number, previous, root and timestamp.
+    fn read_version_columns(row: &rusqlite::Row) -> rusqlite::Result<Version> {
+        let version_number: u32 = row.get(3)?;
+        let version_previous_bytes: Option<Vec<u8>> = row.get(4)?;
+        let version_root_bytes: Vec<u8> = row.get(5)?;
+        let version_timestamp: Timestamp = row.get(6)?;
+        Ok(Version {
+            number: version_number,
+            previous: version_previous_bytes.map(|b| bytes_to_hash(&b)),
+            root: bytes_to_hash(&version_root_bytes),
+            timestamp: version_timestamp,
+        })
+    }
+
+    /// Columns 8-12: title, description, tags (JSON), content_size, mime_type.
+    /// Missing or unparseable tags read as none.
+    fn read_metadata_columns(row: &rusqlite::Row) -> rusqlite::Result<Metadata> {
+        let title: String = row.get(8)?;
+        let description: Option<String> = row.get(9)?;
+        let tags_json: Option<String> = row.get(10)?;
+        let content_size: u64 = row.get(11)?;
+        let mime_type: Option<String> = row.get(12)?;
+
+        let tags: Vec<String> = tags_json
+            .map(|j| serde_json::from_str(&j).unwrap_or_default())
+            .unwrap_or_default();
+
+        Ok(Metadata {
+            title,
+            description,
+            tags,
+            content_size,
+            mime_type,
+        })
+    }
+
+    /// Columns 13-15: price, total_queries, total_revenue.
+    fn read_economics_columns(row: &rusqlite::Row) -> rusqlite::Result<Economics> {
+        Ok(Economics {
+            price: row.get(13)?,
+            currency: Currency::HBAR,
+            total_queries: row.get(14)?,
+            total_revenue: row.get(15)?,
+        })
+    }
+
+    /// Columns 16-19: access_control (JSON), provenance (JSON), created_at, updated_at.
+    /// Unparseable JSON reads as the default.
+    fn read_record_columns(
+        row: &rusqlite::Row,
+    ) -> rusqlite::Result<(AccessControl, Provenance, Timestamp, Timestamp)> {
+        let access_control_json: String = row.get(16)?;
+        let provenance_json: String = row.get(17)?;
+        let created_at: Timestamp = row.get(18)?;
+        let updated_at: Timestamp = row.get(19)?;
+
+        let access: AccessControl = serde_json::from_str(&access_control_json).unwrap_or_default();
+        let provenance: Provenance = serde_json::from_str(&provenance_json).unwrap_or_default();
+        Ok((access, provenance, created_at, updated_at))
+    }
+}
+
+/// Stored content type code; unknown codes read as L0.
+fn content_type_from_u8(value: u8) -> ContentType {
+    match value {
+        0 => ContentType::L0,
+        1 => ContentType::L1,
+        2 => ContentType::L2,
+        3 => ContentType::L3,
+        _ => ContentType::L0, // Default fallback
+    }
+}
+
+/// Stored visibility code; unknown codes read as Private.
+fn visibility_from_u8(value: u8) -> Visibility {
+    match value {
+        0 => Visibility::Private,
+        1 => Visibility::Unlisted,
+        2 => Visibility::Shared,
+        3 => Visibility::Offline,
+        _ => Visibility::Private, // Default fallback
+    }
+}
+
+/// The WHERE conditions (after `WHERE 1=1`) and their parameters for `filter`,
+/// numbered from ?1 in the order visibility, content type, created after,
+/// created before, owner, text query.
+fn manifest_filter_conditions(filter: &ManifestFilter) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
+    type Param = Box<dyn rusqlite::ToSql>;
+    let simple_conditions: [(&str, Option<Param>); 5] = [
+        (
+            "visibility = ",
+            filter.visibility.map(|v| Box::new(v as u8) as Param),
+        ),
+        (
+            "content_type = ",
+            filter.content_type.map(|c| Box::new(c as u8) as Param),
+        ),
+        (
+            "created_at >= ",
+            filter.created_after.map(|t| Box::new(t as i64) as Param),
+        ),
+        (
+            "created_at <= ",
+            filter.created_before.map(|t| Box::new(t as i64) as Param),
+        ),
+        (
+            "owner = ",
+            filter.owner.map(|o| Box::new(o.0.to_vec()) as Param),
+        ),
+    ];
+
+    let mut sql = String::new();
+    let mut params_values: Vec<Param> = Vec::new();
+    for (condition, value) in simple_conditions {
+        if let Some(value) = value {
+            params_values.push(value);
+            sql.push_str(&format!(" AND {}?{}", condition, params_values.len()));
+        }
+    }
+
+    if let Some(ref text_query) = filter.text_query {
+        let param_idx = params_values.len() + 1;
+        let pattern = format!("%{}%", text_query.to_lowercase());
+        sql.push_str(&format!(
+            " AND (LOWER(title) LIKE ?{} OR LOWER(COALESCE(description, '')) LIKE ?{} OR LOWER(COALESCE(tags, '')) LIKE ?{})",
+            param_idx,
+            param_idx + 1,
+            param_idx + 2
+        ));
+        params_values.push(Box::new(pattern.clone()));
+        params_values.push(Box::new(pattern.clone()));
+        params_values.push(Box::new(pattern));
+    }
+    (sql, params_values)
+}
+
+/// The ` LIMIT n` and ` OFFSET n` suffix for `filter`, each only when set.
+fn manifest_filter_pagination(filter: &ManifestFilter) -> String {
+    let mut sql = String::new();
+    if let Some(limit) = filter.limit {
+        sql.push_str(&format!(" LIMIT {}", limit));
+    }
+
+    if let Some(offset) = filter.offset {
+        sql.push_str(&format!(" OFFSET {}", offset));
+    }
+    sql
 }
 
 impl ManifestStore for SqliteManifestStore {
@@ -362,62 +467,10 @@ impl ManifestStore for SqliteManifestStore {
              FROM manifests WHERE 1=1",
         );
 
-        let mut params_values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-        let mut param_idx = 1;
-
-        if let Some(visibility) = filter.visibility {
-            sql.push_str(&format!(" AND visibility = ?{}", param_idx));
-            params_values.push(Box::new(visibility as u8));
-            param_idx += 1;
-        }
-
-        if let Some(content_type) = filter.content_type {
-            sql.push_str(&format!(" AND content_type = ?{}", param_idx));
-            params_values.push(Box::new(content_type as u8));
-            param_idx += 1;
-        }
-
-        if let Some(created_after) = filter.created_after {
-            sql.push_str(&format!(" AND created_at >= ?{}", param_idx));
-            params_values.push(Box::new(created_after as i64));
-            param_idx += 1;
-        }
-
-        if let Some(created_before) = filter.created_before {
-            sql.push_str(&format!(" AND created_at <= ?{}", param_idx));
-            params_values.push(Box::new(created_before as i64));
-            param_idx += 1;
-        }
-
-        if let Some(owner) = filter.owner {
-            sql.push_str(&format!(" AND owner = ?{}", param_idx));
-            params_values.push(Box::new(owner.0.to_vec()));
-            param_idx += 1;
-        }
-
-        if let Some(ref text_query) = filter.text_query {
-            let pattern = format!("%{}%", text_query.to_lowercase());
-            sql.push_str(&format!(
-                " AND (LOWER(title) LIKE ?{} OR LOWER(COALESCE(description, '')) LIKE ?{} OR LOWER(COALESCE(tags, '')) LIKE ?{})",
-                param_idx,
-                param_idx + 1,
-                param_idx + 2
-            ));
-            params_values.push(Box::new(pattern.clone()));
-            params_values.push(Box::new(pattern.clone()));
-            params_values.push(Box::new(pattern));
-            // param_idx is not incremented here as it's the last filter
-        }
-
+        let (conditions, params_values) = manifest_filter_conditions(&filter);
+        sql.push_str(&conditions);
         sql.push_str(" ORDER BY created_at DESC");
-
-        if let Some(limit) = filter.limit {
-            sql.push_str(&format!(" LIMIT {}", limit));
-        }
-
-        if let Some(offset) = filter.offset {
-            sql.push_str(&format!(" OFFSET {}", offset));
-        }
+        sql.push_str(&manifest_filter_pagination(&filter));
 
         let params_refs: Vec<&dyn rusqlite::ToSql> =
             params_values.iter().map(|p| p.as_ref()).collect();
@@ -484,6 +537,54 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         initialize_schema(&conn).unwrap();
         SqliteManifestStore::new(Arc::new(Mutex::new(conn)))
+    }
+
+    #[test]
+    fn test_filter_sql_numbers_parameters_in_order() {
+        let filter = ManifestFilter::new()
+            .with_visibility(Visibility::Shared)
+            .with_content_type(ContentType::L1)
+            .created_after(10)
+            .created_before(20)
+            .with_owner(PeerId::from_bytes([1u8; 20]))
+            .with_text_query("Rust")
+            .limit(5)
+            .offset(2);
+
+        let (conditions, params) = manifest_filter_conditions(&filter);
+        assert_eq!(
+            conditions,
+            " AND visibility = ?1 AND content_type = ?2 AND created_at >= ?3 \
+             AND created_at <= ?4 AND owner = ?5 \
+             AND (LOWER(title) LIKE ?6 OR LOWER(COALESCE(description, '')) LIKE ?7 \
+             OR LOWER(COALESCE(tags, '')) LIKE ?8)"
+        );
+        assert_eq!(params.len(), 8);
+        assert_eq!(manifest_filter_pagination(&filter), " LIMIT 5 OFFSET 2");
+    }
+
+    #[test]
+    fn test_filter_sql_skips_unset_filters() {
+        let filter = ManifestFilter::new()
+            .with_content_type(ContentType::L0)
+            .with_text_query("x");
+        let (conditions, params) = manifest_filter_conditions(&filter);
+        assert_eq!(
+            conditions,
+            " AND content_type = ?1 \
+             AND (LOWER(title) LIKE ?2 OR LOWER(COALESCE(description, '')) LIKE ?3 \
+             OR LOWER(COALESCE(tags, '')) LIKE ?4)"
+        );
+        assert_eq!(params.len(), 4);
+        assert_eq!(manifest_filter_pagination(&ManifestFilter::new()), "");
+    }
+
+    #[test]
+    fn test_unknown_stored_codes_fall_back() {
+        assert_eq!(content_type_from_u8(2), ContentType::L2);
+        assert_eq!(content_type_from_u8(99), ContentType::L0);
+        assert_eq!(visibility_from_u8(3), Visibility::Offline);
+        assert_eq!(visibility_from_u8(99), Visibility::Private);
     }
 
     fn test_manifest() -> Manifest {

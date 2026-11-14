@@ -23,99 +23,82 @@ pub async fn status(config: CliConfig, format: OutputFormat) -> CliResult<String
     let ctx = NodeContext::local(config.clone()).ok();
 
     // If no node is running, show stopped status with local stats
-    if running_pid.is_none() {
-        let (shared, private, pending_payments, pending_amount, peer_id) =
-            if let Some(ref ctx) = ctx {
-                let shared = ctx
-                    .ops
-                    .state
-                    .manifests
-                    .list(ManifestFilter::default().with_visibility(Visibility::Shared))
-                    .map(|v| v.len() as u32)
-                    .unwrap_or(0);
-
-                let private = ctx
-                    .ops
-                    .state
-                    .manifests
-                    .list(ManifestFilter::default().with_visibility(Visibility::Private))
-                    .map(|v| v.len() as u32)
-                    .unwrap_or(0);
-
-                let pending = ctx.ops.state.settlement.get_pending().unwrap_or_default();
-                let pending_amount = ctx.ops.state.settlement.get_pending_total().unwrap_or(0);
-
-                (
-                    shared,
-                    private,
-                    pending.len() as u32,
-                    pending_amount,
-                    ctx.peer_id().to_string(),
-                )
-            } else {
-                (0, 0, 0, 0, "N/A".to_string())
-            };
-
-        let output = StatusOutput {
-            running: false,
-            peer_id,
-            uptime_secs: None,
-            connected_peers: 0,
-            shared_content: shared,
-            private_content: private,
-            pending_payments,
-            pending_amount,
-        };
-        return Ok(output.render(format));
-    }
+    let Some(pid) = running_pid else {
+        return Ok(stopped_status(ctx.as_ref()).render(format));
+    };
 
     // Calculate uptime from PID file start time
     let uptime_secs = read_start_time(&pid_file_path(&base_dir)).map(calculate_uptime);
 
     // Node is running, get full status
-    let ctx = match ctx {
-        Some(c) => c,
-        None => {
-            // Can't get local context, show minimal running status
-            let output = StatusOutput {
-                running: true,
-                peer_id: format!("PID {}", running_pid.unwrap()),
-                uptime_secs,
-                connected_peers: 0,
-                shared_content: 0,
-                private_content: 0,
-                pending_payments: 0,
-                pending_amount: 0,
-            };
-            return Ok(output.render(format));
-        }
+    let output = match ctx {
+        Some(ctx) => running_status(&ctx, &base_dir, uptime_secs)?,
+        // Can't get local context, show minimal running status
+        None => StatusOutput {
+            running: true,
+            peer_id: format!("PID {}", pid),
+            uptime_secs,
+            connected_peers: 0,
+            shared_content: 0,
+            private_content: 0,
+            pending_payments: 0,
+            pending_amount: 0,
+        },
     };
 
-    // Count content by visibility
-    let shared_count = ctx
-        .ops
-        .state
-        .manifests
-        .list(ManifestFilter::default().with_visibility(Visibility::Shared))?
-        .len() as u32;
+    Ok(output.render(format))
+}
 
-    let private_count = ctx
-        .ops
-        .state
-        .manifests
-        .list(ManifestFilter::default().with_visibility(Visibility::Private))?
-        .len() as u32;
+/// Status of a stopped node, with whatever local stats can be read.
+fn stopped_status(ctx: Option<&NodeContext>) -> StatusOutput {
+    let (shared, private, pending_payments, pending_amount, peer_id) = match ctx {
+        Some(ctx) => (
+            count_with_visibility(ctx, Visibility::Shared).unwrap_or(0),
+            count_with_visibility(ctx, Visibility::Private).unwrap_or(0),
+            ctx.ops
+                .state
+                .settlement
+                .get_pending()
+                .unwrap_or_default()
+                .len() as u32,
+            ctx.ops.state.settlement.get_pending_total().unwrap_or(0),
+            ctx.peer_id().to_string(),
+        ),
+        None => (0, 0, 0, 0, "N/A".to_string()),
+    };
+
+    StatusOutput {
+        running: false,
+        peer_id,
+        uptime_secs: None,
+        connected_peers: 0,
+        shared_content: shared,
+        private_content: private,
+        pending_payments,
+        pending_amount,
+    }
+}
+
+/// Full status of a running node.
+fn running_status(
+    ctx: &NodeContext,
+    base_dir: &std::path::Path,
+    uptime_secs: Option<u64>,
+) -> CliResult<StatusOutput> {
+    // Count content by visibility
+    let shared_count = count_with_visibility(ctx, Visibility::Shared)?;
+    let private_count = count_with_visibility(ctx, Visibility::Private)?;
 
     // Get pending payments
     let pending = ctx.ops.state.settlement.get_pending()?;
     let pending_amount = ctx.ops.state.settlement.get_pending_total()?;
 
     // Get connected peers from the status file (written by the running node)
-    let connected_peers = read_status_file(&status_file_path(&base_dir))
+    let connected_peers = read_status_file(&status_file_path(base_dir))
         .map(|s| s.connected_peers)
         .unwrap_or(0);
 
-    let output = StatusOutput {
+    Ok(StatusOutput {
         running: true,
         peer_id: ctx.peer_id().to_string(),
         uptime_secs,
@@ -124,9 +107,20 @@ pub async fn status(config: CliConfig, format: OutputFormat) -> CliResult<String
         private_content: private_count,
         pending_payments: pending.len() as u32,
         pending_amount,
-    };
+    })
+}
 
-    Ok(output.render(format))
+/// How many of our manifests have this visibility.
+fn count_with_visibility(
+    ctx: &NodeContext,
+    visibility: Visibility,
+) -> Result<u32, nodalync_store::StoreError> {
+    Ok(ctx
+        .ops
+        .state
+        .manifests
+        .list(ManifestFilter::default().with_visibility(visibility))?
+        .len() as u32)
 }
 
 #[cfg(test)]

@@ -96,8 +96,15 @@ pub fn validate_metadata(manifest: &Manifest) -> ValidationResult<()> {
         });
     }
 
-    // Description length (if present)
-    if let Some(ref desc) = manifest.metadata.description {
+    validate_description(manifest.metadata.description.as_deref())?;
+    validate_tags(&manifest.metadata.tags)?;
+
+    Ok(())
+}
+
+/// Description length <= MAX_DESCRIPTION_LENGTH (if present).
+fn validate_description(description: Option<&str>) -> ValidationResult<()> {
+    if let Some(desc) = description {
         if desc.len() > MAX_DESCRIPTION_LENGTH {
             return Err(ValidationError::DescriptionTooLong {
                 length: desc.len(),
@@ -105,17 +112,19 @@ pub fn validate_metadata(manifest: &Manifest) -> ValidationResult<()> {
             });
         }
     }
+    Ok(())
+}
 
-    // Tags count
-    if manifest.metadata.tags.len() > MAX_TAGS {
+/// Tags count <= MAX_TAGS, and each tag length <= MAX_TAG_LENGTH.
+fn validate_tags(tags: &[String]) -> ValidationResult<()> {
+    if tags.len() > MAX_TAGS {
         return Err(ValidationError::TooManyTags {
-            count: manifest.metadata.tags.len(),
+            count: tags.len(),
             max: MAX_TAGS,
         });
     }
 
-    // Individual tag lengths
-    for tag in &manifest.metadata.tags {
+    for tag in tags {
         if tag.len() > MAX_TAG_LENGTH {
             return Err(ValidationError::TagTooLong {
                 tag: tag.clone(),
@@ -124,7 +133,6 @@ pub fn validate_metadata(manifest: &Manifest) -> ValidationResult<()> {
             });
         }
     }
-
     Ok(())
 }
 

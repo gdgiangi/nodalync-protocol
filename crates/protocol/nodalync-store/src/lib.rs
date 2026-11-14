@@ -240,6 +240,11 @@ impl NodeState {
         tracing::info!(db_path = %db_path.display(), "Opening node state database");
         let conn = Connection::open(&db_path)?;
 
+        Self::from_connection(config, conn)
+    }
+
+    /// Initialize the schema on `conn` and build every storage component around it.
+    fn from_connection(config: NodeStateConfig, conn: Connection) -> Result<Self> {
         // Initialize schema
         schema::initialize_schema(&conn)?;
 
@@ -286,37 +291,18 @@ impl NodeState {
         let config = NodeStateConfig::new(&temp_dir);
 
         // Create directories
-        std::fs::create_dir_all(&temp_dir)?;
-        std::fs::create_dir_all(config.content_dir())?;
-        std::fs::create_dir_all(config.cache_dir())?;
-        std::fs::create_dir_all(config.identity_dir())?;
+        for dir in [
+            temp_dir.clone(),
+            config.content_dir(),
+            config.cache_dir(),
+            config.identity_dir(),
+        ] {
+            std::fs::create_dir_all(dir)?;
+        }
 
         // Open in-memory database
         let conn = Connection::open_in_memory()?;
-        schema::initialize_schema(&conn)?;
-        let conn = Arc::new(Mutex::new(conn));
-
-        let identity = IdentityStore::new(config.identity_dir())?;
-        let content = FsContentStore::new(config.content_dir())?;
-        let manifests = SqliteManifestStore::new(Arc::clone(&conn));
-        let provenance = SqliteProvenanceGraph::new(Arc::clone(&conn));
-        let channels = SqliteChannelStore::new(Arc::clone(&conn));
-        let peers = SqlitePeerStore::new(Arc::clone(&conn));
-        let cache = FsCacheStore::new(config.cache_dir(), Arc::clone(&conn))?;
-        let settlement = SqliteSettlementQueue::new(Arc::clone(&conn));
-
-        Ok(Self {
-            identity,
-            content,
-            manifests,
-            provenance,
-            channels,
-            peers,
-            cache,
-            settlement,
-            conn,
-            config,
-        })
+        Self::from_connection(config, conn)
     }
 
     /// Get the configuration used to open this state.
@@ -384,8 +370,6 @@ impl NodeState {
     ///
     /// Returns None if no announcement for this hash has been received.
     pub fn get_announcement(&self, hash: &Hash) -> Option<AnnouncePayload> {
-        use nodalync_types::{ContentType, L1Summary};
-
         let conn = match self.conn.lock() {
             Ok(c) => c,
             Err(_) => {
@@ -396,36 +380,13 @@ impl NodeState {
         conn.query_row(
             "SELECT content_type, title, l1_summary, price, addresses, publisher_peer_id FROM announcements WHERE hash = ?1",
             [hash.0.as_slice()],
-            |row| {
-                let content_type_u8: u8 = row.get(0)?;
-                let title: String = row.get(1)?;
-                let l1_summary_json: String = row.get(2)?;
-                let price: i64 = row.get(3)?;
-                let addresses_json: String = row.get(4)?;
-                let publisher_peer_id: Option<String> = row.get(5)?;
-
-                let content_type = ContentType::from_u8(content_type_u8).unwrap_or(ContentType::L0);
-                let l1_summary: L1Summary = serde_json::from_str(&l1_summary_json).unwrap_or_else(|_| L1Summary::empty(*hash));
-                let addresses: Vec<String> = serde_json::from_str(&addresses_json).unwrap_or_default();
-
-                Ok(AnnouncePayload {
-                    hash: *hash,
-                    content_type,
-                    title,
-                    l1_summary,
-                    price: price as u64,
-                    addresses,
-                    publisher_peer_id,
-                })
-            },
+            |row| announcement_from_row(row, *hash, 0),
         )
         .ok()
     }
 
     /// List all stored announcements.
     pub fn list_announcements(&self) -> Vec<AnnouncePayload> {
-        use nodalync_types::{ContentType, L1Summary};
-
         let conn = match self.conn.lock() {
             Ok(c) => c,
             Err(_) => {
@@ -440,36 +401,7 @@ impl NodeState {
             Err(_) => return Vec::new(),
         };
 
-        let rows = stmt.query_map([], |row| {
-            let hash_bytes: Vec<u8> = row.get(0)?;
-            let content_type_u8: u8 = row.get(1)?;
-            let title: String = row.get(2)?;
-            let l1_summary_json: String = row.get(3)?;
-            let price: i64 = row.get(4)?;
-            let addresses_json: String = row.get(5)?;
-            let publisher_peer_id: Option<String> = row.get(6)?;
-
-            let mut hash_arr = [0u8; 32];
-            if hash_bytes.len() == 32 {
-                hash_arr.copy_from_slice(&hash_bytes);
-            }
-            let hash = Hash(hash_arr);
-
-            let content_type = ContentType::from_u8(content_type_u8).unwrap_or(ContentType::L0);
-            let l1_summary: L1Summary =
-                serde_json::from_str(&l1_summary_json).unwrap_or_else(|_| L1Summary::empty(hash));
-            let addresses: Vec<String> = serde_json::from_str(&addresses_json).unwrap_or_default();
-
-            Ok(AnnouncePayload {
-                hash,
-                content_type,
-                title,
-                l1_summary,
-                price: price as u64,
-                addresses,
-                publisher_peer_id,
-            })
-        });
+        let rows = stmt.query_map([], announcement_row_with_hash);
 
         match rows {
             Ok(iter) => iter.filter_map(|r| r.ok()).collect(),
@@ -487,8 +419,6 @@ impl NodeState {
         content_type: Option<nodalync_types::ContentType>,
         limit: u32,
     ) -> Vec<AnnouncePayload> {
-        use nodalync_types::{ContentType, L1Summary};
-
         let conn = match self.conn.lock() {
             Ok(c) => c,
             Err(_) => {
@@ -530,36 +460,7 @@ impl NodeState {
 
         let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
-        let rows = stmt.query_map(params_refs.as_slice(), |row| {
-            let hash_bytes: Vec<u8> = row.get(0)?;
-            let content_type_u8: u8 = row.get(1)?;
-            let title: String = row.get(2)?;
-            let l1_summary_json: String = row.get(3)?;
-            let price: i64 = row.get(4)?;
-            let addresses_json: String = row.get(5)?;
-            let publisher_peer_id: Option<String> = row.get(6)?;
-
-            let mut hash_arr = [0u8; 32];
-            if hash_bytes.len() == 32 {
-                hash_arr.copy_from_slice(&hash_bytes);
-            }
-            let hash = Hash(hash_arr);
-
-            let content_type = ContentType::from_u8(content_type_u8).unwrap_or(ContentType::L0);
-            let l1_summary: L1Summary =
-                serde_json::from_str(&l1_summary_json).unwrap_or_else(|_| L1Summary::empty(hash));
-            let addresses: Vec<String> = serde_json::from_str(&addresses_json).unwrap_or_default();
-
-            Ok(AnnouncePayload {
-                hash,
-                content_type,
-                title,
-                l1_summary,
-                price: price as u64,
-                addresses,
-                publisher_peer_id,
-            })
-        });
+        let rows = stmt.query_map(params_refs.as_slice(), announcement_row_with_hash);
 
         match rows {
             Ok(iter) => iter.filter_map(|r| r.ok()).collect(),
@@ -610,6 +511,60 @@ impl NodeState {
         conn.query_row("SELECT COUNT(*) FROM announcements", [], |row| row.get(0))
             .unwrap_or(0)
     }
+}
+
+/// Build an announcement from a row whose announcement columns start at `first_col`:
+/// content_type, title, l1_summary (JSON), price, addresses (JSON), publisher_peer_id.
+///
+/// An unknown content type reads as L0, an unparseable summary as empty, and
+/// unparseable addresses as none.
+fn announcement_from_row(
+    row: &rusqlite::Row,
+    hash: Hash,
+    first_col: usize,
+) -> rusqlite::Result<AnnouncePayload> {
+    use nodalync_types::{ContentType, L1Summary};
+
+    let content_type_u8: u8 = row.get(first_col)?;
+    let title: String = row.get(first_col + 1)?;
+    let (l1_summary_json, price, addresses_json, publisher_peer_id) =
+        read_announcement_details(row, first_col)?;
+
+    let content_type = ContentType::from_u8(content_type_u8).unwrap_or(ContentType::L0);
+    let l1_summary: L1Summary =
+        serde_json::from_str(&l1_summary_json).unwrap_or_else(|_| L1Summary::empty(hash));
+    let addresses: Vec<String> = serde_json::from_str(&addresses_json).unwrap_or_default();
+
+    Ok(AnnouncePayload {
+        hash,
+        content_type,
+        title,
+        l1_summary,
+        price: price as u64,
+        addresses,
+        publisher_peer_id,
+    })
+}
+
+/// Read the l1_summary, price, addresses and publisher_peer_id columns of an announcement row.
+fn read_announcement_details(
+    row: &rusqlite::Row,
+    first_col: usize,
+) -> rusqlite::Result<(String, i64, String, Option<String>)> {
+    Ok((
+        row.get(first_col + 2)?,
+        row.get(first_col + 3)?,
+        row.get(first_col + 4)?,
+        row.get(first_col + 5)?,
+    ))
+}
+
+/// Build an announcement from a row that starts with its hash column.
+/// A hash that is not 32 bytes reads as the zero hash.
+fn announcement_row_with_hash(row: &rusqlite::Row) -> rusqlite::Result<AnnouncePayload> {
+    let hash_bytes: Vec<u8> = row.get(0)?;
+    let hash = Hash(hash_bytes.as_slice().try_into().unwrap_or([0u8; 32]));
+    announcement_from_row(row, hash, 1)
 }
 
 #[cfg(test)]

@@ -44,27 +44,64 @@ pub struct HederaSettlement {
     config: HederaConfig,
 }
 
+/// The timestamp (whole seconds) of the first contract log in a Mirror Node `logs`
+/// response that mentions `padded_hash` and has a readable timestamp.
+fn find_attested_timestamp(body: &serde_json::Value, padded_hash: &str) -> Option<u64> {
+    body["logs"]
+        .as_array()?
+        .iter()
+        .filter(|log| log_mentions(log, padded_hash))
+        .find_map(log_timestamp_secs)
+}
+
+/// Whether a contract log's topics (indexed params) or data (non-indexed) contain `padded_hash`.
+fn log_mentions(log: &serde_json::Value, padded_hash: &str) -> bool {
+    let in_topics = log["topics"].as_array().is_some_and(|topics| {
+        topics
+            .iter()
+            .any(|t| t.as_str().is_some_and(|s| s.contains(padded_hash)))
+    });
+    in_topics
+        || log["data"]
+            .as_str()
+            .is_some_and(|d| d.contains(padded_hash))
+}
+
+/// A Mirror Node log timestamp ("seconds.nanos") as whole seconds; `None` if missing or malformed.
+fn log_timestamp_secs(log: &serde_json::Value) -> Option<u64> {
+    log["timestamp"]
+        .as_str()
+        .and_then(|t| t.split('.').next())
+        .and_then(|t| t.parse::<u64>().ok())
+}
+
+/// Read the operator's private key from `path` and derive its EVM address.
+///
+/// The key must be ECDSA: the EVM address (keccak256(pubkey)[12:]) is what the
+/// contract sees as msg.sender.
+fn load_operator_key(path: &std::path::Path) -> SettleResult<(PrivateKey, String)> {
+    let key_bytes = std::fs::read_to_string(path)?;
+    let private_key = PrivateKey::from_str(key_bytes.trim())
+        .map_err(|e| SettleError::config(format!("invalid private key: {}", e)))?;
+
+    let operator_evm_address = private_key
+        .public_key()
+        .to_evm_address()
+        .map(|addr| format!("{}", addr))
+        .ok_or_else(|| {
+            SettleError::config(
+                "private key must be ECDSA to derive EVM address for contract calls",
+            )
+        })?;
+    Ok((private_key, operator_evm_address))
+}
+
 impl HederaSettlement {
     /// Create a new Hedera settlement instance.
     ///
     /// Loads credentials from the config and initializes the Hedera client.
     pub async fn new(config: HederaConfig) -> SettleResult<Self> {
-        // Read private key from file
-        let key_bytes = std::fs::read_to_string(&config.private_key_path)?;
-        let private_key = PrivateKey::from_str(key_bytes.trim())
-            .map_err(|e| SettleError::config(format!("invalid private key: {}", e)))?;
-
-        // Derive EVM address from the ECDSA public key (keccak256(pubkey)[12:])
-        // This is the address that will be msg.sender in contract calls
-        let operator_evm_address = private_key
-            .public_key()
-            .to_evm_address()
-            .map(|addr| format!("{}", addr))
-            .ok_or_else(|| {
-                SettleError::config(
-                    "private key must be ECDSA to derive EVM address for contract calls",
-                )
-            })?;
+        let (private_key, operator_evm_address) = load_operator_key(&config.private_key_path)?;
 
         // Parse account and contract IDs
         let operator_id = HederaAccountId::from_str(&config.account_id)
@@ -203,6 +240,46 @@ impl HederaSettlement {
             .await
     }
 
+    /// The Hedera account mapped to `peer`; an error if none is mapped.
+    fn require_peer_account(&self, peer: &PeerId) -> SettleResult<AccountId> {
+        self.account_mapper
+            .read()
+            .map_err(|_| SettleError::internal("account mapper lock poisoned"))?
+            .require_account(peer)
+    }
+
+    /// Encode each batch entry for the contract, addressed to its recipient's EVM address.
+    async fn encode_batch_entries(&self, batch: &SettlementBatch) -> SettleResult<Vec<Vec<u8>>> {
+        // 1. Collect recipient accounts (scoped lock)
+        let recipient_accounts: Vec<(AccountId, u64, &[Hash])> = {
+            let mapper = self
+                .account_mapper
+                .read()
+                .map_err(|_| SettleError::internal("account mapper lock poisoned"))?;
+            batch
+                .entries
+                .iter()
+                .map(|e| {
+                    let account = mapper.require_account(&e.recipient)?;
+                    Ok((account, e.amount, e.provenance_hashes.as_slice()))
+                })
+                .collect::<SettleResult<Vec<_>>>()?
+        };
+
+        // 2. Resolve EVM addresses for each recipient (async, outside lock),
+        // 3. and encode entries using resolved EVM addresses
+        let mut encoded_entries = Vec::with_capacity(recipient_accounts.len());
+        for (account, amount, prov_hashes) in &recipient_accounts {
+            let evm_address = self.resolve_evm_address(account).await?;
+            encoded_entries.push(self.encode_settlement_entry_evm(
+                &evm_address,
+                *amount,
+                prov_hashes,
+            ));
+        }
+        Ok(encoded_entries)
+    }
+
     /// Resolve the EVM address for a Hedera account via the Mirror Node REST API.
     ///
     /// For ECDSA accounts, `AccountId::to_solidity_address()` returns the account-number-derived
@@ -210,18 +287,37 @@ impl HederaSettlement {
     /// fetches the correct EVM address from the Mirror Node and caches it.
     async fn resolve_evm_address(&self, account: &AccountId) -> SettleResult<String> {
         // Check cache first
-        {
-            let mapper = self
-                .account_mapper
-                .read()
-                .map_err(|_| SettleError::internal("account mapper lock poisoned"))?;
-            if let Some(cached) = mapper.get_evm_address(account) {
-                return Ok(cached.to_string());
-            }
+        if let Some(cached) = self.cached_evm_address(account)? {
+            return Ok(cached);
         }
 
         // Fetch from Mirror Node
         let hedera_account = self.to_hedera_account(account);
+        let evm_address = self.fetch_evm_address(&hedera_account).await?;
+
+        // Cache the result
+        self.account_mapper
+            .write()
+            .map_err(|_| SettleError::internal("account mapper lock poisoned"))?
+            .set_evm_address(*account, evm_address.clone());
+
+        debug!(account = %hedera_account, evm_address = %evm_address, "Resolved EVM address");
+        Ok(evm_address)
+    }
+
+    /// The EVM address already resolved for `account`, if any.
+    fn cached_evm_address(&self, account: &AccountId) -> SettleResult<Option<String>> {
+        let mapper = self
+            .account_mapper
+            .read()
+            .map_err(|_| SettleError::internal("account mapper lock poisoned"))?;
+        Ok(mapper
+            .get_evm_address(account)
+            .map(|cached| cached.to_string()))
+    }
+
+    /// Fetch an account's EVM address (without `0x`) from the Mirror Node REST API.
+    async fn fetch_evm_address(&self, hedera_account: &HederaAccountId) -> SettleResult<String> {
         let url = format!(
             "{}/api/v1/accounts/{}",
             self.config.network.mirror_node_url(),
@@ -250,22 +346,10 @@ impl HederaSettlement {
                 hedera_account
             ))
         })?;
-        let evm_address = raw_address
+        Ok(raw_address
             .strip_prefix("0x")
             .unwrap_or(raw_address)
-            .to_string();
-
-        // Cache the result
-        {
-            let mut mapper = self
-                .account_mapper
-                .write()
-                .map_err(|_| SettleError::internal("account mapper lock poisoned"))?;
-            mapper.set_evm_address(*account, evm_address.clone());
-        }
-
-        debug!(account = %hedera_account, evm_address = %evm_address, "Resolved EVM address");
-        Ok(evm_address)
+            .to_string())
     }
 }
 
@@ -459,46 +543,16 @@ impl Settlement for HederaSettlement {
         // Search logs for matching content hash in event topics/data.
         // Ethereum log data is ABI-encoded: content_hash is zero-padded to 32 bytes.
         let padded_hash = format!("{:0>64}", content_hash_hex);
-        if let Some(logs) = body["logs"].as_array() {
-            for log in logs {
-                // Check topics (indexed params) and data (non-indexed)
-                let matches_topic = log["topics"]
-                    .as_array()
-                    .map(|topics| {
-                        topics.iter().any(|t| {
-                            t.as_str()
-                                .map(|s| s.contains(&padded_hash))
-                                .unwrap_or(false)
-                        })
-                    })
-                    .unwrap_or(false);
-                let matches_data = log["data"]
-                    .as_str()
-                    .map(|d| d.contains(&padded_hash))
-                    .unwrap_or(false);
-
-                if matches_topic || matches_data {
-                    // Parse timestamp — skip this log entry if timestamp is missing
-                    let timestamp = match log["timestamp"]
-                        .as_str()
-                        .and_then(|t| t.split('.').next())
-                        .and_then(|t| t.parse::<u64>().ok())
-                    {
-                        Some(ts) => ts,
-                        None => continue,
-                    };
-
-                    return Ok(Some(Attestation::new(
-                        *content_hash,
-                        self.get_own_account(),
-                        timestamp,
-                        *content_hash, // provenance root (simplified — full extraction would require ABI decoding)
-                    )));
-                }
-            }
-        }
-
-        Ok(None)
+        Ok(
+            find_attested_timestamp(&body, &padded_hash).map(|timestamp| {
+                Attestation::new(
+                    *content_hash,
+                    self.get_own_account(),
+                    timestamp,
+                    *content_hash, // provenance root (simplified — full extraction would require ABI decoding)
+                )
+            }),
+        )
     }
 
     async fn open_channel(
@@ -507,11 +561,7 @@ impl Settlement for HederaSettlement {
         peer: &PeerId,
         deposit: u64,
     ) -> SettleResult<TransactionId> {
-        let peer_account = self
-            .account_mapper
-            .read()
-            .map_err(|_| SettleError::internal("account mapper lock poisoned"))?
-            .require_account(peer)?;
+        let peer_account = self.require_peer_account(peer)?;
 
         // Resolve the peer's EVM address via Mirror Node (not to_solidity_address which
         // returns the wrong address for ECDSA accounts)
@@ -740,36 +790,7 @@ impl Settlement for HederaSettlement {
             "Settling batch"
         );
 
-        // 1. Collect recipient accounts (scoped lock)
-        let recipient_accounts: Vec<(AccountId, u64, Vec<Hash>)> = {
-            let mapper = self
-                .account_mapper
-                .read()
-                .map_err(|_| SettleError::internal("account mapper lock poisoned"))?;
-            batch
-                .entries
-                .iter()
-                .map(|e| {
-                    let account = mapper.require_account(&e.recipient)?;
-                    Ok((account, e.amount, e.provenance_hashes.clone()))
-                })
-                .collect::<SettleResult<Vec<_>>>()?
-        };
-
-        // 2. Resolve EVM addresses for each recipient (async, outside lock)
-        let mut resolved: Vec<(String, u64, Vec<Hash>)> = Vec::new();
-        for (account, amount, prov_hashes) in &recipient_accounts {
-            let evm_address = self.resolve_evm_address(account).await?;
-            resolved.push((evm_address, *amount, prov_hashes.clone()));
-        }
-
-        // 3. Encode entries using resolved EVM addresses
-        let encoded_entries: Vec<Vec<u8>> = resolved
-            .iter()
-            .map(|(evm_address, amount, prov_hashes)| {
-                self.encode_settlement_entry_evm(evm_address, *amount, prov_hashes)
-            })
-            .collect();
+        let encoded_entries = self.encode_batch_entries(batch).await?;
 
         // Convert to slice of slices for the Hedera API
         let entries_refs: Vec<&[u8]> = encoded_entries.iter().map(|e| e.as_slice()).collect();
@@ -938,5 +959,46 @@ mod tests {
 
         // Should be pending or failed (not a real tx)
         assert!(!status.is_confirmed());
+    }
+}
+
+#[cfg(test)]
+mod log_matching_tests {
+    use super::*;
+    use serde_json::json;
+
+    const HASH: &str = "00000000000000000000000000000000000000000000000000000000000000ab";
+
+    #[test]
+    fn test_finds_hash_in_topics() {
+        let body = json!({ "logs": [
+            { "topics": ["0x1", format!("0x{}", HASH)], "data": "0x", "timestamp": "1700000000.123456789" }
+        ]});
+        assert_eq!(find_attested_timestamp(&body, HASH), Some(1_700_000_000));
+    }
+
+    #[test]
+    fn test_finds_hash_in_data() {
+        let body = json!({ "logs": [
+            { "topics": [], "data": format!("0x{}", HASH), "timestamp": "1700000001.0" }
+        ]});
+        assert_eq!(find_attested_timestamp(&body, HASH), Some(1_700_000_001));
+    }
+
+    #[test]
+    fn test_skips_matching_log_without_timestamp() {
+        let body = json!({ "logs": [
+            { "topics": [], "data": HASH },
+            { "topics": [], "data": "0xff" , "timestamp": "5.0" },
+            { "topics": [], "data": HASH, "timestamp": "7.0" }
+        ]});
+        assert_eq!(find_attested_timestamp(&body, HASH), Some(7));
+    }
+
+    #[test]
+    fn test_no_logs_or_no_match() {
+        assert_eq!(find_attested_timestamp(&json!({}), HASH), None);
+        let body = json!({ "logs": [{ "topics": [], "data": "0x", "timestamp": "1.0" }] });
+        assert_eq!(find_attested_timestamp(&body, HASH), None);
     }
 }

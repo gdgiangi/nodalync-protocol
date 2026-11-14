@@ -6,7 +6,7 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -52,6 +52,86 @@ impl FsCacheStore {
         Ok(())
     }
 
+    /// Write `content` to the file for `hash`, creating its shard directory, and sync it to disk.
+    fn write_content(&self, hash: &Hash, content: &[u8]) -> Result<()> {
+        self.ensure_parent_dir(hash)?;
+        let mut file = File::create(self.content_path(hash))?;
+        file.write_all(content)?;
+        file.sync_all()?;
+        Ok(())
+    }
+
+    /// Delete the cache metadata row for `hash_bytes`.
+    fn delete_metadata(&self, hash_bytes: &[u8]) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
+        conn.execute("DELETE FROM cache WHERE hash = ?1", [hash_bytes])?;
+        Ok(())
+    }
+
+    /// Delete `entries` oldest first, files and rows, until the cache is within
+    /// `max_size_bytes`. Returns the bytes freed.
+    fn evict_oldest(
+        &self,
+        conn: &Connection,
+        entries: Vec<(Hash, u64)>,
+        current_size: u64,
+        max_size_bytes: u64,
+    ) -> Result<u64> {
+        let mut freed = 0u64;
+        let mut remaining_size = current_size;
+
+        for (hash, size) in entries {
+            if remaining_size <= max_size_bytes {
+                break;
+            }
+
+            // Delete from filesystem
+            self.remove_content_file(&hash);
+
+            // Delete from database
+            let hash_bytes = hash.0.to_vec();
+            conn.execute("DELETE FROM cache WHERE hash = ?1", [&hash_bytes])?;
+
+            freed += size;
+            remaining_size -= size;
+        }
+        Ok(freed)
+    }
+
+    /// Remove the content file for `hash` if it exists, ignoring failures.
+    fn remove_content_file(&self, hash: &Hash) {
+        let path = self.content_path(hash);
+        if path.exists() {
+            let _ = fs::remove_file(&path);
+        }
+    }
+
+    /// Remove shard directories left empty after eviction.
+    fn remove_empty_shard_dirs(&self) {
+        if let Ok(entries) = fs::read_dir(&self.cache_dir) {
+            for entry in entries.flatten() {
+                if entry.path().is_dir() {
+                    let _ = fs::remove_dir(entry.path()); // Only succeeds if empty
+                }
+            }
+        }
+    }
+
+    /// Remove every shard directory and the content files in it.
+    fn remove_cached_files(&self) -> Result<()> {
+        if self.cache_dir.exists() {
+            for entry in fs::read_dir(&self.cache_dir)?.flatten() {
+                if entry.path().is_dir() {
+                    let _ = fs::remove_dir_all(entry.path());
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Deserialize cache metadata from a database row.
     fn deserialize_metadata(row: &rusqlite::Row) -> rusqlite::Result<CacheMetadata> {
         let hash_bytes: Vec<u8> = row.get(0)?;
@@ -79,6 +159,33 @@ impl FsCacheStore {
     }
 }
 
+/// The cache metadata row for `hash_bytes`, if any.
+fn query_metadata(conn: &Connection, hash_bytes: &[u8]) -> Result<Option<CacheMetadata>> {
+    Ok(conn
+        .query_row(
+            "SELECT hash, source_peer, queried_at, size_bytes, payment_receipt
+                 FROM cache WHERE hash = ?1",
+            [hash_bytes],
+            FsCacheStore::deserialize_metadata,
+        )
+        .optional()?)
+}
+
+/// Every cache entry's hash and size, least recently queried first.
+fn lru_entries(conn: &Connection) -> Result<Vec<(Hash, u64)>> {
+    let mut stmt = conn.prepare("SELECT hash, size_bytes FROM cache ORDER BY queried_at ASC")?;
+
+    let entries = stmt
+        .query_map([], |row| {
+            let hash_bytes: Vec<u8> = row.get(0)?;
+            let size: i64 = row.get(1)?;
+            Ok((bytes_to_hash(&hash_bytes), size as u64))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(entries)
+}
+
 /// Cache entry metadata (stored in SQLite).
 struct CacheMetadata {
     hash: Hash,
@@ -92,11 +199,7 @@ struct CacheMetadata {
 impl CacheStore for FsCacheStore {
     fn cache(&mut self, entry: CachedContent) -> Result<()> {
         // Store content on filesystem
-        self.ensure_parent_dir(&entry.hash)?;
-        let path = self.content_path(&entry.hash);
-        let mut file = File::create(&path)?;
-        file.write_all(&entry.content)?;
-        file.sync_all()?;
+        self.write_content(&entry.hash, &entry.content)?;
 
         // Store metadata in SQLite
         let conn = self
@@ -131,40 +234,22 @@ impl CacheStore for FsCacheStore {
             .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
         let hash_bytes = hash.0.to_vec();
 
-        let metadata = conn
-            .query_row(
-                "SELECT hash, source_peer, queried_at, size_bytes, payment_receipt
-                 FROM cache WHERE hash = ?1",
-                [&hash_bytes],
-                Self::deserialize_metadata,
-            )
-            .optional()?;
-
-        let metadata = match metadata {
-            Some(m) => m,
-            None => return Ok(None),
+        let Some(metadata) = query_metadata(&conn, &hash_bytes)? else {
+            return Ok(None);
         };
+        drop(conn);
 
         // Load content from filesystem
         let path = self.content_path(hash);
         if !path.exists() {
             // Metadata exists but file is missing - remove stale metadata
-            drop(conn);
-            let conn = self
-                .conn
-                .lock()
-                .map_err(|_| StoreError::lock_poisoned("database connection lock poisoned"))?;
-            conn.execute("DELETE FROM cache WHERE hash = ?1", [&hash_bytes])?;
+            self.delete_metadata(&hash_bytes)?;
             return Ok(None);
         }
 
-        let mut file = File::open(&path)?;
-        let mut content = Vec::new();
-        file.read_to_end(&mut content)?;
-
         Ok(Some(CachedContent {
             hash: metadata.hash,
-            content,
+            content: fs::read(&path)?,
             source_peer: metadata.source_peer,
             queried_at: metadata.queried_at,
             payment_proof: metadata.payment_receipt,
@@ -213,64 +298,20 @@ impl CacheStore for FsCacheStore {
         }
 
         // Get entries ordered by queried_at (oldest first) for LRU eviction
-        let mut stmt =
-            conn.prepare("SELECT hash, size_bytes FROM cache ORDER BY queried_at ASC")?;
-
-        let entries: Vec<(Hash, u64)> = stmt
-            .query_map([], |row| {
-                let hash_bytes: Vec<u8> = row.get(0)?;
-                let size: i64 = row.get(1)?;
-                Ok((bytes_to_hash(&hash_bytes), size as u64))
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
-
-        drop(stmt);
+        let entries = lru_entries(&conn)?;
 
         // Evict until we're under the limit
-        let mut freed = 0u64;
-        let mut remaining_size = current_size as u64;
-
-        for (hash, size) in entries {
-            if remaining_size <= max_size_bytes {
-                break;
-            }
-
-            // Delete from filesystem
-            let path = self.content_path(&hash);
-            if path.exists() {
-                let _ = fs::remove_file(&path);
-            }
-
-            // Delete from database
-            let hash_bytes = hash.0.to_vec();
-            conn.execute("DELETE FROM cache WHERE hash = ?1", [&hash_bytes])?;
-
-            freed += size;
-            remaining_size -= size;
-        }
+        let freed = self.evict_oldest(&conn, entries, current_size as u64, max_size_bytes)?;
 
         // Clean up empty directories
-        if let Ok(entries) = fs::read_dir(&self.cache_dir) {
-            for entry in entries.flatten() {
-                if entry.path().is_dir() {
-                    let _ = fs::remove_dir(entry.path()); // Only succeeds if empty
-                }
-            }
-        }
+        self.remove_empty_shard_dirs();
 
         Ok(freed)
     }
 
     fn clear(&mut self) -> Result<()> {
         // Clear all cached content files
-        if self.cache_dir.exists() {
-            for entry in fs::read_dir(&self.cache_dir)?.flatten() {
-                if entry.path().is_dir() {
-                    let _ = fs::remove_dir_all(entry.path());
-                }
-            }
-        }
+        self.remove_cached_files()?;
 
         // Clear database
         let conn = self
@@ -390,6 +431,40 @@ mod tests {
         assert_eq!(loaded.hash, cached.hash);
         assert_eq!(loaded.content, cached.content);
         assert_eq!(loaded.source_peer, cached.source_peer);
+    }
+
+    #[test]
+    fn test_get_with_missing_file_removes_stale_metadata() {
+        let (mut store, _temp) = setup_store();
+        let cached = test_cached_content(b"soon deleted");
+        store.cache(cached.clone()).unwrap();
+
+        fs::remove_file(store.content_path(&cached.hash)).unwrap();
+
+        assert!(store.get(&cached.hash).unwrap().is_none());
+        let conn = store.conn.lock().unwrap();
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM cache", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 0);
+    }
+
+    #[test]
+    fn test_evict_removes_emptied_shard_dirs() {
+        let (mut store, _temp) = setup_store();
+        let cached = test_cached_content(b"evict me");
+        store.cache(cached.clone()).unwrap();
+        let shard = store
+            .content_path(&cached.hash)
+            .parent()
+            .unwrap()
+            .to_path_buf();
+
+        let freed = store.evict(0).unwrap();
+
+        assert_eq!(freed, cached.content.len() as u64);
+        assert!(!shard.exists());
+        assert_eq!(store.total_size().unwrap(), 0);
     }
 
     #[test]

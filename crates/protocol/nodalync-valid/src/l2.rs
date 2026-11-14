@@ -35,6 +35,19 @@ use crate::error::{ValidationError, ValidationResult};
 ///
 /// `Ok(())` if all validations pass, or `Err(ValidationError)`.
 pub fn validate_l2_content(graph: &L2EntityGraph, manifest: &Manifest) -> ValidationResult<()> {
+    validate_l2_manifest(graph, manifest)?;
+    validate_l2_limits(graph)?;
+    validate_l2_declared_counts(graph)?;
+
+    // 11. Validate prefix map
+    validate_prefix_map(&graph.prefixes)?;
+
+    let entity_ids = validate_l2_entities(graph)?;
+    validate_l2_relationships(graph, &entity_ids)
+}
+
+/// Checks 1-4: the manifest describes private, free L2 content with this graph's ID.
+fn validate_l2_manifest(graph: &L2EntityGraph, manifest: &Manifest) -> ValidationResult<()> {
     // 1. Content type must be L2
     if manifest.content_type != ContentType::L2 {
         return Err(ValidationError::Internal(
@@ -60,7 +73,11 @@ pub fn validate_l2_content(graph: &L2EntityGraph, manifest: &Manifest) -> Valida
     if graph.id != manifest.hash {
         return Err(ValidationError::L2IdMismatch);
     }
+    Ok(())
+}
 
+/// Checks 5-8: the graph has sources, and its sources, entities and relationships are within limits.
+fn validate_l2_limits(graph: &L2EntityGraph) -> ValidationResult<()> {
     // 5. Source L1s must be present
     if graph.source_l1s.is_empty() && graph.source_l2s.is_empty() {
         return Err(ValidationError::L2NoSources);
@@ -89,7 +106,11 @@ pub fn validate_l2_content(graph: &L2EntityGraph, manifest: &Manifest) -> Valida
             max: MAX_RELATIONSHIPS_PER_L2 as usize,
         });
     }
+    Ok(())
+}
 
+/// Checks 9-10: the declared entity and relationship counts match the graph.
+fn validate_l2_declared_counts(graph: &L2EntityGraph) -> ValidationResult<()> {
     // 9. Entity count matches
     if graph.entity_count != graph.entities.len() as u32 {
         return Err(ValidationError::L2EntityCountMismatch {
@@ -105,11 +126,13 @@ pub fn validate_l2_content(graph: &L2EntityGraph, manifest: &Manifest) -> Valida
             actual: graph.relationships.len() as u32,
         });
     }
+    Ok(())
+}
 
-    // 11. Validate prefix map
-    validate_prefix_map(&graph.prefixes)?;
-
-    // 12. Validate entities
+/// Check 12: entity IDs are unique and every entity is valid. Returns the set of entity IDs.
+fn validate_l2_entities(
+    graph: &L2EntityGraph,
+) -> ValidationResult<std::collections::HashSet<&str>> {
     let entity_ids: std::collections::HashSet<&str> =
         graph.entities.iter().map(|e| e.id.as_str()).collect();
     if entity_ids.len() != graph.entities.len() {
@@ -119,12 +142,17 @@ pub fn validate_l2_content(graph: &L2EntityGraph, manifest: &Manifest) -> Valida
     for entity in &graph.entities {
         validate_entity(entity, &graph.prefixes)?;
     }
+    Ok(entity_ids)
+}
 
-    // 13. Validate relationships
+/// Check 13: every relationship is valid and refers to entities in `entity_ids`.
+fn validate_l2_relationships(
+    graph: &L2EntityGraph,
+    entity_ids: &std::collections::HashSet<&str>,
+) -> ValidationResult<()> {
     for relationship in &graph.relationships {
-        validate_relationship(relationship, &entity_ids, &graph.prefixes)?;
+        validate_relationship(relationship, entity_ids, &graph.prefixes)?;
     }
-
     Ok(())
 }
 
@@ -152,6 +180,16 @@ fn validate_prefix_map(prefixes: &PrefixMap) -> ValidationResult<()> {
 
 /// Validate an entity.
 fn validate_entity(entity: &nodalync_types::Entity, prefixes: &PrefixMap) -> ValidationResult<()> {
+    validate_entity_names(entity)?;
+    // Entity type URI validation (if present)
+    validate_optional_uri_or_curie(entity.entity_type.as_deref(), prefixes)?;
+    validate_entity_description(entity.description.as_deref())?;
+    validate_external_links(&entity.external_links)?;
+    validate_confidence(entity.confidence)
+}
+
+/// Entity ID is not empty; canonical label and aliases are within limits.
+fn validate_entity_names(entity: &nodalync_types::Entity) -> ValidationResult<()> {
     // Entity ID cannot be empty
     if entity.id.is_empty() {
         return Err(ValidationError::L2InvalidEntityId {
@@ -174,14 +212,12 @@ fn validate_entity(entity: &nodalync_types::Entity, prefixes: &PrefixMap) -> Val
             max: MAX_ALIASES_PER_ENTITY,
         });
     }
+    Ok(())
+}
 
-    // Entity type URI validation (if present)
-    if let Some(ref entity_type) = entity.entity_type {
-        validate_uri_or_curie(entity_type, prefixes)?;
-    }
-
-    // Description length (if present)
-    if let Some(ref desc) = entity.description {
+/// Entity description length (if present).
+fn validate_entity_description(description: Option<&str>) -> ValidationResult<()> {
+    if let Some(desc) = description {
         if desc.len() > MAX_ENTITY_DESCRIPTION_LENGTH {
             return Err(ValidationError::L2DescriptionTooLong {
                 length: desc.len(),
@@ -189,9 +225,12 @@ fn validate_entity(entity: &nodalync_types::Entity, prefixes: &PrefixMap) -> Val
             });
         }
     }
+    Ok(())
+}
 
-    // External links must be valid URIs
-    for link in &entity.external_links {
+/// External links must be valid URIs.
+fn validate_external_links(links: &[String]) -> ValidationResult<()> {
+    for link in links {
         if !is_valid_uri(link) {
             return Err(ValidationError::L2InvalidUri {
                 uri: link.clone(),
@@ -199,19 +238,30 @@ fn validate_entity(entity: &nodalync_types::Entity, prefixes: &PrefixMap) -> Val
             });
         }
     }
+    Ok(())
+}
 
-    // Confidence score must be in range [0.0, 1.0]
-    if !(0.0..=1.0).contains(&entity.confidence) {
-        return Err(ValidationError::L2InvalidConfidence {
-            value: entity.confidence,
-        });
+/// Confidence score must be in range [0.0, 1.0].
+fn validate_confidence(value: f32) -> ValidationResult<()> {
+    if !(0.0..=1.0).contains(&value) {
+        return Err(ValidationError::L2InvalidConfidence { value });
     }
-
     Ok(())
 }
 
 /// Validate a relationship.
 fn validate_relationship(
+    relationship: &nodalync_types::Relationship,
+    entity_ids: &std::collections::HashSet<&str>,
+    prefixes: &PrefixMap,
+) -> ValidationResult<()> {
+    validate_relationship_head(relationship, entity_ids, prefixes)?;
+    validate_relationship_object(&relationship.object, entity_ids, prefixes)?;
+    validate_confidence(relationship.confidence)
+}
+
+/// Relationship ID is not empty, its subject exists, and its predicate is a valid URI or CURIE.
+fn validate_relationship_head(
     relationship: &nodalync_types::Relationship,
     entity_ids: &std::collections::HashSet<&str>,
     prefixes: &PrefixMap,
@@ -238,10 +288,16 @@ fn validate_relationship(
             max: MAX_PREDICATE_LENGTH,
         });
     }
-    validate_uri_or_curie(&relationship.predicate, prefixes)?;
+    validate_uri_or_curie(&relationship.predicate, prefixes)
+}
 
-    // Object validation
-    match &relationship.object {
+/// The object is an existing entity, a literal with a valid datatype (if any), or a valid URI.
+fn validate_relationship_object(
+    object: &nodalync_types::RelationshipObject,
+    entity_ids: &std::collections::HashSet<&str>,
+    prefixes: &PrefixMap,
+) -> ValidationResult<()> {
+    match object {
         nodalync_types::RelationshipObject::Entity { entity_id } => {
             if !entity_ids.contains(entity_id.as_str()) {
                 return Err(ValidationError::L2InvalidEntityRef {
@@ -249,12 +305,11 @@ fn validate_relationship(
                     context: "relationship object".to_string(),
                 });
             }
+            Ok(())
         }
+        // Validate datatype URI if present
         nodalync_types::RelationshipObject::Literal(lit) => {
-            // Validate datatype URI if present
-            if let Some(ref datatype) = lit.datatype {
-                validate_uri_or_curie(datatype, prefixes)?;
-            }
+            validate_optional_uri_or_curie(lit.datatype.as_deref(), prefixes)
         }
         nodalync_types::RelationshipObject::Uri { uri } => {
             if !is_valid_uri(uri) {
@@ -263,17 +318,20 @@ fn validate_relationship(
                     reason: "invalid object URI".to_string(),
                 });
             }
+            Ok(())
         }
     }
+}
 
-    // Confidence score must be in range [0.0, 1.0]
-    if !(0.0..=1.0).contains(&relationship.confidence) {
-        return Err(ValidationError::L2InvalidConfidence {
-            value: relationship.confidence,
-        });
+/// Validate a URI or CURIE when one is present.
+fn validate_optional_uri_or_curie(
+    uri_or_curie: Option<&str>,
+    prefixes: &PrefixMap,
+) -> ValidationResult<()> {
+    match uri_or_curie {
+        Some(value) => validate_uri_or_curie(value, prefixes),
+        None => Ok(()),
     }
-
-    Ok(())
 }
 
 /// Check if a string is a valid URI or CURIE.
@@ -518,6 +576,60 @@ mod tests {
 
         let result = expand_curie("unknown:thing", &prefixes);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_l2_relationship_object_uri_must_be_valid() {
+        let hash = content_hash(b"test l2");
+        let mut graph = create_test_graph(hash);
+        graph.relationships[0].object = RelationshipObject::uri("not a uri");
+
+        let result = validate_l2_content(&graph, &create_l2_manifest(hash));
+        assert!(matches!(
+            result,
+            Err(ValidationError::L2InvalidUri { ref reason, .. }) if reason == "invalid object URI"
+        ));
+    }
+
+    #[test]
+    fn test_l2_relationship_confidence_out_of_range() {
+        let hash = content_hash(b"test l2");
+        let mut graph = create_test_graph(hash);
+        graph.relationships[0].confidence = -0.1;
+
+        let result = validate_l2_content(&graph, &create_l2_manifest(hash));
+        assert!(matches!(
+            result,
+            Err(ValidationError::L2InvalidConfidence { .. })
+        ));
+    }
+
+    #[test]
+    fn test_l2_entity_description_too_long() {
+        let hash = content_hash(b"test l2");
+        let mut graph = create_test_graph(hash);
+        graph.entities[0].description = Some("x".repeat(MAX_ENTITY_DESCRIPTION_LENGTH + 1));
+
+        let result = validate_l2_content(&graph, &create_l2_manifest(hash));
+        assert!(matches!(
+            result,
+            Err(ValidationError::L2DescriptionTooLong { .. })
+        ));
+    }
+
+    #[test]
+    fn test_l2_entity_checks_run_before_relationship_checks() {
+        // Both an invalid entity and an invalid relationship: the entity error is reported.
+        let hash = content_hash(b"test l2");
+        let mut graph = create_test_graph(hash);
+        graph.entities[0].confidence = 2.0;
+        graph.relationships[0].object = RelationshipObject::entity("missing");
+
+        let result = validate_l2_content(&graph, &create_l2_manifest(hash));
+        assert!(matches!(
+            result,
+            Err(ValidationError::L2InvalidConfidence { .. })
+        ));
     }
 
     #[test]

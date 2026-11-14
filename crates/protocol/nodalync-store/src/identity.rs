@@ -104,23 +104,7 @@ impl IdentityStore {
         let salt = SaltString::generate(&mut OsRng);
 
         // Derive encryption key using Argon2id
-        let argon2 = Argon2::default();
-        let password_hash = argon2
-            .hash_password(password.as_bytes(), &salt)
-            .map_err(|e| StoreError::encryption(format!("Key derivation failed: {}", e)))?;
-
-        // Extract 32 bytes from the hash for AES-256
-        let hash_bytes = password_hash
-            .hash
-            .ok_or_else(|| StoreError::encryption("Failed to extract hash bytes"))?;
-        let key_bytes = hash_bytes.as_bytes();
-
-        // Ensure we have at least 32 bytes
-        if key_bytes.len() < 32 {
-            return Err(StoreError::encryption("Derived key too short"));
-        }
-        let mut encryption_key = [0u8; 32];
-        encryption_key.copy_from_slice(&key_bytes[..32]);
+        let encryption_key = derive_encryption_key(password, &salt)?;
 
         // Generate random nonce for AES-GCM
         let mut nonce_bytes = [0u8; NONCE_LEN];
@@ -142,8 +126,13 @@ impl IdentityStore {
             public_key: public_key.0,
         };
 
+        self.write_identity_files(&stored, public_key)
+    }
+
+    /// Write the encrypted keypair file and the plaintext peer ID file.
+    fn write_identity_files(&self, stored: &StoredIdentity, public_key: &PublicKey) -> Result<()> {
         // Write to file
-        let json = serde_json::to_string_pretty(&stored)?;
+        let json = serde_json::to_string_pretty(stored)?;
         let mut file = File::create(self.keypair_path())?;
         file.write_all(json.as_bytes())?;
 
@@ -155,6 +144,14 @@ impl IdentityStore {
         Ok(())
     }
 
+    /// Read and parse the stored (encrypted) identity file.
+    fn read_stored_identity(&self) -> Result<StoredIdentity> {
+        let mut file = File::open(self.keypair_path())?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)?;
+        Ok(serde_json::from_str(&contents)?)
+    }
+
     /// Load the keypair, decrypting with the provided password.
     ///
     /// Returns (private_key, public_key) if successful.
@@ -164,56 +161,8 @@ impl IdentityStore {
         }
 
         // Read stored identity
-        let mut file = File::open(self.keypair_path())?;
-        let mut contents = String::new();
-        file.read_to_string(&mut contents)?;
-        let stored: StoredIdentity = serde_json::from_str(&contents)?;
-
-        // Parse salt
-        let salt = SaltString::from_b64(&stored.salt)
-            .map_err(|e| StoreError::encryption(format!("Invalid salt: {}", e)))?;
-
-        // Derive decryption key
-        let argon2 = Argon2::default();
-        let password_hash = argon2
-            .hash_password(password.as_bytes(), &salt)
-            .map_err(|e| StoreError::encryption(format!("Key derivation failed: {}", e)))?;
-
-        let hash_bytes = password_hash
-            .hash
-            .ok_or_else(|| StoreError::encryption("Failed to extract hash bytes"))?;
-        let key_bytes = hash_bytes.as_bytes();
-
-        if key_bytes.len() < 32 {
-            return Err(StoreError::encryption("Derived key too short"));
-        }
-        let mut encryption_key = [0u8; 32];
-        encryption_key.copy_from_slice(&key_bytes[..32]);
-
-        // Parse nonce
-        let nonce_bytes = base64_decode(&stored.nonce)?;
-        let nonce = Nonce::from_slice(&nonce_bytes);
-
-        // Parse ciphertext
-        let ciphertext = base64_decode(&stored.ciphertext)?;
-
-        // Decrypt
-        let cipher = Aes256Gcm::new_from_slice(&encryption_key)
-            .map_err(|e| StoreError::encryption(format!("Cipher init failed: {}", e)))?;
-        let plaintext = cipher
-            .decrypt(nonce, ciphertext.as_ref())
-            .map_err(|_| StoreError::encryption(
-                "Decryption failed — the password does not match the identity created during 'nodalync init'. \
-                 Set NODALYNC_PASSWORD to the password you used when initializing."
-            ))?;
-
-        // Reconstruct private key
-        if plaintext.len() != 32 {
-            return Err(StoreError::encryption("Invalid decrypted key length"));
-        }
-        let mut key_bytes = [0u8; 32];
-        key_bytes.copy_from_slice(&plaintext);
-        let private_key = PrivateKey::from_bytes(key_bytes);
+        let stored = self.read_stored_identity()?;
+        let private_key = decrypt_private_key(&stored, password)?;
         let public_key = PublicKey::from_bytes(stored.public_key);
 
         Ok((private_key, public_key))
@@ -240,11 +189,7 @@ impl IdentityStore {
             return Err(StoreError::IdentityNotFound);
         }
 
-        let mut file = File::open(self.keypair_path())?;
-        let mut contents = String::new();
-        file.read_to_string(&mut contents)?;
-        let stored: StoredIdentity = serde_json::from_str(&contents)?;
-
+        let stored = self.read_stored_identity()?;
         Ok(PublicKey::from_bytes(stored.public_key))
     }
 
@@ -260,6 +205,67 @@ impl IdentityStore {
         }
         Ok(())
     }
+}
+
+/// Derive the 32-byte AES-256 key for `password` with Argon2id (default parameters) and `salt`.
+fn derive_encryption_key(password: &str, salt: &SaltString) -> Result<[u8; 32]> {
+    let argon2 = Argon2::default();
+    let password_hash = argon2
+        .hash_password(password.as_bytes(), salt)
+        .map_err(|e| StoreError::encryption(format!("Key derivation failed: {}", e)))?;
+
+    // Extract 32 bytes from the hash for AES-256
+    let hash_bytes = password_hash
+        .hash
+        .ok_or_else(|| StoreError::encryption("Failed to extract hash bytes"))?;
+    let key_bytes = hash_bytes.as_bytes();
+
+    // Ensure we have at least 32 bytes
+    if key_bytes.len() < 32 {
+        return Err(StoreError::encryption("Derived key too short"));
+    }
+    let mut encryption_key = [0u8; 32];
+    encryption_key.copy_from_slice(&key_bytes[..32]);
+    Ok(encryption_key)
+}
+
+/// Decrypt the stored private key with `password`.
+fn decrypt_private_key(stored: &StoredIdentity, password: &str) -> Result<PrivateKey> {
+    // Parse salt
+    let salt = SaltString::from_b64(&stored.salt)
+        .map_err(|e| StoreError::encryption(format!("Invalid salt: {}", e)))?;
+
+    // Derive decryption key
+    let encryption_key = derive_encryption_key(password, &salt)?;
+    let plaintext = decrypt_with_key(&encryption_key, stored)?;
+
+    // Reconstruct private key
+    if plaintext.len() != 32 {
+        return Err(StoreError::encryption("Invalid decrypted key length"));
+    }
+    let mut key_bytes = [0u8; 32];
+    key_bytes.copy_from_slice(&plaintext);
+    Ok(PrivateKey::from_bytes(key_bytes))
+}
+
+/// AES-256-GCM decrypt the stored ciphertext with its stored nonce.
+fn decrypt_with_key(encryption_key: &[u8; 32], stored: &StoredIdentity) -> Result<Vec<u8>> {
+    // Parse nonce
+    let nonce_bytes = base64_decode(&stored.nonce)?;
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    // Parse ciphertext
+    let ciphertext = base64_decode(&stored.ciphertext)?;
+
+    // Decrypt
+    let cipher = Aes256Gcm::new_from_slice(encryption_key)
+        .map_err(|e| StoreError::encryption(format!("Cipher init failed: {}", e)))?;
+    cipher
+        .decrypt(nonce, ciphertext.as_ref())
+        .map_err(|_| StoreError::encryption(
+            "Decryption failed — the password does not match the identity created during 'nodalync init'. \
+             Set NODALYNC_PASSWORD to the password you used when initializing."
+        ))
 }
 
 /// Base64 encode bytes.
@@ -326,14 +332,7 @@ fn base64_decode(s: &str) -> Result<Vec<u8>> {
     for chunk in bytes.chunks(4) {
         let mut buf = [0u8; 4];
         for (i, &b) in chunk.iter().enumerate() {
-            if b >= 128 {
-                return Err(StoreError::encryption("Invalid base64 character"));
-            }
-            let val = DECODE_TABLE[b as usize];
-            if val < 0 {
-                return Err(StoreError::encryption("Invalid base64 character"));
-            }
-            buf[i] = val as u8;
+            buf[i] = decode_base64_char(&DECODE_TABLE, b)?;
         }
 
         result.push((buf[0] << 2) | (buf[1] >> 4));
@@ -346,6 +345,15 @@ fn base64_decode(s: &str) -> Result<Vec<u8>> {
     }
 
     Ok(result)
+}
+
+/// The 6-bit value of one base64 character, using `table` for ASCII input.
+fn decode_base64_char(table: &[i8; 128], b: u8) -> Result<u8> {
+    let val = table.get(b as usize).copied().unwrap_or(-1);
+    if val < 0 {
+        return Err(StoreError::encryption("Invalid base64 character"));
+    }
+    Ok(val as u8)
 }
 
 #[cfg(test)]
@@ -461,6 +469,13 @@ mod tests {
             let decoded = base64_decode(&encoded).unwrap();
             assert_eq!(original, decoded);
         }
+    }
+
+    #[test]
+    fn test_base64_rejects_invalid_characters() {
+        assert!(base64_decode("ab!d").is_err());
+        assert!(base64_decode("abé=").is_err()); // non-ASCII byte
+        assert!(base64_decode("QUJD").is_ok());
     }
 
     #[test]
